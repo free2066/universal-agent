@@ -107,11 +107,16 @@ function findGitRoot(dir: string): string | null {
 function getPathChain(root: string, leaf: string): string[] {
   const normRoot = resolve(root);
   const normLeaf = resolve(leaf);
-  const dirs: string[] = [normRoot];
+
+  // Walk from leaf up to root, collecting dirs bottom-up, then reverse
+  const dirs: string[] = [];
   let current = normLeaf;
   while (current !== normRoot && current !== dirname(current)) {
     dirs.push(current);
     current = dirname(current);
   }
-  return [...new Set(dirs)];
+  dirs.push(normRoot); // always include the root
+
+  // Return root-to-leaf order so parent instructions are loaded first
+  return [...new Set(dirs.reverse())];
 }

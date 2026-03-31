@@ -1,4 +1,4 @@
-import type { LLMClient, Message, ToolDefinition } from '../models/types.js';
+import type { LLMClient, Message } from '../models/types.js';
 import { modelManager } from '../models/model-manager.js';
 import { DomainRouter } from './domain-router.js';
 import { ToolRegistry } from './tool-registry.js';
@@ -211,13 +211,14 @@ export class AgentCore {
    * by injecting them into the prompt as instructions
    */
   private expandMentions(prompt: string): string {
+    const hints: string[] = [];
+
     // @run-agent-<name> → Task tool hint
     const agentMentions = prompt.match(/@run-agent-([\w-]+)/g) || [];
     for (const mention of agentMentions) {
       const agentName = mention.replace('@run-agent-', '');
-      const def = subagentSystem.getAgent(agentName);
-      if (def) {
-        return prompt + `\n\n[Hint: delegate to subagent "${agentName}" using the Task tool]`;
+      if (subagentSystem.getAgent(agentName)) {
+        hints.push(`delegate to subagent "${agentName}" using the Task tool`);
       }
     }
 
@@ -225,9 +226,10 @@ export class AgentCore {
     const modelMentions = prompt.match(/@ask-([\w-.:]+)/g) || [];
     for (const mention of modelMentions) {
       const modelName = mention.replace('@ask-', '');
-      return prompt + `\n\n[Hint: consult expert model "${modelName}" using the AskExpertModel tool]`;
+      hints.push(`consult expert model "${modelName}" using the AskExpertModel tool`);
     }
 
-    return prompt;
+    if (hints.length === 0) return prompt;
+    return `${prompt}\n\n[Hints: ${hints.join('; ')}]`;
   }
 }

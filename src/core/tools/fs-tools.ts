@@ -24,12 +24,12 @@ export const readFileTool: ToolRegistration = {
     try {
       const content = readFileSync(filePath, 'utf-8');
       const lines = content.split('\n');
-      const start = ((args.start_line as number) || 1) - 1;
-      const end = (args.end_line as number) || lines.length;
+      const start = Math.max(0, ((args.start_line as number) || 1) - 1);
+      const end = Math.min(lines.length, (args.end_line as number) || lines.length);
       const slice = lines.slice(start, end);
       return slice.map((line, i) => `${String(start + i + 1).padStart(6)}│ ${line}`).join('\n');
     } catch (err) {
-      return `Error reading file: ${err}`;
+      return `Error reading file: ${err instanceof Error ? err.message : String(err)}`;
     }
   },
 };
@@ -52,11 +52,12 @@ export const writeFileTool: ToolRegistration = {
     const filePath = resolve(process.cwd(), args.file_path as string);
     try {
       mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, args.content as string, 'utf-8');
-      const lines = (args.content as string).split('\n').length;
+      const content = args.content as string;
+      writeFileSync(filePath, content, 'utf-8');
+      const lines = content.split('\n').length;
       return `✓ Written ${lines} lines to ${filePath}`;
     } catch (err) {
-      return `Error writing file: ${err}`;
+      return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
     }
   },
 };
@@ -85,11 +86,12 @@ export const editFileTool: ToolRegistration = {
       if (!content.includes(oldStr)) {
         return `Error: old_string not found in file. Make sure it matches exactly (including whitespace).`;
       }
-      const newContent = content.replace(oldStr, args.new_string as string);
+      // Replace only the first occurrence (safer than replaceAll)
+      const newContent = content.replace(oldStr, (args.new_string as string).replace(/\$/g, '$$$$'));
       writeFileSync(filePath, newContent, 'utf-8');
       return `✓ Edit applied to ${filePath}`;
     } catch (err) {
-      return `Error editing file: ${err}`;
+      return `Error editing file: ${err instanceof Error ? err.message : String(err)}`;
     }
   },
 };
@@ -114,14 +116,23 @@ export const bashTool: ToolRegistration = {
     const cwd = args.cwd ? resolve(process.cwd(), args.cwd as string) : process.cwd();
     const timeout = (args.timeout as number) || 30000;
 
-    // Blocked dangerous patterns in safe mode
+    // Block dangerous patterns in safe mode
     const isSafe = process.env.AGENT_SAFE_MODE === '1';
     if (isSafe) {
-      const dangerous = [/rm\s+-rf\s+\//, /mkfs/, /dd\s+if=/, /:(){ :|:& };:/];
+      const dangerous = [
+        /rm\s+-rf\s+\//,
+        /mkfs/,
+        /dd\s+if=/,
+        /:\(\)\s*\{\s*:|:&\s*\}/,
+        />\s*\/dev\/[sh]d[a-z]/,
+      ];
       for (const pat of dangerous) {
         if (pat.test(command)) return `Blocked in safe mode: potentially destructive command`;
       }
     }
+
+    // Validate cwd exists
+    if (!existsSync(cwd)) return `Error: Working directory not found: ${cwd}`;
 
     try {
       const output = execSync(command, {
@@ -134,10 +145,12 @@ export const bashTool: ToolRegistration = {
       return output.trim() || '(no output)';
     } catch (err: unknown) {
       const e = err as { stdout?: string; stderr?: string; message?: string };
-      const stderr = e.stderr?.trim() || '';
-      const stdout = e.stdout?.trim() || '';
-      const msg = e.message || String(err);
-      return [stdout, stderr, `Exit error: ${msg}`].filter(Boolean).join('\n');
+      const parts: string[] = [];
+      if (e.stdout?.trim()) parts.push(e.stdout.trim());
+      if (e.stderr?.trim()) parts.push(e.stderr.trim());
+      // Avoid double-printing the message if it's already in stderr
+      if (!e.stderr && e.message) parts.push(`Exit error: ${e.message}`);
+      return parts.join('\n') || `Command failed`;
     }
   },
 };
@@ -159,21 +172,33 @@ export const listFilesTool: ToolRegistration = {
     const dirPath = resolve(process.cwd(), (args.path as string) || '.');
     if (!existsSync(dirPath)) return `Error: Path not found: ${dirPath}`;
 
+    const recursive = args.recursive as boolean | undefined;
+
     function listDir(dir: string, depth: number = 0): string[] {
-      const entries = readdirSync(dir);
       const lines: string[] = [];
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return [`${' '.repeat(depth * 2)}(unreadable)`];
+      }
+
       for (const entry of entries) {
         if (entry === 'node_modules' || entry === '.git') continue;
         const full = join(dir, entry);
-        const stat = statSync(full);
-        const indent = '  '.repeat(depth);
-        const relPath = relative(dirPath, full);
-        if (stat.isDirectory()) {
-          lines.push(`${indent}📁 ${relPath}/`);
-          if (args.recursive && depth < 3) lines.push(...listDir(full, depth + 1));
-        } else {
-          const size = stat.size < 1024 ? `${stat.size}B` : `${(stat.size / 1024).toFixed(1)}KB`;
-          lines.push(`${indent}📄 ${relPath} (${size})`);
+        try {
+          const stat = statSync(full);
+          const indent = '  '.repeat(depth);
+          const relPath = relative(dirPath, full);
+          if (stat.isDirectory()) {
+            lines.push(`${indent}📁 ${relPath}/`);
+            if (recursive && depth < 3) lines.push(...listDir(full, depth + 1));
+          } else {
+            const size = stat.size < 1024 ? `${stat.size}B` : `${(stat.size / 1024).toFixed(1)}KB`;
+            lines.push(`${indent}📄 ${relPath} (${size})`);
+          }
+        } catch {
+          // Skip unreadable entries (e.g. broken symlinks)
         }
       }
       return lines;
@@ -205,10 +230,20 @@ export const grepTool: ToolRegistration = {
     const pattern = args.pattern as string;
     const filePattern = args.file_pattern as string | undefined;
     const caseFlag = args.case_sensitive === false ? '-i' : '';
-    const includeFlag = filePattern ? `--include="${filePattern}"` : '';
+    // Safe-quote the include flag
+    const includeFlag = filePattern ? `--include=${JSON.stringify(filePattern)}` : '';
 
     try {
-      const cmd = `grep -rn ${caseFlag} ${includeFlag} --exclude-dir=node_modules --exclude-dir=.git -E "${pattern.replace(/"/g, '\\"')}" "${searchPath}" 2>/dev/null | head -50`;
+      // Escape the pattern for shell — use single quotes to avoid most injection
+      const escapedPattern = pattern.replace(/'/g, "'\"'\"'");
+      const cmd = [
+        'grep', '-rn', caseFlag, includeFlag,
+        '--exclude-dir=node_modules', '--exclude-dir=.git',
+        '-E', `'${escapedPattern}'`,
+        `'${searchPath}'`,
+        '2>/dev/null', '| head -50',
+      ].filter(Boolean).join(' ');
+
       const output = execSync(cmd, { encoding: 'utf-8', maxBuffer: 1024 * 1024 }).trim();
       return output || `No matches found for pattern: ${pattern}`;
     } catch {

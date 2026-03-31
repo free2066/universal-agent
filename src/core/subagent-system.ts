@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { resolve, join } from 'path';
 import { parse as parseYaml } from 'yaml';
-import { AgentCore } from './agent.js';
 import { modelManager } from '../models/model-manager.js';
 import type { ToolRegistration } from '../models/types.js';
 
@@ -66,10 +65,7 @@ export class SubagentSystem {
         systemPrompt: 'You are a technical writer. Write clear, concise, and comprehensive documentation. Use examples and code snippets.',
       },
     ];
-
-    for (const agent of builtins) {
-      this.agents.set(agent.name, agent);
-    }
+    for (const agent of builtins) this.agents.set(agent.name, agent);
   }
 
   private discoverAgents() {
@@ -78,7 +74,6 @@ export class SubagentSystem {
       resolve(process.cwd(), '.kode', 'agents'),
       resolve(process.env.HOME || '~', '.uagent', 'agents'),
     ];
-
     for (const dir of searchPaths) {
       if (!existsSync(dir)) continue;
       try {
@@ -92,34 +87,28 @@ export class SubagentSystem {
     }
   }
 
-  getAgent(name: string): SubagentDef | undefined {
-    return this.agents.get(name);
-  }
-
-  listAgents(): SubagentDef[] {
-    return Array.from(this.agents.values());
-  }
+  getAgent(name: string): SubagentDef | undefined { return this.agents.get(name); }
+  listAgents(): SubagentDef[] { return Array.from(this.agents.values()); }
 
   async runAgent(agentName: string, task: string, parentModel?: string): Promise<string> {
     const def = this.agents.get(agentName);
-    if (!def) return `Error: Subagent "${agentName}" not found. Available: ${Array.from(this.agents.keys()).join(', ')}`;
+    if (!def) {
+      return `Error: Subagent "${agentName}" not found. Available: ${Array.from(this.agents.keys()).join(', ')}`;
+    }
 
     const model = def.model === 'inherit' || !def.model
       ? (parentModel || modelManager.getCurrentModel('task'))
       : def.model;
 
-    const agent = new AgentCore({
-      domain: 'auto',
-      model,
-      stream: false,
-      verbose: false,
-    });
+    // Lazy import to break the circular dependency: subagent-system ↔ agent
+    const { AgentCore } = await import('./agent.js');
+    const agent = new AgentCore({ domain: 'auto', model, stream: false, verbose: false });
 
-    const systemOverride = def.systemPrompt || '';
-    const result = await agent.run(
-      systemOverride ? `[System: ${systemOverride}]\n\n${task}` : task
-    );
-    return result;
+    const prompt = def.systemPrompt
+      ? `[System: ${def.systemPrompt}]\n\n${task}`
+      : task;
+
+    return agent.run(prompt);
   }
 
   saveAgent(def: SubagentDef, scope: 'user' | 'project' = 'project') {
@@ -127,16 +116,16 @@ export class SubagentSystem {
       ? resolve(process.cwd(), '.uagent', 'agents')
       : resolve(process.env.HOME || '~', '.uagent', 'agents');
     mkdirSync(dir, { recursive: true });
-
-    const content = `---
-name: ${def.name}
-description: "${def.description}"
-tools: [${(def.tools || []).map((t) => `"${t}"`).join(', ')}]
-model: ${def.model || 'inherit'}
----
-
-${def.systemPrompt || ''}
-`;
+    const content = [
+      '---',
+      `name: ${def.name}`,
+      `description: "${def.description}"`,
+      `tools: [${(def.tools || []).map((t) => `"${t}"`).join(', ')}]`,
+      `model: ${def.model || 'inherit'}`,
+      '---',
+      '',
+      def.systemPrompt || '',
+    ].join('\n');
     writeFileSync(join(dir, `${def.name}.md`), content);
     this.agents.set(def.name, def);
   }
@@ -153,50 +142,45 @@ function parseAgentMarkdown(content: string, fallbackName: string): SubagentDef 
       description: (frontmatter.description as string) || '',
       tools: (frontmatter.tools as string[]) || [],
       model: (frontmatter.model as string) || 'inherit',
-      systemPrompt: body,
+      systemPrompt: body || undefined,
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// ── Task Tool (Subagent delegation) ──────────────────────
-export function createTaskTool(subagentSystem: SubagentSystem): ToolRegistration {
+// ── Task Tool ────────────────────────────────────────────
+export function createTaskTool(sys: SubagentSystem): ToolRegistration {
   return {
     definition: {
       name: 'Task',
-      description: 'Delegate a task to a specialized subagent. Use @run-agent-<name> syntax or specify subagent_type directly.',
+      description: `Delegate a task to a specialized subagent. Available: ${sys.listAgents().map((a) => a.name).join(', ')}`,
       parameters: {
         type: 'object',
         properties: {
-          subagent_type: {
-            type: 'string',
-            description: `Name of the subagent to run. Available: ${subagentSystem.listAgents().map((a) => a.name).join(', ')}`,
-          },
-          task: { type: 'string', description: 'The task to delegate to the subagent' },
-          model: { type: 'string', description: 'Optional: override model for this subagent run' },
+          subagent_type: { type: 'string', description: 'Subagent name to run' },
+          task: { type: 'string', description: 'Task to delegate' },
+          model: { type: 'string', description: 'Optional: override model for this run' },
         },
         required: ['subagent_type', 'task'],
       },
     },
     handler: async (args: Record<string, unknown>) => {
       const { subagent_type, task, model } = args as { subagent_type: string; task: string; model?: string };
-      return subagentSystem.runAgent(subagent_type, task, model);
+      return sys.runAgent(subagent_type, task, model);
     },
   };
 }
 
-// ── AskExpertModel Tool ───────────────────────────────────
+// ── AskExpertModel Tool ──────────────────────────────────
 export const askExpertModelTool: ToolRegistration = {
   definition: {
     name: 'AskExpertModel',
-    description: 'Consult a specific expert AI model for specialized analysis without affecting main conversation flow. Use @ask-<model-name> syntax.',
+    description: 'Consult a specific expert AI model. Use @ask-<model-name> syntax.',
     parameters: {
       type: 'object',
       properties: {
         model: { type: 'string', description: 'Model to consult (e.g., claude-3-5-sonnet, gpt-4o, ollama:llama3)' },
-        question: { type: 'string', description: 'The question or analysis request' },
-        context: { type: 'string', description: 'Optional: additional context or code to analyze' },
+        question: { type: 'string', description: 'Question or analysis request' },
+        context: { type: 'string', description: 'Optional: code or context to analyze' },
       },
       required: ['model', 'question'],
     },
@@ -205,9 +189,7 @@ export const askExpertModelTool: ToolRegistration = {
     const { model, question, context } = args as { model: string; question: string; context?: string };
     const { createLLMClient } = await import('../models/llm-client.js');
     const client = createLLMClient(model);
-
     const prompt = context ? `${question}\n\nContext:\n${context}` : question;
-
     try {
       const response = await client.chat({
         systemPrompt: 'You are an expert AI assistant. Provide concise, accurate, and insightful analysis.',

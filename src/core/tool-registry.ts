@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolHandler, ToolRegistration } from '../models/types.js';
+import type { ToolDefinition, ToolRegistration } from '../models/types.js';
 
 export class ToolRegistry {
   private tools = new Map<string, ToolRegistration>();
@@ -21,7 +21,7 @@ export class ToolRegistry {
 
   async execute(name: string, args: Record<string, unknown>): Promise<unknown> {
     const tool = this.tools.get(name);
-    if (!tool) throw new Error(`Unknown tool: ${name}`);
+    if (!tool) throw new Error(`Unknown tool: "${name}". Available: ${Array.from(this.tools.keys()).join(', ')}`);
     return tool.handler(args);
   }
 
