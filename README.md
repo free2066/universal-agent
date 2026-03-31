@@ -204,4 +204,4 @@ npm publish --access public
 
 ## 📄 License
 
-MIT © wb_guozhongming
+MIT
