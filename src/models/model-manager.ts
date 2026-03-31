@@ -160,9 +160,11 @@ export class ModelManager {
 
   cycleMainModel(): string {
     const active = this.listProfiles().map(p => p.name);
+    if (!active.length) return this.pointers.main;
     const idx = active.indexOf(this.pointers.main);
     const next = active[(idx + 1) % active.length];
     this.pointers.main = next;
+    this.saveToDisk();
     return next;
   }
 }
