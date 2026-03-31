@@ -231,7 +231,7 @@ export const grepTool: ToolRegistration = {
     const filePattern = args.file_pattern as string | undefined;
     const caseFlag = args.case_sensitive === false ? '-i' : '';
     // Safe-quote the include flag
-    const includeFlag = filePattern ? `--include=${JSON.stringify(filePattern)}` : '';
+    const includeFlag = filePattern ? `--include=${filePattern}` : '';
 
     try {
       // Escape the pattern for shell — use single quotes to avoid most injection

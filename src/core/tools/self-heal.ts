@@ -93,17 +93,6 @@ function verifyBuild(projectRoot: string): boolean {
   }
 }
 
-function tryRunTests(projectRoot: string): boolean {
-  try {
-    const pkg = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf-8')) as { scripts?: Record<string, string> };
-    if (!pkg.scripts?.test) return true; // no tests = not a failure
-    execSync('npm test', { cwd: projectRoot, timeout: 120000, stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ─── Core Healing Logic ───────────────────────────────────
 
 async function healFinding(
@@ -174,8 +163,9 @@ async function healFinding(
 function commitFixes(projectRoot: string, count: number): boolean {
   try {
     execSync('git add -A', { cwd: projectRoot, stdio: 'pipe' });
+    // Bug fix: newline in -m arg causes shell parse error — use two -m flags instead
     execSync(
-      `git commit -m "fix(auto-purify): auto-fix ${count} code inspection finding(s)\n\nApplied by self-healing engine"`,
+      `git commit -m "fix(auto-purify): auto-fix ${count} finding(s)" -m "Applied by self-healing engine"`,
       { cwd: projectRoot, stdio: 'pipe', timeout: 30000 }
     );
     return true;

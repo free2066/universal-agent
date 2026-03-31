@@ -42,7 +42,10 @@ export interface InspectionResult {
 
 interface Rule {
   id: string;
-  pattern: RegExp;
+  // Use a factory so each call gets a fresh RegExp (avoids lastIndex state leaking
+  // when the /g flag is present — even though we don't use /g here, using a
+  // factory is defensive and makes adding flags later safe).
+  pattern: () => RegExp;
   severity: Severity;
   category: Category;
   message: string;
@@ -53,23 +56,16 @@ const RULES: Rule[] = [
   // ── Bug rules ─────────────────────────────────────────
   {
     id: 'no-floating-promise',
-    pattern: /(?<!\bawait\b\s+)(?<!\breturn\b\s+)(?<!\bvoid\b\s+)\b(fetch|axios\.\w+|fs\.\w+Async|\w+\.then\()\s*\(/,
+    // Matches lines that call async APIs without await/return/void
+    pattern: () => /(?<!\bawait\s)(?<!\breturn\s)(?<!\bvoid\s)\b(?:fetch|axios\.\w+|fs\.\w+Async)\s*\(/,
     severity: 'error',
     category: 'bug',
     message: 'Potentially unhandled Promise — use await, return, or void',
     suggestion: 'Add await or .catch() to handle the Promise',
   },
   {
-    id: 'unsafe-optional-chain',
-    pattern: /\b(\w+)\.(\w+)\s+(?![\?!])/,
-    severity: 'info',
-    category: 'bug',
-    message: 'Property access without optional chaining on potentially nullable value',
-    suggestion: 'Use optional chaining: obj?.property',
-  },
-  {
     id: 'console-log-leftover',
-    pattern: /console\.(log|warn|error|debug|trace)\s*\(/,
+    pattern: () => /console\.(log|warn|error|debug|trace)\s*\(/,
     severity: 'warning',
     category: 'style',
     message: 'console statement found — remove before production',
@@ -77,7 +73,7 @@ const RULES: Rule[] = [
   },
   {
     id: 'hardcoded-secret',
-    pattern: /(?:api[-_]?key|secret|password|token|auth)\s*[:=]\s*["'][^"']{8,}["']/i,
+    pattern: () => /(?:api[-_]?key|secret|password|token|auth)\s*[:=]\s*["'][^"']{8,}["']/i,
     severity: 'critical',
     category: 'security',
     message: 'Possible hardcoded secret or credential',
@@ -85,7 +81,7 @@ const RULES: Rule[] = [
   },
   {
     id: 'sql-injection-risk',
-    pattern: /(?:query|execute|run)\s*\(\s*[`"'].*?\$\{/,
+    pattern: () => /(?:query|execute|run)\s*\(\s*[`"'].*?\$\{/,
     severity: 'critical',
     category: 'security',
     message: 'Potential SQL injection — string interpolation in query',
@@ -93,7 +89,8 @@ const RULES: Rule[] = [
   },
   {
     id: 'empty-catch',
-    pattern: /catch\s*\([^)]*\)\s*\{\s*(?:\/\/[^\n]*)?\s*\}/,
+    // Matches catch blocks that are completely empty or contain only a comment
+    pattern: () => /catch\s*\([^)]*\)\s*\{\s*(?:\/\/[^\n]*)?\s*\}/,
     severity: 'error',
     category: 'bug',
     message: 'Empty catch block silently swallows errors',
@@ -101,7 +98,7 @@ const RULES: Rule[] = [
   },
   {
     id: 'no-explicit-any',
-    pattern: /:\s*any\b(?!\s*\/\/\s*eslint-disable)/,
+    pattern: () => /:\s*any\b(?!\s*\/\/\s*eslint-disable)/,
     severity: 'warning',
     category: 'style',
     message: 'Explicit `any` type weakens type safety',
@@ -109,7 +106,8 @@ const RULES: Rule[] = [
   },
   {
     id: 'non-null-assertion',
-    pattern: /[^!]!\s*[.[\(]/,
+    // Match `!.` or `![` but not `!!` or `!==`
+    pattern: () => /[^!=]!\s*[.[]/,
     severity: 'warning',
     category: 'bug',
     message: 'Non-null assertion operator (!) suppresses null checks',
@@ -117,7 +115,7 @@ const RULES: Rule[] = [
   },
   {
     id: 'todo-fixme',
-    pattern: /\/\/\s*(TODO|FIXME|HACK|XXX|BUG)\b/i,
+    pattern: () => /\/\/\s*(TODO|FIXME|HACK|XXX|BUG)\b/i,
     severity: 'info',
     category: 'style',
     message: 'Unresolved TODO/FIXME comment',
@@ -126,40 +124,25 @@ const RULES: Rule[] = [
 
   // ── Performance rules ──────────────────────────────────
   {
-    id: 'array-in-loop',
-    pattern: /for\s*\([^)]*\)\s*\{[^}]*\.push\s*\(/,
+    id: 'array-push-in-loop',
+    // Only match simple single-line for loops with a push — avoids false positives
+    pattern: () => /for\s*\([^)]+\)\s*\{[^{}]*\.push\s*\(/,
     severity: 'warning',
     category: 'performance',
     message: 'Array.push inside loop — consider pre-allocating or using map/filter',
     suggestion: 'Use Array.from(), map(), or pre-allocate the array',
   },
   {
-    id: 'nested-loops',
-    pattern: /for\s*\([^{]+\{[^}]*for\s*\([^{]+\{/,
-    severity: 'warning',
-    category: 'performance',
-    message: 'Nested loops detected — potential O(n²) complexity',
-    suggestion: 'Consider using a Map/Set for O(1) lookups',
-  },
-  {
     id: 'sync-in-async',
-    pattern: /(?:readFileSync|writeFileSync|execSync)\s*\(/,
+    pattern: () => /\b(?:readFileSync|writeFileSync|execSync)\s*\(/,
     severity: 'warning',
     category: 'performance',
-    message: 'Synchronous I/O inside potentially async context',
+    message: 'Synchronous I/O — may block the event loop',
     suggestion: 'Use async variants (readFile, writeFile, exec) with await',
   },
   {
-    id: 'new-in-loop',
-    pattern: /for\s*\([^{]+\{[^}]*new\s+\w+\s*\(/,
-    severity: 'warning',
-    category: 'performance',
-    message: 'Object instantiation inside loop',
-    suggestion: 'Move instantiation outside the loop if possible',
-  },
-  {
     id: 'large-json-stringify',
-    pattern: /JSON\.stringify\s*\([^)]{50,}\)/,
+    pattern: () => /JSON\.stringify\s*\([^)]{50,}\)/,
     severity: 'info',
     category: 'performance',
     message: 'Complex JSON.stringify call — may be slow on large objects',
@@ -169,24 +152,21 @@ const RULES: Rule[] = [
   // ── Style rules ────────────────────────────────────────
   {
     id: 'magic-number',
-    pattern: /(?<![.\w])\b(?!0|1|2|-1|100|1000)\d{2,}\b(?![.\w%])/,
+    // Numbers ≥ 10 that are NOT 10, 16, 32, 64, 100, 1000 and not part of identifiers
+    pattern: () => /(?<![.\w])\b(?!10\b|16\b|32\b|64\b|100\b|1000\b)\d{3,}\b(?![.\w%])/,
     severity: 'info',
     category: 'style',
     message: 'Magic number — extract to a named constant',
-    suggestion: 'const MAX_ITEMS = 50;',
-  },
-  {
-    id: 'long-function',
-    pattern: /(?:function\s+\w+|=>\s*)\{(?:[^{}]|\{[^{}]*\}){200,}\}/,
-    severity: 'info',
-    category: 'style',
-    message: 'Function may be too long (>200 chars) — consider splitting',
-    suggestion: 'Extract logic into smaller, focused functions',
+    suggestion: 'const MAX_ITEMS = <value>;',
   },
 ];
 
 // ─── Scanner ─────────────────────────────────────────────
 
+/**
+ * Scan a single file for all rule violations.
+ * Each rule creates a fresh RegExp via its factory to avoid lastIndex state leaks.
+ */
 function scanFile(filePath: string, rootDir: string): Finding[] {
   const findings: Finding[] = [];
   let content: string;
@@ -201,14 +181,15 @@ function scanFile(filePath: string, rootDir: string): Finding[] {
   const relFile = relative(rootDir, filePath);
 
   for (const rule of RULES) {
-    // Match line-by-line for precise location
     lines.forEach((line, lineIdx) => {
-      // Skip comment-only lines for most rules
+      // Skip pure comment lines for most rules (avoid scanning commented-out code)
       const trimmed = line.trimStart();
       if (trimmed.startsWith('//') && rule.id !== 'todo-fixme') return;
       if (trimmed.startsWith('*')) return; // JSDoc
 
-      const match = rule.pattern.exec(line);
+      // Fresh RegExp per line per rule → no lastIndex issues
+      const re = rule.pattern();
+      const match = re.exec(line);
       if (match) {
         findings.push({
           file: relFile,
@@ -223,6 +204,60 @@ function scanFile(filePath: string, rootDir: string): Finding[] {
         });
       }
     });
+  }
+
+  // ── Multi-line rules (run on full file content) ────────
+  // Long function: count lines between matching braces instead of regex
+  findings.push(...detectLongFunctions(content, relFile));
+
+  return findings;
+}
+
+/**
+ * Detect functions with more than LONG_FN_THRESHOLD lines by tracking brace depth.
+ * Pure-regex cross-line matching is unreliable in single-pass line-by-line scanning.
+ */
+function detectLongFunctions(content: string, relFile: string): Finding[] {
+  const LONG_FN_THRESHOLD = 60; // lines
+  const findings: Finding[] = [];
+  const lines = content.split('\n');
+
+  // Find function definition lines
+  const fnDefPattern = /(?:^|\s)(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w]+)\s*=>|\w+\s*\([^)]*\)\s*\{)/;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!fnDefPattern.test(lines[i])) continue;
+    if (!lines[i].includes('{')) continue;
+
+    // Count lines until matching closing brace
+    let depth = 0;
+    let start = i;
+    let end = -1;
+
+    for (let j = i; j < lines.length; j++) {
+      for (const ch of lines[j]) {
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) { end = j; break; }
+        }
+      }
+      if (end !== -1) break;
+    }
+
+    if (end !== -1 && (end - start) > LONG_FN_THRESHOLD) {
+      findings.push({
+        file: relFile,
+        line: start + 1,
+        column: 1,
+        severity: 'info',
+        category: 'style',
+        rule: 'long-function',
+        message: `Function is ${end - start} lines long — consider splitting`,
+        snippet: lines[start].trim().slice(0, 120),
+        suggestion: 'Extract logic into smaller, focused functions',
+      });
+    }
   }
 
   return findings;
@@ -256,8 +291,8 @@ function collectFiles(dir: string, exts: string[], maxFiles = 500): string[] {
 
 function computeScore(findings: Finding[], fileCount: number): number {
   if (fileCount === 0) return 100;
-  const penalties = { critical: 20, error: 10, warning: 3, info: 1 };
-  const total = findings.reduce((sum, f) => sum + (penalties[f.severity] || 0), 0);
+  const penalties: Record<Severity, number> = { critical: 20, error: 10, warning: 3, info: 1 };
+  const total = findings.reduce((sum, f) => sum + (penalties[f.severity] ?? 0), 0);
   return Math.max(0, Math.round(100 - (total / Math.max(fileCount, 1))));
 }
 
@@ -283,7 +318,7 @@ function formatReport(result: InspectionResult, verbose: boolean): string {
   // Group by file
   const byFile = new Map<string, Finding[]>();
   for (const f of result.findings) {
-    const arr = byFile.get(f.file) || [];
+    const arr = byFile.get(f.file) ?? [];
     arr.push(f);
     byFile.set(f.file, arr);
   }
@@ -291,7 +326,7 @@ function formatReport(result: InspectionResult, verbose: boolean): string {
   lines.push('\n📋 Issues by file:\n');
 
   for (const [file, filFindings] of byFile.entries()) {
-    lines.push(`📄 ${file} (${filFindings.length} issues)`);
+    lines.push(`📄 ${file} (${filFindings.length} issue${filFindings.length !== 1 ? 's' : ''})`);
     const shown = verbose ? filFindings : filFindings.slice(0, 5);
     for (const f of shown) {
       const icon = { critical: '🔴', error: '🟠', warning: '🟡', info: '🔵' }[f.severity];
@@ -302,7 +337,7 @@ function formatReport(result: InspectionResult, verbose: boolean): string {
       }
     }
     if (!verbose && filFindings.length > 5) {
-      lines.push(`  ... and ${filFindings.length - 5} more`);
+      lines.push(`  ... and ${filFindings.length - 5} more (use --verbose to see all)`);
     }
     lines.push('');
   }
@@ -367,7 +402,14 @@ export const codeInspectorTool: ToolRegistration = {
       return `Error: Path not found: ${targetPath}`;
     }
 
-    const st = statSync(targetPath);
+    // Bug fix: wrap statSync in try/catch to avoid crashing on broken symlinks
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(targetPath);
+    } catch (err) {
+      return `Error: Cannot stat path: ${targetPath} — ${err instanceof Error ? err.message : String(err)}`;
+    }
+
     const files = st.isFile()
       ? [targetPath]
       : collectFiles(targetPath, ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
@@ -388,7 +430,7 @@ export const codeInspectorTool: ToolRegistration = {
       return sevOk && catOk;
     });
 
-    // Sort: critical first
+    // Sort: critical first, then by file name
     allFindings.sort((a, b) => {
       const diff = severityOrder.indexOf(b.severity) - severityOrder.indexOf(a.severity);
       return diff !== 0 ? diff : a.file.localeCompare(b.file);

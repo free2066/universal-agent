@@ -209,6 +209,12 @@ export class AgentCore {
 
     if (iteration >= MAX_ITERATIONS) {
       onChunk('\n⚠️ Reached maximum iteration limit.\n');
+      // Ensure history always ends with an assistant message so the next turn
+      // produces a valid alternating user/assistant sequence for all LLM APIs.
+      const last = this.history[this.history.length - 1];
+      if (last?.role === 'tool') {
+        this.history.push({ role: 'assistant', content: '[Iteration limit reached]' });
+      }
     }
   }
 

@@ -118,8 +118,10 @@ export class MCPManager {
   private saveConfig() {
     const config: MCPConfig = { servers: {} };
     for (const [name, server] of this.servers.entries()) {
-      const { name: _n, ...rest } = server;
-      config.servers[name] = { name, ...rest };
+      // Bug fix: don't write `name` twice — it's already used as the key.
+      // Strip it from the stored value to keep the config clean.
+      const { name: _omit, ...rest } = server;
+      config.servers[name] = rest as MCPServer;
     }
     writeFileSync(this.configPath, JSON.stringify(config, null, 2));
   }
