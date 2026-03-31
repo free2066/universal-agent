@@ -6,6 +6,8 @@ import { buildSystemPromptWithContext } from './context-loader.js';
 import { subagentSystem, createTaskTool, askExpertModelTool } from './subagent-system.js';
 import { readFileTool, writeFileTool, editFileTool, bashTool, listFilesTool, grepTool } from './tools/fs-tools.js';
 import { webFetchTool, webSearchTool } from './tools/web-tools.js';
+import { codeInspectorTool } from './tools/code-inspector.js';
+import { selfHealTool } from './tools/self-heal.js';
 import { MCPManager } from './mcp-manager.js';
 
 export interface AgentOptions {
@@ -57,6 +59,10 @@ export class AgentCore {
 
     // Web tools
     this.registry.registerMany([webFetchTool, webSearchTool]);
+
+    // Code quality & self-healing tools (always available)
+    this.registry.register(codeInspectorTool);
+    this.registry.register(selfHealTool);
 
     // Subagent tools
     this.registry.register(createTaskTool(subagentSystem));

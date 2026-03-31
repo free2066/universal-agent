@@ -11,6 +11,8 @@ import { modelManager } from '../models/model-manager.js';
 import { subagentSystem } from '../core/subagent-system.js';
 import { initAgentsMd } from '../core/context-loader.js';
 import { MCPManager } from '../core/mcp-manager.js';
+import { codeInspectorTool } from '../core/tools/code-inspector.js';
+import { selfHealTool } from '../core/tools/self-heal.js';
 import { printBanner, printHelp } from './ui.js';
 
 // Load env
@@ -166,6 +168,58 @@ mcpCmd.command('init').description('Initialize .mcp.json in current directory').
   console.log(chalk.green(result));
 });
 
+// ── inspect ──────────────────────────────────────────────
+program
+  .command('inspect [path]')
+  .description('Static code inspection: scan for bugs, security issues, and performance problems')
+  .option('-s, --severity <level>', 'Minimum severity: critical|error|warning|info', 'warning')
+  .option('-c, --category <cat>', 'Filter category: bug|performance|style|security|all', 'all')
+  .option('-v, --verbose', 'Show code snippets and fix suggestions')
+  .option('--json', 'Output as JSON')
+  .action(async (scanPath, options) => {
+    const spinner = ora('Scanning...').start();
+    try {
+      const result = await codeInspectorTool.handler({
+        path: scanPath || process.cwd(),
+        severity: options.severity,
+        category: options.category,
+        verbose: options.verbose ?? false,
+        format: options.json ? 'json' : 'report',
+      });
+      spinner.stop();
+      console.log(result);
+    } catch (err) {
+      spinner.fail('Inspection failed: ' + (err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+
+// ── purify ───────────────────────────────────────────────
+program
+  .command('purify [path]')
+  .description('Self-healing: auto-detect and fix code issues, verify build, optionally commit')
+  .option('-d, --dry-run', 'Preview fixes without applying them')
+  .option('-s, --severity <level>', 'Minimum severity to fix: error|warning|info', 'warning')
+  .option('--commit', 'Commit fixed files with git')
+  .option('--max-fixes <n>', 'Maximum fixes to apply in one run', '20')
+  .action(async (healPath, options) => {
+    const spinner = ora(options.dryRun ? 'Analyzing (dry run)...' : 'Healing...').start();
+    try {
+      const result = await selfHealTool.handler({
+        path: healPath || process.cwd(),
+        dry_run: options.dryRun ?? false,
+        severity: options.severity,
+        commit: options.commit ?? false,
+        max_fixes: parseInt(options.maxFixes || '20'),
+      });
+      spinner.stop();
+      console.log(result);
+    } catch (err) {
+      spinner.fail('Self-heal failed: ' + (err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+
 // ── init ─────────────────────────────────────────────────
 program
   .command('init')
@@ -184,7 +238,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     prompt: chalk.cyan(`[${options.domain}] `) + chalk.green('❯ '),
   });
 
-  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /agents, /exit\n'));
+  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /agents, /inspect, /purify, /exit\n'));
 
   rl.prompt();
 
@@ -254,6 +308,41 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     }
     if (input === '/init') {
       console.log(chalk.green(initAgentsMd(process.cwd())));
+      rl.prompt(); return;
+    }
+    if (input.startsWith('/inspect')) {
+      const parts = input.split(/\s+/);
+      const scanPath = parts[1] || process.cwd();
+      rl.pause();
+      process.stdout.write('\n');
+      try {
+        const result = await codeInspectorTool.handler({
+          path: scanPath, severity: 'warning', verbose: false, format: 'report',
+        });
+        console.log(result);
+      } catch (err) {
+        console.error(chalk.red('Inspect error: ') + (err instanceof Error ? err.message : String(err)));
+      }
+      process.stdout.write('\n');
+      rl.resume();
+      rl.prompt(); return;
+    }
+    if (input.startsWith('/purify')) {
+      const parts = input.split(/\s+/);
+      const isDryRun = parts.includes('--dry-run') || parts.includes('-d');
+      const doCommit = parts.includes('--commit');
+      rl.pause();
+      process.stdout.write('\n');
+      try {
+        const result = await selfHealTool.handler({
+          path: process.cwd(), dry_run: isDryRun, severity: 'warning', commit: doCommit, max_fixes: 20,
+        });
+        console.log(result);
+      } catch (err) {
+        console.error(chalk.red('Purify error: ') + (err instanceof Error ? err.message : String(err)));
+      }
+      process.stdout.write('\n');
+      rl.resume();
       rl.prompt(); return;
     }
 
