@@ -5,30 +5,55 @@ import type { ToolRegistration } from '../../../models/types.js';
 export const dataCleanTool: ToolRegistration = {
   definition: {
     name: 'analyze_data_quality',
-    description: 'Analyze data quality issues and suggest cleaning strategies for a dataset',
+    description: 'Analyze data quality issues and suggest cleaning strategies for a dataset. Accepts a file path OR inline CSV/JSON data string.',
     parameters: {
       type: 'object',
       properties: {
         file_path: { type: 'string', description: 'Path to the CSV or JSON file' },
+        data: { type: 'string', description: 'Inline CSV or JSON string (alternative to file_path)' },
+        format: { type: 'string', enum: ['csv', 'json'], description: 'Format of inline data (default: csv). Only used with the data parameter.' },
       },
-      required: ['file_path'],
+      required: [],
     },
   },
   handler: async (args) => {
-    const filePath = args.file_path as string;
+    const filePath = args.file_path as string | undefined;
+    const inlineData = (args.data ?? args.inline_data) as string | undefined;
+    const format = (args.format as string | undefined) ?? 'csv';
+
+    if (!filePath && !inlineData) {
+      return 'Error: Provide either file_path (path to CSV/JSON file) or data (inline CSV/JSON string).';
+    }
 
     let content: string;
-    try {
-      content = readFileSync(filePath, 'utf-8');
-    } catch {
-      return `Error: Cannot read file at ${filePath}`;
+    let sourceLabel: string;
+
+    if (inlineData) {
+      content = inlineData;
+      sourceLabel = '<inline data>';
+    } else {
+      try {
+        content = readFileSync(filePath!, 'utf-8');
+        sourceLabel = filePath!;
+      } catch {
+        return `Error: Cannot read file at ${filePath}`;
+      }
     }
 
     let records: Record<string, unknown>[];
-    if (filePath.endsWith('.json')) {
-      records = JSON.parse(content);
+    const isJson = inlineData ? format === 'json' : filePath!.endsWith('.json');
+    if (isJson) {
+      try {
+        records = JSON.parse(content);
+      } catch {
+        return `Error: Failed to parse JSON. Check your data format.`;
+      }
     } else {
-      records = parse(content, { columns: true, skip_empty_lines: true, trim: true });
+      try {
+        records = parse(content, { columns: true, skip_empty_lines: true, trim: true });
+      } catch {
+        return `Error: Failed to parse CSV. Check your data format.`;
+      }
     }
 
     const columns = Object.keys(records[0] || {});
@@ -83,7 +108,7 @@ export const dataCleanTool: ToolRegistration = {
       suggestions.push(`Remove ${dupCount} duplicate rows with df.drop_duplicates()`);
     }
 
-    let output = `🧹 Data Quality Report: ${filePath}\n`;
+    let output = `🧹 Data Quality Report: ${sourceLabel}\n`;
     output += `${'─'.repeat(50)}\n`;
     output += `Total rows: ${records.length} | Columns: ${columns.length}\n\n`;
 

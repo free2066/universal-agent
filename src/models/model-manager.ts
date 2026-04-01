@@ -154,11 +154,13 @@ export class ModelManager {
       if (data.pointers) {
         // Only merge recognised pointer keys — silently drop any stale / invalid keys
         // that may have been written by older versions (fix f2).
+        // Also verify the pointer value resolves to a known profile (fix: stale pointer cleanup).
         const validKeys = new Set<string>(['main', 'task', 'compact', 'quick']);
         for (const [k, v] of Object.entries(data.pointers)) {
-          if (validKeys.has(k) && typeof v === 'string') {
+          if (validKeys.has(k) && typeof v === 'string' && this.profiles.has(v)) {
             (this.pointers as unknown as Record<string, string>)[k] = v;
           }
+          // Silently skip invalid/stale pointer values — defaults (set in constructor) remain
         }
       }
     } catch { /* ignore */ }

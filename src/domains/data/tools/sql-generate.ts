@@ -187,6 +187,19 @@ export const sqlGenerateTool: ToolRegistration = {
       mode: string;
     };
 
+    // Runtime validation — enum in schema is advisory only, validate explicitly
+    const VALID_DIALECTS = new Set(['mysql', 'postgresql', 'clickhouse', 'sqlite', 'hive', 'standard']);
+    if (!VALID_DIALECTS.has(dialect)) {
+      return { error: `Invalid dialect: "${dialect}". Valid values: ${[...VALID_DIALECTS].join(', ')}` };
+    }
+    const VALID_MODES = new Set(['generate', 'optimize', 'explain', 'convert']);
+    if (!VALID_MODES.has(mode)) {
+      return { error: `Invalid mode: "${mode}". Valid values: ${[...VALID_MODES].join(', ')}` };
+    }
+    if (!task || typeof task !== 'string' || !task.trim()) {
+      return { error: 'Missing required parameter: "task"' };
+    }
+
     // Auto-load schemas from .uagent/schemas/ if no manual schema provided
     const autoSchema = manualSchema ? '' : buildSchemaContext(task, process.cwd());
     const schemaSource = manualSchema ? 'provided' : autoSchema ? 'auto-loaded from .uagent/schemas/' : 'none';
