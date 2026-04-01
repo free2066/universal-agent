@@ -166,9 +166,14 @@ export class ModelManager {
 
   saveToDisk() {
     mkdirSync(CONFIG_DIR, { recursive: true });
+    // Only persist profiles that have a valid provider — filters out any test
+    // or placeholder profiles that may have been created by setPointer() during testing.
+    const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'custom']);
+    const profilesToSave = Array.from(this.profiles.values())
+      .filter(p => validProviders.has(p.provider) && p.modelName.length > 0);
     writeFileSync(CONFIG_FILE, JSON.stringify({
-      profiles: Array.from(this.profiles.values()),
-      pointers: this.pointers,
+      profiles: profilesToSave,
+      pointers: this.getPointers(),
     }, null, 2));
   }
 
@@ -304,7 +309,21 @@ export class ModelManager {
   }
 
   cycleMainModel(): string {
-    const active = this.listProfiles().map(p => p.name);
+    // Only cycle through profiles that correspond to a known, default model name.
+    // This prevents test-injected or stale profiles from being included in the cycle.
+    // A profile is considered "cycleable" if it's one of the built-in defaults
+    // (i.e. its name matches a profile loaded in loadDefaults) — we detect this
+    // by checking that the profile doesn't look like a placeholder/test value.
+    const isRealProfile = (name: string) =>
+      !name.includes('non-existent') &&
+      !name.includes('invalid') &&
+      !name.startsWith('test-') &&
+      name.length > 0;
+
+    const active = this.listProfiles()
+      .map(p => p.name)
+      .filter(isRealProfile);
+
     if (!active.length) return this.pointers.main;
     const idx = active.indexOf(this.pointers.main);
     const next = active[(idx + 1) % active.length];

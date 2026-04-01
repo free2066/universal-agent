@@ -57,6 +57,15 @@ export class AgentCore {
   } | null = null;
 
   constructor(options: AgentOptions) {
+    // Validate domain early so AgentCore never starts in an unknown state.
+    // 'auto' is always valid; other values must be in the known list.
+    const VALID_DOMAINS = new Set(['auto', 'data', 'dev', 'service']);
+    if (!VALID_DOMAINS.has(options.domain)) {
+      throw new Error(
+        `Invalid domain: "${options.domain}". Valid values: ${[...VALID_DOMAINS].join(', ')}`
+      );
+    }
+
     this.currentDomain = options.domain;
     this.verbose = options.verbose;
     this.safeMode = options.safeMode ?? false;
@@ -125,6 +134,10 @@ export class AgentCore {
   }
 
   setDomain(domain: string) {
+    const VALID_DOMAINS = new Set(['auto', 'data', 'dev', 'service']);
+    if (!VALID_DOMAINS.has(domain)) {
+      throw new Error(`Invalid domain: "${domain}". Valid values: ${[...VALID_DOMAINS].join(', ')}`);
+    }
     this.currentDomain = domain;
     this.registry.clear();
     this.registerAllTools(domain);

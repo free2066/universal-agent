@@ -79,6 +79,23 @@ const LEVEL_LABELS: Record<LogLevel, string> = {
   error: chalk.red('ERROR'),
 };
 
+/**
+ * Safe JSON serialiser — handles circular references and non-serialisable
+ * values (functions, Buffers, etc.) without throwing.
+ * Falls back to util.inspect for any value that JSON.stringify cannot handle.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    // Circular reference or other non-serialisable value — use util.inspect
+    // which handles circular refs gracefully (prints [Circular *1] etc.)
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { inspect } = require('node:util') as typeof import('node:util');
+    return inspect(value, { depth: 4, breakLength: Infinity });
+  }
+}
+
 // ── Core ──────────────────────────────────────────────────────────────────────
 
 function writeLog(
@@ -95,7 +112,7 @@ function writeLog(
   const prefix = `${chalk.gray(ts)} ${label} ${color(`[${subsystem}]`)}`;
 
   const metaStr = meta && Object.keys(meta).length > 0
-    ? ' ' + chalk.gray(JSON.stringify(meta))
+    ? ' ' + chalk.gray(safeStringify(meta))
     : '';
 
   const out = `${prefix} ${message}${metaStr}`;
