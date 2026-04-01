@@ -12,6 +12,7 @@
  */
 
 import chalk from 'chalk';
+import { inspect } from 'node:util';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -90,8 +91,6 @@ function safeStringify(value: unknown): string {
   } catch {
     // Circular reference or other non-serialisable value — use util.inspect
     // which handles circular refs gracefully (prints [Circular *1] etc.)
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { inspect } = require('node:util') as typeof import('node:util');
     return inspect(value, { depth: 4, breakLength: Infinity });
   }
 }
