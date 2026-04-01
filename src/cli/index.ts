@@ -102,9 +102,32 @@ program
   .option('-m, --model <model>', 'Model', 'gpt-4o')
   .option('-f, --file <file>', 'Input file path')
   .option('--safe', 'Safe mode')
+  .option('--context <ids>', 'Comma-separated context IDs to inject from .uagent/context/ (e.g. proj-struct,dep-graph)')
+  .option('--save-context <id>', 'Save this run\'s output to .uagent/context/<id>.md for downstream tasks')
   .action(async (prompt, options) => {
     validateDomain(options.domain);
     validateModel(options.model);
+
+    // Build prompt with injected context files (優化点4: context file chaining)
+    let fullPrompt = options.file ? `${prompt}\n\n[File: ${options.file}]` : prompt;
+    if (options.context) {
+      const { existsSync, readFileSync, mkdirSync } = await import('fs');
+      const { join } = await import('path');
+      const contextIds: string[] = (options.context as string).split(',').map((s: string) => s.trim()).filter(Boolean);
+      const contextParts: string[] = [];
+      for (const id of contextIds) {
+        const ctxFile = join(process.cwd(), '.uagent', 'context', `${id}.md`);
+        if (existsSync(ctxFile)) {
+          contextParts.push(`## Context from [${id}]\n${readFileSync(ctxFile, 'utf-8').trim()}`);
+        } else {
+          console.warn(chalk.yellow(`  ⚠ Context file not found: .uagent/context/${id}.md`));
+        }
+      }
+      if (contextParts.length > 0) {
+        fullPrompt = `${contextParts.join('\n\n')}\n\n---\n## Your Task\n${fullPrompt}`;
+      }
+    }
+
     const agent = new AgentCore({
       domain: options.domain,
       model: options.model,
@@ -112,12 +135,28 @@ program
       verbose: false,
       safeMode: options.safe,
     });
-    const fullPrompt = options.file ? `${prompt}\n\n[File: ${options.file}]` : prompt;
     const spinner = ora('Thinking...').start();
     try {
       const result = await agent.run(fullPrompt, options.file);
       spinner.stop();
       console.log('\n' + result);
+
+      // Save output to context file for downstream chaining (優化点4)
+      if (options.saveContext) {
+        const { writeFileSync, mkdirSync } = await import('fs');
+        const { join } = await import('path');
+        const ctxDir = join(process.cwd(), '.uagent', 'context');
+        mkdirSync(ctxDir, { recursive: true });
+        const ctxContent = [
+          `# Agent Context: ${options.saveContext}`,
+          '',
+          `> Generated at: ${new Date().toISOString()}`,
+          '',
+          result,
+        ].join('\n');
+        writeFileSync(join(ctxDir, `${options.saveContext}.md`), ctxContent, 'utf-8');
+        console.log(chalk.green(`\n✓ Context saved → .uagent/context/${options.saveContext}.md`));
+      }
     } catch (err) {
       spinner.stop();
       const msg = err instanceof Error ? err.message : String(err);
@@ -349,7 +388,16 @@ specCmd.command('new <description>')
       const result = await generateSpec(description, process.cwd());
       spinner.succeed(`Spec saved to ${result.path}`);
       console.log('\n' + result.content);
-      if (result.tasks.length > 0) {
+      if (result.phases.length > 0) {
+        console.log(chalk.yellow('\n📋 Execution Plan (Phases):'));
+        for (const p of result.phases) {
+          const deps = p.dependsOn.length > 0 ? chalk.gray(` (depends: Phase ${p.dependsOn.join(', ')})`) : '';
+          const mode = p.parallel ? chalk.cyan('[parallel]') : chalk.gray('[sequential]');
+          console.log(`  ${chalk.bold(`Phase ${p.phase}`)} ${mode} ${chalk.white(p.label)}${deps}`);
+          p.tasks.forEach((t, i) => console.log(`    ${chalk.gray(String(i + 1) + '.')} ${t}`));
+        }
+        console.log();
+      } else if (result.tasks.length > 0) {
         console.log(chalk.yellow('\n📋 Extracted tasks:'));
         result.tasks.forEach((t, i) => console.log(`  ${chalk.gray(String(i + 1) + '.')} ${t}`));
       }
@@ -733,7 +781,16 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
         const result = await generateSpec(desc, process.cwd());
         spinnerS.succeed(`Spec saved → ${result.path}`);
         console.log('\n' + result.content);
-        if (result.tasks.length > 0) {
+        if (result.phases.length > 0) {
+          console.log(chalk.yellow('\n📋 Execution Plan (Phases):'));
+          for (const p of result.phases) {
+            const deps = p.dependsOn.length > 0 ? chalk.gray(` (depends: Phase ${p.dependsOn.join(', ')})`) : '';
+            const mode = p.parallel ? chalk.cyan('[parallel]') : chalk.gray('[sequential]');
+            console.log(`  ${chalk.bold(`Phase ${p.phase}`)} ${mode} ${chalk.white(p.label)}${deps}`);
+            p.tasks.forEach((t, i) => console.log(`    ${chalk.gray(String(i + 1) + '.')} ${t}`));
+          }
+          console.log();
+        } else if (result.tasks.length > 0) {
           console.log(chalk.yellow('\n📋 Tasks extracted:'));
           result.tasks.forEach((t, i) => console.log(`  ${chalk.gray(String(i + 1) + '.')} ${t}`));
           console.log();

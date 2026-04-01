@@ -21,6 +21,21 @@ import { loadProjectContext, loadRules } from '../context-loader.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+export interface SpecPhase {
+  /** Phase number (1-based) */
+  phase: number;
+  /** Label, e.g. "Basic Scan" */
+  label: string;
+  /** Whether tasks within this phase can run in parallel */
+  parallel: boolean;
+  /** Phase IDs this phase depends on (must complete before this one starts) */
+  dependsOn: number[];
+  /** Tasks in this phase */
+  tasks: string[];
+  /** Optional task_ids for SpawnAgent context chaining */
+  taskIds?: string[];
+}
+
 export interface SpecResult {
   /** Absolute path where the spec was saved */
   path: string;
@@ -30,6 +45,8 @@ export interface SpecResult {
   tasks: string[];
   /** Affected files mentioned in the spec */
   affectedFiles: string[];
+  /** Structured phase plan (for multi-agent orchestration) */
+  phases: SpecPhase[];
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -58,6 +75,59 @@ function parseTasksFromSpec(content: string): string[] {
     }
   }
   return tasks;
+}
+
+/**
+ * Parse Phase structure from a spec that uses the Phase format.
+ * Recognizes patterns like:
+ *   ### Phase 1: Basic Scan (parallel)
+ *   ### Phase 2: Deep Analysis (parallel, depends: Phase 1)
+ */
+function parsePhasesFromSpec(content: string): SpecPhase[] {
+  const phases: SpecPhase[] = [];
+  // Match Phase sections: ### Phase N: Label (parallel) or (sequential, depends: Phase M)
+  const phasePattern = /###\s+Phase\s+(\d+)[:\s]+([^\n(]+)(?:\(([^)]*)\))?/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = phasePattern.exec(content)) !== null) {
+    const phaseNum = parseInt(match[1], 10);
+    const label = match[2].trim();
+    const meta = (match[3] || '').toLowerCase();
+
+    const isParallel = meta.includes('parallel');
+    const dependsOn: number[] = [];
+    const depMatch = meta.match(/depends?[\s:]+phase\s+(\d+(?:[,\s]+\d+)*)/i);
+    if (depMatch) {
+      depMatch[1].split(/[,\s]+/).forEach((n) => {
+        const d = parseInt(n, 10);
+        if (!isNaN(d)) dependsOn.push(d);
+      });
+    }
+
+    // Find tasks within this phase block (up to the next ### Phase or ## section)
+    const phaseStart = match.index + match[0].length;
+    const nextPhaseMatch = /###\s+Phase\s+\d+|^##\s+/gim;
+    nextPhaseMatch.lastIndex = phaseStart;
+    const nextMatch = nextPhaseMatch.exec(content);
+    const phaseBlock = content.slice(phaseStart, nextMatch ? nextMatch.index : undefined);
+
+    const tasks: string[] = [];
+    const taskIds: string[] = [];
+    for (const line of phaseBlock.split('\n')) {
+      const taskMatch = line.match(/^\s*(?:-\s*\[[ x]\]|-|\d+\.)\s*(.+)/);
+      if (taskMatch) {
+        const taskText = taskMatch[1].trim();
+        tasks.push(taskText);
+        // Extract optional task_id hint from annotations like <!-- id: my-task -->
+        const idHint = line.match(/<!--\s*id:\s*([a-z0-9_-]+)\s*-->/i);
+        taskIds.push(idHint ? idHint[1] : `phase${phaseNum}-task${tasks.length}`);
+      }
+    }
+
+    phases.push({ phase: phaseNum, label, parallel: isParallel, dependsOn, tasks, taskIds });
+  }
+
+  return phases;
 }
 
 function parseAffectedFiles(content: string): string[] {
@@ -109,11 +179,25 @@ List every file that will be created or modified:
 - \`path/to/file.ts\` — what changes
 (use backtick paths so they can be parsed)
 
-## Tasks
-Numbered implementation steps (atomic, each completable by AI in one pass):
-1. <concrete task — be specific about file/function/method>
-2. <concrete task>
-(5-10 tasks total)
+## Implementation Plan
+Break the work into phases. Use this exact format so the phases can be parsed for parallel execution:
+
+### Phase 1: <label> (parallel)
+Independent tasks that can all run in parallel:
+1. <specific task>
+2. <specific task>
+
+### Phase 2: <label> (parallel, depends: Phase 1)
+Independent tasks, but must wait for Phase 1 to complete:
+1. <specific task> <!-- id: phase2-task1 -->
+2. <specific task>
+
+### Phase 3: <label> (sequential, depends: Phase 1, Phase 2)
+Tasks that depend on both previous phases:
+1. <synthesis task>
+
+Use (parallel) or (sequential) and depends: Phase N to express the dependency graph.
+Aim for 2-4 phases with 2-5 tasks each.
 
 ## Risks & Mitigations
 - Risk: <potential issue>
@@ -162,6 +246,7 @@ export async function generateSpec(
   const content = response.content.trim();
   const tasks = parseTasksFromSpec(content);
   const affectedFiles = parseAffectedFiles(content);
+  const phases = parsePhasesFromSpec(content);
 
   // Save to .uagent/specs/YYYY-MM-DD-<slug>.md
   const slug = slugify(description);
@@ -169,7 +254,7 @@ export async function generateSpec(
   const filePath = join(specsDir, fileName);
   writeFileSync(filePath, content, { encoding: 'utf8', mode: 0o644 });
 
-  return { path: filePath, content, tasks, affectedFiles };
+  return { path: filePath, content, tasks, affectedFiles, phases };
 }
 
 /**

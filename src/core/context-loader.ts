@@ -141,6 +141,14 @@ You MUST follow these rules at all times:
 
 5. **Schema adherence** — Always pass tool arguments using the exact parameter names
    from the tool's schema. Do not infer or rename fields.
+
+6. **Parallel execution (Multi-Agent awareness)** — For complex tasks with independent subtasks:
+   - Identify subtasks that have NO mutual dependencies and can run concurrently
+   - Use the \`Task\` tool with \`parallel_tasks\` for fan-out execution across multiple subagents
+   - Use \`SpawnAgent\` tool to delegate isolated subtasks to a fresh agent context
+   - Phases with dependencies must run sequentially; phases without dependencies SHOULD run in parallel
+   - After spawning subtasks, collect their outputs and synthesize a final result
+   - Example: "Analyze project structure" AND "Audit dependencies" → run in parallel, not serial
 ---`;
 
 export function buildSystemPromptWithContext(basePrompt: string, startDir?: string): string {
