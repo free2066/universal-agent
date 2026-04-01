@@ -273,6 +273,87 @@ program
     }
   });
 
+// ── spec ─────────────────────────────────────────────────
+const specCmd = program.command('spec').description('Generate a technical specification from a requirement description (PRD → Spec)');
+
+specCmd.command('new <description>')
+  .description('Generate a new technical spec from a requirement description')
+  .action(async (description) => {
+    const spinner = ora('Generating technical spec...').start();
+    try {
+      const { generateSpec } = await import('../core/tools/spec-generator.js');
+      const result = await generateSpec(description, process.cwd());
+      spinner.succeed(`Spec saved to ${result.path}`);
+      console.log('\n' + result.content);
+      if (result.tasks.length > 0) {
+        console.log(chalk.yellow('\n📋 Extracted tasks:'));
+        result.tasks.forEach((t, i) => console.log(`  ${chalk.gray(String(i + 1) + '.')} ${t}`));
+      }
+    } catch (err) {
+      spinner.fail('Spec generation failed: ' + (err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+
+specCmd.command('list')
+  .description('List all specs for the current project')
+  .action(async () => {
+    const { listSpecs } = await import('../core/tools/spec-generator.js');
+    const specs = listSpecs(process.cwd());
+    if (!specs.length) {
+      console.log(chalk.gray('\n  No specs found. Run: uagent spec new "<description>"\n'));
+      return;
+    }
+    console.log(chalk.yellow('\n📄 Technical Specs:\n'));
+    specs.forEach((s, i) => {
+      console.log(`  ${chalk.gray(String(i + 1) + '.')} ${chalk.cyan(s.date)}  ${chalk.white(s.name)}`);
+    });
+    console.log();
+  });
+
+specCmd.command('show [index]')
+  .description('Show a spec (default: most recent)')
+  .action(async (index) => {
+    const { readSpec } = await import('../core/tools/spec-generator.js');
+    const n = index !== undefined ? parseInt(index, 10) : 0;
+    const content = readSpec(isNaN(n) ? index : n, process.cwd());
+    if (!content) {
+      console.log(chalk.red('Spec not found'));
+      return;
+    }
+    console.log('\n' + content);
+  });
+
+// ── review ────────────────────────────────────────────────
+program
+  .command('review [path]')
+  .description('AI Code Review: P1/P2/P3 graded issues on git diff or specified path')
+  .option('--skip-static', 'Skip static analysis, only AI review')
+  .option('--skip-ai', 'Skip AI review, only static analysis')
+  .option('--diff <base>', 'Diff against a specific git ref (default: HEAD)')
+  .action(async (reviewPath, options) => {
+    const spinner = ora('Running code review...').start();
+    try {
+      const { reviewCode, getGitDiff } = await import('../core/tools/ai-reviewer.js');
+      const diff = options.diff ? (getGitDiff(process.cwd(), options.diff) ?? undefined) : undefined;
+      const files = reviewPath ? [reviewPath] : undefined;
+      const report = await reviewCode({
+        diff,
+        files,
+        projectRoot: process.cwd(),
+        skipStatic: options.skipStatic,
+        skipAI: options.skipAi,
+      });
+      spinner.stop();
+      console.log('\n' + report.markdown);
+      console.log(chalk.gray(`Summary: P1=${report.summary.P1}  P2=${report.summary.P2}  P3=${report.summary.P3}\n`));
+      if (report.hasBlockers) process.exit(1);
+    } catch (err) {
+      spinner.fail('Review failed: ' + (err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+
 // ── memory ───────────────────────────────────────────────
 const memCmd = program.command('memory').description('Manage long-term memory for this project');
 
@@ -563,6 +644,57 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       } else {
         console.log(chalk.gray('Unknown /memory subcommand. Try: /memory  /memory pin <text>  /memory list  /memory forget  /memory ingest'));
       }
+      rl.prompt(); return;
+    }
+    // /spec — generate technical spec from requirement (kstack article #15332)
+    if (input.startsWith('/spec')) {
+      const desc = input.replace('/spec', '').trim();
+      if (!desc) {
+        const { listSpecs } = await import('../core/tools/spec-generator.js');
+        const specs = listSpecs(process.cwd());
+        if (!specs.length) {
+          console.log(chalk.gray('\n  No specs yet. Usage: /spec <requirement description>\n'));
+        } else {
+          console.log(chalk.yellow('\n📄 Specs:\n'));
+          specs.forEach((s, i) => console.log(`  ${chalk.gray(String(i + 1) + '.')} ${chalk.cyan(s.date)}  ${s.name}`));
+          console.log();
+        }
+        rl.prompt(); return;
+      }
+      rl.pause();
+      process.stdout.write('\n');
+      const spinnerS = ora('Generating technical spec...').start();
+      try {
+        const { generateSpec } = await import('../core/tools/spec-generator.js');
+        const result = await generateSpec(desc, process.cwd());
+        spinnerS.succeed(`Spec saved → ${result.path}`);
+        console.log('\n' + result.content);
+        if (result.tasks.length > 0) {
+          console.log(chalk.yellow('\n📋 Tasks extracted:'));
+          result.tasks.forEach((t, i) => console.log(`  ${chalk.gray(String(i + 1) + '.')} ${t}`));
+          console.log();
+        }
+      } catch (eS) {
+        spinnerS.fail('Spec failed: ' + (eS instanceof Error ? eS.message : String(eS)));
+      }
+      rl.resume();
+      rl.prompt(); return;
+    }
+    // /review — AI code review P1/P2/P3 (kstack article #15332)
+    if (input.startsWith('/review')) {
+      rl.pause();
+      process.stdout.write('\n');
+      const spinnerR = ora('Running AI Code Review...').start();
+      try {
+        const { reviewCode } = await import('../core/tools/ai-reviewer.js');
+        const report = await reviewCode({ projectRoot: process.cwd() });
+        spinnerR.stop();
+        console.log('\n' + report.markdown);
+        console.log(chalk.gray(`  P1=${report.summary.P1}  P2=${report.summary.P2}  P3=${report.summary.P3}\n`));
+      } catch (eR) {
+        spinnerR.fail('Review failed: ' + (eR instanceof Error ? eR.message : String(eR)));
+      }
+      rl.resume();
       rl.prompt(); return;
     }
     // /rules — list loaded rule files (kstack article #15310 SSOT pattern)

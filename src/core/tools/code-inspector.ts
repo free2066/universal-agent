@@ -424,6 +424,59 @@ function scoreEmoji(score: number): string {
   return '🔴 Poor';
 }
 
+// ─── Programmatic API ────────────────────────────────────
+
+export interface InspectOptions {
+  severityFilter?: Severity;
+  categoryFilter?: Category | 'all';
+}
+
+/**
+ * Programmatic inspection API for use by ai-reviewer and other tools.
+ * Returns structured InspectionResult without any formatting.
+ */
+export async function inspectProject(
+  targetPath: string,
+  options: InspectOptions = {},
+): Promise<InspectionResult> {
+  const minSeverity = options.severityFilter ?? 'warning';
+  const filterCategory = options.categoryFilter ?? 'all';
+
+  if (!existsSync(targetPath)) {
+    return { scanned: 0, findings: [], summary: { critical: 0, error: 0, warning: 0, info: 0 }, score: 100 };
+  }
+
+  let st: ReturnType<typeof statSync>;
+  try { st = statSync(targetPath); } catch {
+    return { scanned: 0, findings: [], summary: { critical: 0, error: 0, warning: 0, info: 0 }, score: 100 };
+  }
+
+  const files = st.isFile()
+    ? [targetPath]
+    : collectFiles(targetPath, ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+  const rootDir = st.isFile() ? resolve(targetPath, '..') : targetPath;
+
+  const severityOrder: Severity[] = ['info', 'warning', 'error', 'critical'];
+  const minIdx = severityOrder.indexOf(minSeverity);
+
+  let allFindings: Finding[] = [];
+  for (const file of files) allFindings.push(...scanFile(file, rootDir));
+  allFindings = allFindings.filter((f) => {
+    const sevOk = severityOrder.indexOf(f.severity) >= minIdx;
+    const catOk = filterCategory === 'all' || f.category === filterCategory;
+    return sevOk && catOk;
+  });
+  allFindings.sort((a, b) => {
+    const diff = severityOrder.indexOf(b.severity) - severityOrder.indexOf(a.severity);
+    return diff !== 0 ? diff : a.file.localeCompare(b.file);
+  });
+
+  const summary: Record<Severity, number> = { critical: 0, error: 0, warning: 0, info: 0 };
+  for (const f of allFindings) summary[f.severity]++;
+
+  return { scanned: files.length, findings: allFindings, summary, score: computeScore(allFindings, files.length) };
+}
+
 // ─── Tool Registration ────────────────────────────────────
 
 export const codeInspectorTool: ToolRegistration = {
