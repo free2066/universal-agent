@@ -54,40 +54,66 @@ export class ModelManager {
 
   private loadDefaults() {
     const defaults: ModelProfile[] = [
-      // ── OpenAI ───────────────────────────────────────
-      { name: 'gpt-4o',              provider: 'openai',   modelName: 'gpt-4o',                      maxTokens: 8192,  contextLength: 128000,  costPer1kInput: 0.0025,  costPer1kOutput: 0.01,     isActive: true },
-      { name: 'gpt-4o-mini',         provider: 'openai',   modelName: 'gpt-4o-mini',                 maxTokens: 4096,  contextLength: 128000,  costPer1kInput: 0.00015, costPer1kOutput: 0.0006,   isActive: true },
-      { name: 'o1',                  provider: 'openai',   modelName: 'o1',                          maxTokens: 32768, contextLength: 200000,  costPer1kInput: 0.015,   costPer1kOutput: 0.06,     isActive: true },
-      { name: 'o3-mini',             provider: 'openai',   modelName: 'o3-mini',                     maxTokens: 65536, contextLength: 200000,  costPer1kInput: 0.0011,  costPer1kOutput: 0.0044,   isActive: true },
-      // ── Anthropic ────────────────────────────────────
-      { name: 'claude-3-5-sonnet',   provider: 'anthropic', modelName: 'claude-3-5-sonnet-20241022', maxTokens: 8192,  contextLength: 200000,  costPer1kInput: 0.003,   costPer1kOutput: 0.015,    isActive: true },
-      { name: 'claude-3-5-haiku',    provider: 'anthropic', modelName: 'claude-3-5-haiku-20241022',  maxTokens: 8192,  contextLength: 200000,  costPer1kInput: 0.0008,  costPer1kOutput: 0.004,    isActive: true },
-      { name: 'claude-3-opus',       provider: 'anthropic', modelName: 'claude-3-opus-20240229',     maxTokens: 4096,  contextLength: 200000,  costPer1kInput: 0.015,   costPer1kOutput: 0.075,    isActive: true },
-      { name: 'claude-3-haiku',      provider: 'anthropic', modelName: 'claude-3-haiku-20240307',    maxTokens: 4096,  contextLength: 200000,  costPer1kInput: 0.00025, costPer1kOutput: 0.00125,  isActive: true },
-      // ── Google Gemini ─────────────────────────────────
-      { name: 'gemini-2.0-flash',    provider: 'gemini',   modelName: 'gemini-2.0-flash',            maxTokens: 8192,  contextLength: 1048576, costPer1kInput: 0.00015, costPer1kOutput: 0.0006,   isActive: true },
-      { name: 'gemini-1.5-pro',      provider: 'gemini',   modelName: 'gemini-1.5-pro',              maxTokens: 8192,  contextLength: 2097152, costPer1kInput: 0.00125, costPer1kOutput: 0.005,    isActive: true },
-      { name: 'gemini-1.5-flash',    provider: 'gemini',   modelName: 'gemini-1.5-flash',            maxTokens: 8192,  contextLength: 1048576, costPer1kInput: 0.000075,costPer1kOutput: 0.0003,   isActive: true },
-      // ── DeepSeek ─────────────────────────────────────
-      { name: 'deepseek-chat',       provider: 'deepseek', modelName: 'deepseek-chat',               maxTokens: 8192,  contextLength: 64000,   costPer1kInput: 0.00014, costPer1kOutput: 0.00028,  isActive: true },
-      { name: 'deepseek-reasoner',   provider: 'deepseek', modelName: 'deepseek-reasoner',           maxTokens: 32768, contextLength: 64000,   costPer1kInput: 0.00055, costPer1kOutput: 0.00219,  isActive: true },
-      // ── Moonshot / Kimi ───────────────────────────────
-      { name: 'moonshot-v1-8k',      provider: 'moonshot', modelName: 'moonshot-v1-8k',              maxTokens: 4096,  contextLength: 8192,    costPer1kInput: 0.00012, costPer1kOutput: 0.00012,  isActive: true },
-      { name: 'moonshot-v1-32k',     provider: 'moonshot', modelName: 'moonshot-v1-32k',             maxTokens: 8192,  contextLength: 32768,   costPer1kInput: 0.00024, costPer1kOutput: 0.00024,  isActive: true },
-      { name: 'moonshot-v1-128k',    provider: 'moonshot', modelName: 'moonshot-v1-128k',            maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0.0006,  costPer1kOutput: 0.0006,   isActive: true },
-      // ── Alibaba Qwen / Tongyi ─────────────────────────
-      { name: 'qwen-max',            provider: 'qwen',     modelName: 'qwen-max',                    maxTokens: 8192,  contextLength: 32768,   costPer1kInput: 0.0016,  costPer1kOutput: 0.0016,   isActive: true },
-      { name: 'qwen-plus',           provider: 'qwen',     modelName: 'qwen-plus',                   maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0.0004,  costPer1kOutput: 0.0004,   isActive: true },
-      { name: 'qwen-turbo',          provider: 'qwen',     modelName: 'qwen-turbo',                  maxTokens: 8192,  contextLength: 1000000, costPer1kInput: 0.00006, costPer1kOutput: 0.00006,  isActive: true },
-      { name: 'qwq-32b',             provider: 'qwen',     modelName: 'qwq-32b',                     maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0.0006,  costPer1kOutput: 0.0018,   isActive: true },
-      // ── Mistral ───────────────────────────────────────
-      { name: 'mistral-large',       provider: 'mistral',  modelName: 'mistral-large-latest',        maxTokens: 8192,  contextLength: 128000,  costPer1kInput: 0.002,   costPer1kOutput: 0.006,    isActive: true },
-      { name: 'mistral-small',       provider: 'mistral',  modelName: 'mistral-small-latest',        maxTokens: 8192,  contextLength: 32000,   costPer1kInput: 0.001,   costPer1kOutput: 0.003,    isActive: true },
-      { name: 'mixtral-8x7b',        provider: 'mistral',  modelName: 'open-mixtral-8x7b',           maxTokens: 8192,  contextLength: 32000,   costPer1kInput: 0.0007,  costPer1kOutput: 0.0007,   isActive: true },
-      // ── Ollama (local) ────────────────────────────────
-      { name: 'ollama:llama3',       provider: 'ollama',   modelName: 'llama3',                      maxTokens: 4096,  contextLength: 8192,    costPer1kInput: 0,       costPer1kOutput: 0,        isActive: true },
-      { name: 'ollama:qwen2.5',      provider: 'ollama',   modelName: 'qwen2.5',                     maxTokens: 4096,  contextLength: 32768,   costPer1kInput: 0,       costPer1kOutput: 0,        isActive: true },
-      { name: 'ollama:deepseek-r1',  provider: 'ollama',   modelName: 'deepseek-r1',                 maxTokens: 8192,  contextLength: 32768,   costPer1kInput: 0,       costPer1kOutput: 0,        isActive: true },
+      // ── OpenAI ─────────────────────────────────────────────────────────────────────
+      // Latest flagship: GPT-4.1 series (April 2025)
+      { name: 'gpt-4.1',            provider: 'openai',    modelName: 'gpt-4.1',                     maxTokens: 32768, contextLength: 1000000, costPer1kInput: 0.002,   costPer1kOutput: 0.008,    isActive: true },
+      { name: 'gpt-4.1-mini',       provider: 'openai',    modelName: 'gpt-4.1-mini',                maxTokens: 32768, contextLength: 1000000, costPer1kInput: 0.0004,  costPer1kOutput: 0.0016,   isActive: true },
+      { name: 'gpt-4.1-nano',       provider: 'openai',    modelName: 'gpt-4.1-nano',                maxTokens: 32768, contextLength: 1000000, costPer1kInput: 0.0001,  costPer1kOutput: 0.0004,   isActive: true },
+      // o-series reasoning models
+      { name: 'o3',                  provider: 'openai',    modelName: 'o3',                          maxTokens: 100000,contextLength: 200000,  costPer1kInput: 0.01,    costPer1kOutput: 0.04,     isActive: true },
+      { name: 'o4-mini',             provider: 'openai',    modelName: 'o4-mini',                     maxTokens: 65536, contextLength: 200000,  costPer1kInput: 0.0011,  costPer1kOutput: 0.0044,   isActive: true },
+      // Legacy (keep for compatibility)
+      { name: 'gpt-4o',              provider: 'openai',    modelName: 'gpt-4o',                      maxTokens: 8192,  contextLength: 128000,  costPer1kInput: 0.0025,  costPer1kOutput: 0.01,     isActive: true },
+      { name: 'gpt-4o-mini',         provider: 'openai',    modelName: 'gpt-4o-mini',                 maxTokens: 4096,  contextLength: 128000,  costPer1kInput: 0.00015, costPer1kOutput: 0.0006,   isActive: true },
+
+      // ── Anthropic ──────────────────────────────────────────────────────────────────
+      // Claude 4 series (May 2025)
+      { name: 'claude-opus-4',       provider: 'anthropic', modelName: 'claude-opus-4-5',             maxTokens: 32768, contextLength: 200000,  costPer1kInput: 0.015,   costPer1kOutput: 0.075,    isActive: true },
+      { name: 'claude-sonnet-4',     provider: 'anthropic', modelName: 'claude-sonnet-4-5',           maxTokens: 16384, contextLength: 200000,  costPer1kInput: 0.003,   costPer1kOutput: 0.015,    isActive: true },
+      // Claude 3.5 series (legacy)
+      { name: 'claude-3-5-sonnet',   provider: 'anthropic', modelName: 'claude-3-5-sonnet-20241022',  maxTokens: 8192,  contextLength: 200000,  costPer1kInput: 0.003,   costPer1kOutput: 0.015,    isActive: true },
+      { name: 'claude-3-5-haiku',    provider: 'anthropic', modelName: 'claude-3-5-haiku-20241022',   maxTokens: 8192,  contextLength: 200000,  costPer1kInput: 0.0008,  costPer1kOutput: 0.004,    isActive: true },
+
+      // ── Google Gemini ──────────────────────────────────────────────────────────────
+      // Gemini 2.5 series (latest, 2025)
+      { name: 'gemini-2.5-pro',      provider: 'gemini',    modelName: 'gemini-2.5-pro',              maxTokens: 65536, contextLength: 1048576, costPer1kInput: 0.00125, costPer1kOutput: 0.01,     isActive: true },
+      { name: 'gemini-2.5-flash',    provider: 'gemini',    modelName: 'gemini-2.5-flash',            maxTokens: 65536, contextLength: 1048576, costPer1kInput: 0.00015, costPer1kOutput: 0.0006,   isActive: true },
+      { name: 'gemini-2.5-flash-lite', provider: 'gemini',  modelName: 'gemini-2.5-flash-lite',       maxTokens: 32768, contextLength: 1048576, costPer1kInput: 0.000075,costPer1kOutput: 0.0003,   isActive: true },
+      // Legacy
+      { name: 'gemini-2.0-flash',    provider: 'gemini',    modelName: 'gemini-2.0-flash',            maxTokens: 8192,  contextLength: 1048576, costPer1kInput: 0.00015, costPer1kOutput: 0.0006,   isActive: true },
+
+      // ── DeepSeek ───────────────────────────────────────────────────────────────────
+      // V3.2 is the latest (Dec 2025); API IDs remain deepseek-chat / deepseek-reasoner
+      { name: 'deepseek-chat',       provider: 'deepseek',  modelName: 'deepseek-chat',               maxTokens: 8192,  contextLength: 128000,  costPer1kInput: 0.00027, costPer1kOutput: 0.0011,   isActive: true },
+      { name: 'deepseek-reasoner',   provider: 'deepseek',  modelName: 'deepseek-reasoner',           maxTokens: 32768, contextLength: 128000,  costPer1kInput: 0.00055, costPer1kOutput: 0.00219,  isActive: true },
+
+      // ── Moonshot / Kimi ────────────────────────────────────────────────────────────
+      // Kimi K2 (July 2025) — latest flagship MoE model
+      { name: 'kimi-k2',             provider: 'moonshot',  modelName: 'kimi-k2',                     maxTokens: 16384, contextLength: 131072,  costPer1kInput: 0.0006,  costPer1kOutput: 0.0025,   isActive: true },
+      { name: 'moonshot-v1-128k',    provider: 'moonshot',  modelName: 'moonshot-v1-128k',            maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0.0006,  costPer1kOutput: 0.0006,   isActive: true },
+      { name: 'moonshot-v1-32k',     provider: 'moonshot',  modelName: 'moonshot-v1-32k',             maxTokens: 8192,  contextLength: 32768,   costPer1kInput: 0.00024, costPer1kOutput: 0.00024,  isActive: true },
+
+      // ── Alibaba Qwen3 / Tongyi ─────────────────────────────────────────────────────
+      // Qwen3 series (April 2025)
+      { name: 'qwen3-235b',          provider: 'qwen',      modelName: 'qwen3-235b-a22b',             maxTokens: 16384, contextLength: 131072,  costPer1kInput: 0.0004,  costPer1kOutput: 0.0016,   isActive: true },
+      { name: 'qwen3-72b',           provider: 'qwen',      modelName: 'qwen3-72b',                   maxTokens: 16384, contextLength: 131072,  costPer1kInput: 0.0002,  costPer1kOutput: 0.0006,   isActive: true },
+      { name: 'qwen3-30b',           provider: 'qwen',      modelName: 'qwen3-30b-a3b',               maxTokens: 16384, contextLength: 131072,  costPer1kInput: 0.00012, costPer1kOutput: 0.0005,   isActive: true },
+      { name: 'qwen3-8b',            provider: 'qwen',      modelName: 'qwen3-8b',                    maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0.00004, costPer1kOutput: 0.00016,  isActive: true },
+      // qwen-max / qwq (kept as aliases)
+      { name: 'qwen-max',            provider: 'qwen',      modelName: 'qwen-max',                    maxTokens: 8192,  contextLength: 32768,   costPer1kInput: 0.0016,  costPer1kOutput: 0.0016,   isActive: true },
+      { name: 'qwq-32b',             provider: 'qwen',      modelName: 'qwq-32b',                     maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0.0006,  costPer1kOutput: 0.0018,   isActive: true },
+
+      // ── Mistral ────────────────────────────────────────────────────────────────────
+      // Medium 3.1 (Aug 2025) and Large are the current flagships
+      { name: 'mistral-medium-3',    provider: 'mistral',   modelName: 'mistral-medium-2508',         maxTokens: 16384, contextLength: 128000,  costPer1kInput: 0.0004,  costPer1kOutput: 0.002,    isActive: true },
+      { name: 'mistral-large',       provider: 'mistral',   modelName: 'mistral-large-latest',        maxTokens: 8192,  contextLength: 128000,  costPer1kInput: 0.002,   costPer1kOutput: 0.006,    isActive: true },
+      { name: 'mistral-small',       provider: 'mistral',   modelName: 'mistral-small-latest',        maxTokens: 8192,  contextLength: 32000,   costPer1kInput: 0.0002,  costPer1kOutput: 0.0006,   isActive: true },
+
+      // ── Ollama (local) ─────────────────────────────────────────────────────────────
+      { name: 'ollama:llama3.3',     provider: 'ollama',    modelName: 'llama3.3',                    maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0,       costPer1kOutput: 0,        isActive: true },
+      { name: 'ollama:qwen3',        provider: 'ollama',    modelName: 'qwen3',                       maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0,       costPer1kOutput: 0,        isActive: true },
+      { name: 'ollama:deepseek-r1',  provider: 'ollama',    modelName: 'deepseek-r1',                 maxTokens: 8192,  contextLength: 32768,   costPer1kInput: 0,       costPer1kOutput: 0,        isActive: true },
+      { name: 'ollama:gemma3',       provider: 'ollama',    modelName: 'gemma3',                      maxTokens: 8192,  contextLength: 131072,  costPer1kInput: 0,       costPer1kOutput: 0,        isActive: true },
     ];
     for (const p of defaults) this.profiles.set(p.name, p);
   }
@@ -121,7 +147,7 @@ export class ModelManager {
         case 'ollama':   return `ollama:${profile.modelName}`;
         case 'gemini':   return profile.modelName; // starts with 'gemini'
         case 'deepseek': return profile.modelName; // starts with 'deepseek'
-        case 'moonshot': return profile.modelName; // starts with 'moonshot'
+        case 'moonshot': return profile.modelName.startsWith('kimi') ? profile.modelName : profile.modelName;
         case 'qwen':     return profile.modelName; // starts with 'qwen'
         case 'mistral':  return profile.modelName; // starts with 'mistral'/'mixtral'
         case 'custom':   return `openai-compat:${profile.modelName}`;
@@ -141,8 +167,8 @@ export class ModelManager {
       const provider = modelName.startsWith('claude') ? 'anthropic'
         : modelName.startsWith('gemini') ? 'gemini'
         : modelName.startsWith('deepseek') ? 'deepseek'
-        : modelName.startsWith('moonshot') || modelName.startsWith('kimi') ? 'moonshot'
-        : modelName.startsWith('qwen') || modelName.startsWith('tongyi') ? 'qwen'
+        : modelName.startsWith('moonshot') || modelName.startsWith('kimi') || modelName.startsWith('kimi-k') ? 'moonshot'
+        : modelName.startsWith('qwen') || modelName.startsWith('qwq') || modelName.startsWith('tongyi') ? 'qwen'
         : modelName.startsWith('mistral') || modelName.startsWith('mixtral') ? 'mistral'
         : modelName.startsWith('ollama:') ? 'ollama'
         : 'openai';
