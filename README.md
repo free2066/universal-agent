@@ -26,11 +26,20 @@ A **universal multi-domain AI Agent CLI** — not just for programming, but for 
 ### 🌟 Advanced Features
 
 - **🔌 MCP Support** — Connect any Model Context Protocol server (filesystem, GitHub, databases, etc.)
-- **👥 Subagent System** — Delegate tasks to specialized sub-agents via `@run-agent-<name>` mentions
+- **👥 Subagent System** — Delegate tasks to specialized sub-agents via `@run-agent-<name>` mentions; supports **parallel fan-out** with `parallel_tasks[]` for concurrent execution
+- **🧹 Zombie Agent Detection** — `/agents clean [days]` lists stale subagents that haven't been used in N days; usage stats tracked in `~/.uagent/agent-usage.json`
 - **🗜️ Auto-Compact** — Automatically compresses conversation history when approaching context limits (75% threshold)
-- **📜 Session History** — Persists prompts to `~/.uagent/history.jsonl`, scoped per-project
+- **✂️ Context Editing** — Selectively clears old tool-result messages to free context before compaction kicks in
+- **🔁 Tool Retry** — Automatic exponential-backoff retry on transient tool failures (configurable)
+- **🛡️ Model Fallback** — Automatically fails over to backup models on LLM errors (`AGENT_FALLBACK_MODELS=model1,model2`)
+- **🔭 Tool Selector** — Filters relevant tools per query when many are registered, preventing LLM confusion
+- **🔓 Conditional Tool Loading** — Tools can be unlocked dynamically based on execution results (no scope creep)
+- **⚠️ Harness Constraints** — Hard behavioral rules injected into every system prompt: CLI-first execution, no fallback scripting, schema adherence enforced
+- **📐 Schema Validation** — Tool inputs validated against `ToolDefinition.parameters` before execution; violations surface as clear errors
 - **🔍 Code Inspection** — Static analysis for bugs, security issues, and performance problems
 - **🩺 Self-Healing** — Automatically detect and fix code issues, verify build, commit fixes
+- **🌐 Web Tools** — `WebFetch` (fetch and extract any URL) + `WebSearch` (DuckDuckGo, no API key required), both with MMR re-ranking
+- **📜 Session History** — Persists prompts to `~/.uagent/history.jsonl`, scoped per-project
 - **📝 Project Context** — Reads `AGENTS.md` / `CLAUDE.md` for project-specific instructions
 - **🌿 Git Status** — Injects current `git status` snapshot into system prompt at session start
 - **💰 Cost Tracking** — Real-time token usage and API cost monitoring per model
@@ -50,6 +59,14 @@ npm run dev -- config
 
 # Start interactive chat
 npm run dev -- chat
+```
+
+### Install globally
+
+```bash
+npm install -g universal-agent
+uagent config    # set API keys
+uagent chat      # start chatting
 ```
 
 ## 📖 Usage
@@ -78,16 +95,17 @@ uagent run "Review this Python function for bugs" --domain dev
 ### CLI Subcommands
 
 ```bash
-uagent inspect [path]    # Static code inspection
-uagent purify [path]     # Auto-fix code issues (self-healing)
-uagent init              # Initialize AGENTS.md for this project
-uagent config            # Configure API keys and settings
-uagent domains           # List available domains
-uagent agents            # List available subagents
-uagent models list       # List configured model profiles
-uagent models set main gpt-4.1   # Set active model pointer
-uagent mcp list          # List MCP servers
-uagent mcp init          # Initialize .mcp.json
+uagent inspect [path]           # Static code inspection
+uagent purify [path]            # Auto-fix code issues (self-healing)
+uagent init                     # Initialize AGENTS.md for this project
+uagent config                   # Configure API keys and settings
+uagent domains                  # List available domains
+uagent agents                   # List available subagents
+uagent models list              # List configured model profiles
+uagent models set main gpt-4.1  # Set active model pointer
+uagent models export            # Export model config as YAML
+uagent mcp list                 # List MCP servers
+uagent mcp init                 # Initialize .mcp.json
 ```
 
 ### In-session Commands
@@ -103,6 +121,7 @@ uagent mcp init          # Initialize .mcp.json
 | `/inspect [path]` | Static code inspection |
 | `/purify [--dry-run] [--commit]` | Auto-fix code issues |
 | `/agents` | List available subagents |
+| `/agents clean [days]` | Show zombie/stale subagents (default: 30 days) |
 | `/models` | List model profiles |
 | `/clear` | Clear conversation history |
 | `/help` | Show help |
@@ -125,6 +144,7 @@ uagent mcp init          # Initialize .mcp.json
 [dev] ❯ What's the git history of my project?
 [dev] ❯ Run this Python snippet: print([x**2 for x in range(10)])
 [dev] ❯ Write unit tests for my authentication module
+[dev] ❯ Fetch and summarize https://example.com/api-docs
 ```
 
 ### Service Domain
@@ -137,7 +157,17 @@ uagent mcp init          # Initialize .mcp.json
 
 ### Subagent Delegation
 ```
-[auto] ❯ @run-agent-code-reviewer please review src/api.ts
+# Single agent
+[auto] ❯ @run-agent-reviewer please review src/api.ts
+
+# Parallel fan-out (concurrent execution)
+[auto] ❯ Review auth module for both code quality and security
+  → Task({ parallel_tasks: [
+      { subagent_type: "reviewer", task: "Review auth module" },
+      { subagent_type: "security-auditor", task: "Audit auth module" }
+    ]})
+
+# Ask a specific model
 [auto] ❯ @ask-claude-opus-4-5 what's the best approach for this architecture?
 ```
 
@@ -152,12 +182,31 @@ Or create `~/.uagent/.env`:
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=AIza...
+GEMINI_API_KEY=AIza...          # or GOOGLE_API_KEY
 MISTRAL_API_KEY=...
+DEEPSEEK_API_KEY=...
+MOONSHOT_API_KEY=...
+DASHSCOPE_API_KEY=...           # for Qwen
 OPENAI_BASE_URL=https://api.openai.com/v1   # optional, for proxy
 OLLAMA_BASE_URL=http://localhost:11434       # optional, for local models
 ```
 
 You can also put a `.env` file in your current working directory.
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `AGENT_FALLBACK_MODELS` | Comma-separated fallback models, e.g. `gpt-4o-mini,claude-3-5-haiku` |
+| `AGENT_SCHEMA_VALIDATE` | Set to `0` to disable tool input schema validation |
+| `AGENT_TOOL_SELECT_THRESHOLD` | Tool count threshold before filtering (default: `12`) |
+| `AGENT_TOOL_SELECT_MAX` | Max tools sent to LLM per call (default: `10`) |
+| `AGENT_TOOL_SELECT_ALWAYS` | Comma-separated tools always included (default: `Bash,Write,Edit,Read,LS,Grep`) |
+| `AGENT_TOOL_SELECTION_LLM` | Set to `1` to use LLM for tool selection (slower, more accurate) |
+| `AGENT_LOG_LEVEL` | Log level: `trace/debug/info/warn/error` (default: `info`) |
+| `AGENT_VERBOSE` | Set to `1` for debug output |
+| `AGENT_SAFE_MODE` | Set to `1` to block dangerous shell commands |
+| `AGENT_PROJECT_DOC_MAX_BYTES` | Max bytes for AGENTS.md context (default: 32768) |
 
 ## 🤖 Supported Models
 
@@ -252,6 +301,7 @@ Edit `.mcp.json`:
 ```bash
 # Static inspection
 uagent inspect ./src --severity warning
+uagent inspect ./src --category security --json   # JSON output
 
 # Auto-fix issues
 uagent purify ./src --dry-run         # preview only
@@ -263,7 +313,27 @@ Or in REPL:
 ```
 [dev] ❯ /inspect src/api.ts
 [dev] ❯ /purify --dry-run
+[dev] ❯ /purify --commit
 ```
+
+Inspection rules cover:
+- **Security**: hardcoded secrets, SQL injection risks
+- **Bugs**: unhandled promises, empty catch blocks, non-null assertions
+- **Performance**: sync I/O in async context, array push in loops
+- **Style**: `any` types, TODO/FIXME comments, magic numbers, long functions
+
+## 🌐 Web Tools
+
+Both tools are available in all domains without any configuration:
+
+```
+[auto] ❯ Search for the latest Node.js release notes
+[auto] ❯ Fetch and summarize https://docs.example.com/api
+[auto] ❯ What are the top results for "TypeScript 5.5 features"?
+```
+
+- **WebSearch** uses DuckDuckGo — no API key required, results MMR re-ranked
+- **WebFetch** strips HTML, returns clean readable text; supports `text | links | both` extraction modes
 
 ## 📝 Project Context (AGENTS.md)
 
@@ -273,23 +343,55 @@ Create an `AGENTS.md` (or `CLAUDE.md`) at your project root to give the agent pr
 uagent init   # creates AGENTS.md template
 ```
 
-The agent automatically loads context from `AGENTS.md` at every session start.
+The agent automatically loads context from `AGENTS.md` at every session start. The file is truncated to 32KB by default (configurable via `AGENT_PROJECT_DOC_MAX_BYTES`).
 
-## 🔄 Auto-Compact
+## 🔄 Auto-Compact & Context Editing
 
-When conversation history exceeds 75% of the model's context window, the agent automatically:
-1. Takes the oldest turns
-2. Summarizes them using a fast/cheap model
-3. Replaces them with a dense summary message
+Two layers of context management prevent hitting token limits:
 
-This allows long-running sessions without hitting context limits.
+1. **Context Editing** (lightweight, first): Selectively replaces old tool-result messages with `[cleared]` placeholders when history exceeds 80k tokens. Preserves the 3 most recent tool results intact.
 
-## 📜 Session History
+2. **Auto-Compact** (heavy, second): When history exceeds 75% of the model's context window, summarizes older turns using a fast/cheap model and replaces them with a dense summary message.
 
-All prompts are persisted to `~/.uagent/history.jsonl` (per-project, deduped).
+Together they allow arbitrarily long sessions without hitting context limits.
 
+## 👥 Subagent System
+
+Built-in subagents available out of the box:
+
+| Agent | Description |
+|-------|-------------|
+| `reviewer` | Code review specialist |
+| `architect` | System design and architecture advisor |
+| `test-writer` | Unit and integration test writer |
+| `data-analyst` | Data analysis and visualization expert |
+| `security-auditor` | Security vulnerability analysis |
+| `doc-writer` | Documentation and README writer |
+
+**Add custom agents** by creating `~/.uagent/agents/<name>.md` or `./.uagent/agents/<name>.md` with frontmatter:
+
+```markdown
+---
+name: my-agent
+description: What this agent specializes in
+model: gpt-4o-mini
+---
+You are an expert in ...
 ```
-[auto] ❯ /history 20     # show last 20 prompts
+
+**Parallel fan-out** runs multiple agents concurrently:
+```
+Task({
+  parallel_tasks: [
+    { subagent_type: "reviewer", task: "Review auth module" },
+    { subagent_type: "security-auditor", task: "Audit auth module" }
+  ]
+})
+```
+
+**Zombie detection** finds unused agents:
+```
+[auto] ❯ /agents clean 30    # list agents unused for 30+ days
 ```
 
 ## 🔌 Adding Custom Domains
@@ -321,23 +423,30 @@ universal-agent/
 │   │   ├── ui.ts                 # Banner and help UI
 │   │   └── configure.ts          # API key configuration wizard
 │   ├── core/
-│   │   ├── agent.ts              # Core agent loop (tool calls + LLM)
+│   │   ├── agent.ts              # Core agent loop (tool calls + streaming)
 │   │   ├── context-compressor.ts # Auto-compact long conversations
-│   │   ├── context-loader.ts     # AGENTS.md + git status injection
+│   │   ├── context-editor.ts     # Selective tool-result clearing
+│   │   ├── context-loader.ts     # AGENTS.md + Harness constraints injection
 │   │   ├── domain-router.ts      # Domain detection and routing
+│   │   ├── hooks.ts              # Internal event hooks (tool timing, logging)
+│   │   ├── logger.ts             # Structured per-subsystem logger
 │   │   ├── mcp-manager.ts        # MCP server connections
+│   │   ├── mmr.ts                # MMR re-ranking for search deduplication
+│   │   ├── model-fallback.ts     # Automatic model fallback chain
 │   │   ├── session-history.ts    # Prompt persistence (~/.uagent/history.jsonl)
-│   │   ├── subagent-system.ts    # Subagent delegation system
-│   │   └── tool-registry.ts      # Tool registration and execution
+│   │   ├── subagent-system.ts    # Subagent delegation + parallel fan-out
+│   │   ├── tool-registry.ts      # Tool registration, schema validation, conditional loading
+│   │   ├── tool-retry.ts         # Exponential-backoff retry for tool calls
+│   │   ├── tool-selector.ts      # Query-relevant tool filtering
 │   │   └── tools/
-│   │       ├── fs-tools.ts       # File system tools (read/write/edit/bash/grep)
-│   │       ├── web-tools.ts      # Web fetch and search
-│   │       ├── code-inspector.ts # Static code analysis
+│   │       ├── fs-tools.ts       # File system tools (Read/Write/Edit/Bash/LS/Grep)
+│   │       ├── web-tools.ts      # WebFetch and WebSearch (DuckDuckGo)
+│   │       ├── code-inspector.ts # Static code analysis (bugs/security/perf/style)
 │   │       └── self-heal.ts      # Auto code-fix and build verification
 │   ├── models/
 │   │   ├── types.ts              # Shared TypeScript interfaces
 │   │   ├── model-manager.ts      # Multi-provider model management + cost tracking
-│   │   └── llm-client.ts         # OpenAI / Anthropic / Google / Mistral / Ollama clients
+│   │   └── llm-client.ts         # OpenAI/Anthropic/Gemini/Mistral/Qwen/DeepSeek/Ollama clients
 │   └── domains/
 │       ├── data/                 # Data analysis domain
 │       │   └── tools/            # CSV, SQL, EDA, cleaning tools
@@ -356,6 +465,7 @@ npm install          # Install dependencies
 npm run dev          # Run in development mode (tsx)
 npm run build        # Build TypeScript
 npm test             # Run tests
+npm run lint         # Lint source
 ```
 
 ## 🤝 Contributing
