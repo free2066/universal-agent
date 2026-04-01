@@ -9,7 +9,7 @@ import { config } from 'dotenv';
 import { AgentCore } from '../core/agent.js';
 import { modelManager } from '../models/model-manager.js';
 import { subagentSystem } from '../core/subagent-system.js';
-import { initAgentsMd } from '../core/context-loader.js';
+import { initAgentsMd, loadRules } from '../core/context-loader.js';
 import { MCPManager } from '../core/mcp-manager.js';
 import { codeInspectorTool } from '../core/tools/code-inspector.js';
 import { selfHealTool } from '../core/tools/self-heal.js';
@@ -342,6 +342,20 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     }
     if (input === '/init') {
       console.log(chalk.green(initAgentsMd(process.cwd())));
+      rl.prompt(); return;
+    }
+    // /rules — list loaded rule files (kstack article #15310 SSOT pattern)
+    if (input === '/rules') {
+      const rules = loadRules(process.cwd());
+      if (rules.sources.length === 0) {
+        console.log(chalk.gray('\n  No rules loaded. Create .uagent/rules/*.md to define coding standards.\n'));
+      } else {
+        console.log(chalk.yellow('\n📐 Loaded rules (injected into every system prompt):\n'));
+        for (const src of rules.sources) {
+          console.log(chalk.cyan('  ✓ ') + chalk.white(src));
+        }
+        console.log(chalk.gray('\n  Tip: Add .uagent/rules/coding.md, api-style.md, etc. to enforce standards\n'));
+      }
       rl.prompt(); return;
     }
     if (input.startsWith('/inspect')) {

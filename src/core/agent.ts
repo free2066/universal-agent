@@ -38,6 +38,8 @@ export class AgentCore {
   private safeMode: boolean;
   private mcpManager: MCPManager;
   private fallbackChain: ModelFallbackChain | null;
+  /** Accumulated [UNCERTAIN] items across the session (kstack article #15310 confidence mechanism) */
+  private uncertainItems: string[] = [];
 
   constructor(options: AgentOptions) {
     this.currentDomain = options.domain;
@@ -116,6 +118,7 @@ export class AgentCore {
 
   clearHistory() {
     this.history = [];
+    this.uncertainItems = [];
   }
 
   getHistory(): Message[] {
@@ -216,8 +219,32 @@ export class AgentCore {
       }
 
       if (response.type === 'text') {
-        onChunk(response.content);
-        this.history.push({ role: 'assistant', content: response.content });
+        const content = response.content;
+
+        // Confidence mechanism (kstack article #15310):
+        // Collect lines tagged with [UNCERTAIN] or ⚠️ so we can surface them
+        // as a "pending confirmation" list at the end of the response.
+        const uncertainPattern = /\[UNCERTAIN\]|⚠️\s*\[UNCERTAIN\]/gi;
+        const lines = content.split('\n');
+        for (const line of lines) {
+          if (uncertainPattern.test(line)) {
+            this.uncertainItems.push(line.trim().replace(/^[\-*>]+\s*/, ''));
+          }
+        }
+
+        onChunk(content);
+
+        // Surface uncertain items as a confirmation checklist
+        if (this.uncertainItems.length > 0) {
+          const checklist = this.uncertainItems
+            .map((item, i) => `  ${i + 1}. ${item}`)
+            .join('\n');
+          onChunk(`\n\n---\n⚠️  **Pending Confirmations** (items marked [UNCERTAIN]):  \n${checklist}\n---\n`);
+          // Reset for next turn so items aren't repeated
+          this.uncertainItems = [];
+        }
+
+        this.history.push({ role: 'assistant', content });
         break;
       }
 

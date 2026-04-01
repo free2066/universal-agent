@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'fs';
 import { resolve, join, dirname } from 'path';
 import { execSync } from 'child_process';
 
@@ -60,6 +60,57 @@ export function loadProjectContext(startDir?: string): AgentsContext {
 }
 
 /**
+ * Load rules from .uagent/rules/*.md (project) and ~/.uagent/rules/*.md (global).
+ *
+ * Inspired by kstack article #15310 "规范体系" pattern:
+ * Rule files are the SSOT for coding conventions, API style guides, naming rules, etc.
+ * They are injected into every system prompt so the agent always follows project standards.
+ *
+ * File priority: project-level (.uagent/rules/) overrides global (~/.uagent/rules/).
+ * Files are sorted alphabetically so load order is deterministic.
+ *
+ * Example files:
+ *   .uagent/rules/coding.md       — TypeScript coding standards
+ *   .uagent/rules/api-style.md    — API naming and response conventions
+ *   .uagent/rules/spec-standard.md — Spec document format rules
+ */
+export function loadRules(startDir?: string): { content: string; sources: string[] } {
+  const cwd = startDir || process.cwd();
+  const rulesDir = join(cwd, '.uagent', 'rules');
+  const globalRulesDir = join(process.env.HOME || '~', '.uagent', 'rules');
+
+  const parts: string[] = [];
+  const sources: string[] = [];
+
+  // Helper: load all .md files from a directory, sorted for determinism
+  function loadFromDir(dir: string) {
+    if (!existsSync(dir)) return;
+    let entries: string[];
+    try { entries = readdirSync(dir).sort(); } catch { return; }
+    for (const entry of entries) {
+      if (!entry.endsWith('.md')) continue;
+      const filePath = join(dir, entry);
+      // Skip if already loaded (project overrides global)
+      if (sources.some((s) => s.endsWith(entry))) continue;
+      try {
+        const content = readFileSync(filePath, 'utf-8').trim();
+        if (content) {
+          parts.push(`<!-- Rule: ${entry} -->\n${content}`);
+          sources.push(filePath);
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  // Project-level rules take precedence (loaded first so they win dedup check)
+  loadFromDir(rulesDir);
+  // Global rules fill in the rest
+  loadFromDir(globalRulesDir);
+
+  return { content: parts.join('\n\n'), sources };
+}
+
+/**
  * Harness Engineering: Behavior constraints injected into every system prompt.
  *
  * Inspired by kstack article #15309 — prevent "fallback scripting" where the
@@ -95,8 +146,14 @@ You MUST follow these rules at all times:
 export function buildSystemPromptWithContext(basePrompt: string, startDir?: string): string {
   const ctx = loadProjectContext(startDir);
   const gitStatus = getGitStatus(startDir);
+  const rules = loadRules(startDir);
 
   const sections: string[] = [basePrompt, HARNESS_CONSTRAINTS];
+
+  // Inject project coding rules (SSOT — kstack article #15310)
+  if (rules.content) {
+    sections.push(`---\n## 📐 Project Rules (SSOT — follow these exactly)\n${rules.content}\n---`);
+  }
 
   if (ctx.instructions) {
     sections.push(`---\n## Project Context\n${ctx.instructions}\n---`);
