@@ -1,4 +1,5 @@
 import type { ToolRegistration } from '../../models/types.js';
+import { mmrRerankSearchResults } from '../mmr.js';
 
 // ─── WebFetch ────────────────────────────────────────────
 export const webFetchTool: ToolRegistration = {
@@ -98,7 +99,11 @@ export const webSearchTool: ToolRegistration = {
 
       if (!results.length) return `No results found for: ${query}`;
 
-      const output = results.map((r, i) =>
+      // Apply MMR re-ranking to reduce duplicate/redundant search results
+      const mmrEnabled = process.env.AGENT_MMR !== '0';
+      const reranked = mmrRerankSearchResults(results, { enabled: mmrEnabled, lambda: 0.7 });
+
+      const output = reranked.map((r, i) =>
         `${i + 1}. **${r.title}**\n   URL: ${r.url}\n   ${r.snippet}`
       ).join('\n\n');
 

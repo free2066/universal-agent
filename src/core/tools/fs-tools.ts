@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSy
 import { resolve, relative, join, dirname } from 'path';
 import { execSync } from 'child_process';
 import type { ToolRegistration } from '../../models/types.js';
+import { mmrRerankGrepResults } from '../mmr.js';
 
 // ─── Read File ──────────────────────────────────────────
 export const readFileTool: ToolRegistration = {
@@ -245,7 +246,24 @@ export const grepTool: ToolRegistration = {
       ].filter(Boolean).join(' ');
 
       const output = execSync(cmd, { encoding: 'utf-8', maxBuffer: 1024 * 1024 }).trim();
-      return output || `No matches found for pattern: ${pattern}`;
+      if (!output) return `No matches found for pattern: ${pattern}`;
+
+      // Parse raw grep output into structured results for MMR reranking
+      const lines = output.split('\n');
+      const grepResults = lines.map((line, i) => {
+        const m = line.match(/^(.+?):(\d+):(.*)/);
+        return m
+          ? { file: m[1], line: parseInt(m[2], 10), content: m[3] }
+          : { file: '', line: i, content: line };
+      });
+
+      // Apply MMR to reduce redundant results from the same file
+      const mmrEnabled = process.env.AGENT_MMR !== '0';
+      const reranked = mmrRerankGrepResults(grepResults, { enabled: mmrEnabled, lambda: 0.7 });
+
+      return reranked
+        .map((r) => r.file ? `${r.file}:${r.line}:${r.content}` : r.content)
+        .join('\n');
     } catch {
       return `No matches found for pattern: ${pattern}`;
     }

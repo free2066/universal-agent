@@ -11,6 +11,10 @@ import { selfHealTool } from './tools/self-heal.js';
 import { MCPManager } from './mcp-manager.js';
 import { autoCompact } from './context-compressor.js';
 import { addToHistory } from './session-history.js';
+import { createLogger } from './logger.js';
+import { triggerHook, createHookEvent } from './hooks.js';
+
+const log = createLogger('agent');
 
 export interface AgentOptions {
   domain: string;
@@ -78,9 +82,10 @@ export class AgentCore {
     const { connected, failed } = await this.mcpManager.connectAll();
     if (connected.length > 0) {
       this.registry.registerMany(this.mcpManager.getTools());
+      log.info(`MCP: Connected to ${connected.join(', ')}`);
     }
-    if (failed.length > 0 && this.verbose) {
-      console.error(`MCP: Failed to connect: ${failed.join(', ')}`);
+    if (failed.length > 0) {
+      log.warn(`MCP: Failed to connect: ${failed.join(', ')}`);
     }
   }
 
@@ -137,7 +142,15 @@ export class AgentCore {
     this.history.push(userMessage);
 
     // Auto-compact history if approaching context limit
-    await autoCompact(this.history, onChunk);
+    const compacted = await autoCompact(this.history, onChunk);
+    if (compacted > 0) {
+      await triggerHook(createHookEvent('agent', 'compact', { compacted }));
+    }
+
+    await triggerHook(createHookEvent('session', 'start', {
+      domain,
+      model: modelManager.getCurrentModel('main'),
+    }));
 
     const tools = this.registry.getToolDefinitions();
     let iteration = 0;
@@ -145,6 +158,11 @@ export class AgentCore {
 
     while (iteration < MAX_ITERATIONS) {
       iteration++;
+
+      await triggerHook(createHookEvent('agent', 'turn', {
+        iteration,
+        model: modelManager.getCurrentModel('main'),
+      }));
 
       let response;
       try {
@@ -191,8 +209,19 @@ export class AgentCore {
             onChunk(`  → ${call.name}(${argsStr}${argsStr.length >= 120 ? '...' : ''})\n`);
           }
 
+          const callId = `${call.name}-${Date.now()}`;
+          await triggerHook(createHookEvent('tool', 'before', {
+            callId,
+            toolName: call.name,
+            args: call.arguments,
+          }));
           try {
             const result = await this.registry.execute(call.name, call.arguments);
+            await triggerHook(createHookEvent('tool', 'after', {
+              callId,
+              toolName: call.name,
+              success: true,
+            }));
             if (this.verbose) {
               const preview = JSON.stringify(result).slice(0, 300);
               onChunk(`  ✓ ${preview}${preview.length === 300 ? '...' : ''}\n`);
@@ -203,6 +232,12 @@ export class AgentCore {
               content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
             });
           } catch (err) {
+            await triggerHook(createHookEvent('tool', 'error', {
+              callId,
+              toolName: call.name,
+              error: err instanceof Error ? err.message : String(err),
+              success: false,
+            }));
             toolResults.push({
               role: 'tool',
               toolCallId: call.id,
