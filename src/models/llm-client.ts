@@ -7,35 +7,62 @@ import type {
   Message,
 } from './types.js';
 
+// ──────────────────────────────────────────
+// Factory
+// ──────────────────────────────────────────
 export function createLLMClient(model: string): LLMClient {
+  // Anthropic Claude
   if (model.startsWith('claude')) return new AnthropicClient(model);
+
+  // Local Ollama
   if (model.startsWith('ollama:')) return new OllamaClient(model.replace('ollama:', ''));
+
+  // Google Gemini
+  if (model.startsWith('gemini')) return new GeminiClient(model);
+
+  // DeepSeek (uses OpenAI-compat API)
+  if (model.startsWith('deepseek')) return new DeepSeekClient(model);
+
+  // Moonshot / Kimi
+  if (model.startsWith('moonshot') || model.startsWith('kimi')) return new MoonshotClient(model);
+
+  // Alibaba Qwen / Tongyi
+  if (model.startsWith('qwen') || model.startsWith('tongyi')) return new QwenClient(model);
+
+  // Mistral
+  if (model.startsWith('mistral') || model.startsWith('mixtral')) return new MistralClient(model);
+
+  // Generic OpenAI-compatible (any model name, custom baseURL via env)
+  if (model.startsWith('openai-compat:')) {
+    return new OpenAICompatClient(model.replace('openai-compat:', ''));
+  }
+
+  // Default: OpenAI
   return new OpenAIClient(model);
 }
 
 // ──────────────────────────────────────────
-// OpenAI Client
+// OpenAI Client  (gpt-4o, gpt-4o-mini, o1…)
 // ──────────────────────────────────────────
 class OpenAIClient implements LLMClient {
-  private client: OpenAI;
-  private model: string;
+  protected client: OpenAI;
+  protected model: string;
 
-  constructor(model: string) {
+  constructor(model: string, apiKey?: string, baseURL?: string) {
     this.model = model;
     this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      baseURL: process.env.OPENAI_BASE_URL || undefined,
+      apiKey: apiKey ?? process.env.OPENAI_API_KEY,
+      baseURL: baseURL ?? process.env.OPENAI_BASE_URL ?? undefined,
     });
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
     const messages = this.convertMessages(options);
-    const hasTools = options.tools && options.tools.length > 0;
+    const hasTools = (options.tools?.length ?? 0) > 0;
 
     const response = await this.client.chat.completions.create({
       model: this.model,
       messages,
-      // Only pass tools/tool_choice when there are actual tools — avoids API errors
       ...(hasTools ? {
         tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
         tool_choice: 'auto' as const,
@@ -53,7 +80,6 @@ class OpenAIClient implements LLMClient {
         toolCalls: msg.tool_calls.map((tc) => ({
           id: tc.id,
           name: tc.function.name,
-          // Safely parse arguments — malformed JSON from LLM should not crash
           arguments: safeParseJSON(tc.function.arguments, tc.function.name),
         })),
       };
@@ -64,14 +90,18 @@ class OpenAIClient implements LLMClient {
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
     const messages = this.convertMessages(options);
-    const stream = await this.client.chat.completions.create({ model: this.model, messages, stream: true });
+    const stream = await this.client.chat.completions.create({
+      model: this.model,
+      messages,
+      stream: true,
+    });
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content;
       if (delta) onChunk(delta);
     }
   }
 
-  private convertMessages(options: ChatOptions): OpenAI.ChatCompletionMessageParam[] {
+  protected convertMessages(options: ChatOptions): OpenAI.ChatCompletionMessageParam[] {
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: options.systemPrompt },
     ];
@@ -96,7 +126,6 @@ class OpenAIClient implements LLMClient {
       } else if (msg.role === 'user' || msg.role === 'assistant') {
         messages.push({ role: msg.role, content: msg.content });
       }
-      // Skip 'system' role in messages array (already in systemPrompt)
     }
 
     return messages;
@@ -104,7 +133,76 @@ class OpenAIClient implements LLMClient {
 }
 
 // ──────────────────────────────────────────
-// Anthropic Client
+// DeepSeek  (deepseek-chat, deepseek-coder)
+// OpenAI-compatible API at api.deepseek.com
+// ──────────────────────────────────────────
+class DeepSeekClient extends OpenAIClient {
+  constructor(model: string) {
+    super(
+      model,
+      process.env.DEEPSEEK_API_KEY,
+      process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1',
+    );
+  }
+}
+
+// ──────────────────────────────────────────
+// Moonshot / Kimi  (moonshot-v1-8k, etc.)
+// ──────────────────────────────────────────
+class MoonshotClient extends OpenAIClient {
+  constructor(model: string) {
+    super(
+      model,
+      process.env.MOONSHOT_API_KEY,
+      process.env.MOONSHOT_BASE_URL ?? 'https://api.moonshot.cn/v1',
+    );
+  }
+}
+
+// ──────────────────────────────────────────
+// Alibaba Qwen / Tongyi  (qwen-turbo, qwen-plus, qwen-max …)
+// Uses DashScope OpenAI-compat endpoint
+// ──────────────────────────────────────────
+class QwenClient extends OpenAIClient {
+  constructor(model: string) {
+    super(
+      model,
+      process.env.DASHSCOPE_API_KEY ?? process.env.QWEN_API_KEY,
+      process.env.QWEN_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    );
+  }
+}
+
+// ──────────────────────────────────────────
+// Mistral  (mistral-large, mixtral-8x7b …)
+// ──────────────────────────────────────────
+class MistralClient extends OpenAIClient {
+  constructor(model: string) {
+    super(
+      model,
+      process.env.MISTRAL_API_KEY,
+      process.env.MISTRAL_BASE_URL ?? 'https://api.mistral.ai/v1',
+    );
+  }
+}
+
+// ──────────────────────────────────────────
+// Generic OpenAI-Compatible
+// Usage: openai-compat:my-model-name
+// Set OPENAI_COMPAT_BASE_URL + OPENAI_COMPAT_API_KEY in env
+// ──────────────────────────────────────────
+class OpenAICompatClient extends OpenAIClient {
+  constructor(model: string) {
+    super(
+      model,
+      process.env.OPENAI_COMPAT_API_KEY ?? process.env.OPENAI_API_KEY,
+      process.env.OPENAI_COMPAT_BASE_URL ?? process.env.OPENAI_BASE_URL,
+    );
+  }
+}
+
+// ──────────────────────────────────────────
+// Anthropic Client  (claude-3-5-sonnet …)
 // ──────────────────────────────────────────
 class AnthropicClient implements LLMClient {
   private client: Anthropic;
@@ -117,7 +215,7 @@ class AnthropicClient implements LLMClient {
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
     const messages = this.convertMessages(options.messages);
-    const hasTools = options.tools && options.tools.length > 0;
+    const hasTools = (options.tools?.length ?? 0) > 0;
 
     const response = await this.client.messages.create({
       model: this.model,
@@ -148,11 +246,7 @@ class AnthropicClient implements LLMClient {
       };
     }
 
-    return {
-      type: 'text',
-      content: textBlocks.map((b) => b.text).join(''),
-      toolCalls: [],
-    };
+    return { type: 'text', content: textBlocks.map((b) => b.text).join(''), toolCalls: [] };
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
@@ -170,21 +264,11 @@ class AnthropicClient implements LLMClient {
     }
   }
 
-  /**
-   * Convert internal Message[] → Anthropic MessageParam[].
-   *
-   * Key correctness rule (Anthropic API):
-   * - After an assistant message with tool_use blocks, ALL tool_result blocks
-   *   must be in ONE user message (not spread across multiple user messages).
-   *   We batch consecutive tool-role messages into a single user message here.
-   */
   private convertMessages(messages: Message[]): Anthropic.MessageParam[] {
     const result: Anthropic.MessageParam[] = [];
-
     let i = 0;
     while (i < messages.length) {
       const msg = messages[i];
-
       if (msg.role === 'user') {
         result.push({ role: 'user', content: msg.content });
         i++;
@@ -207,7 +291,6 @@ class AnthropicClient implements LLMClient {
         }
         i++;
       } else if (msg.role === 'tool') {
-        // Collect ALL consecutive tool results into one user message
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         while (i < messages.length && messages[i].role === 'tool') {
           const toolMsg = messages[i];
@@ -223,9 +306,148 @@ class AnthropicClient implements LLMClient {
         i++;
       }
     }
-
     return result;
   }
+}
+
+// ──────────────────────────────────────────
+// Google Gemini  (gemini-1.5-pro, gemini-2.0-flash …)
+// Uses Google AI REST API directly (no extra SDK required)
+// ──────────────────────────────────────────
+class GeminiClient implements LLMClient {
+  private model: string;
+  private apiKey: string;
+  private baseURL: string;
+
+  constructor(model: string) {
+    this.model = model;
+    this.apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
+    this.baseURL = process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta';
+  }
+
+  async chat(options: ChatOptions): Promise<ChatResponse> {
+    const body = this.buildRequest(options);
+    const url = `${this.baseURL}/models/${this.model}:generateContent?key=${this.apiKey}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120000),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Gemini error ${res.status}: ${text}`);
+    }
+
+    const data = await res.json() as GeminiResponse;
+    return this.parseResponse(data);
+  }
+
+  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+    const body = this.buildRequest(options);
+    const url = `${this.baseURL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120000),
+    });
+
+    if (!res.ok) throw new Error(`Gemini stream error: ${res.status}`);
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const lines = decoder.decode(value, { stream: true }).split('\n');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const chunk = JSON.parse(line.slice(6)) as GeminiResponse;
+          const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) onChunk(text);
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  private buildRequest(options: ChatOptions) {
+    // Convert system prompt + messages to Gemini format
+    const contents: GeminiContent[] = [];
+
+    // System instruction as a special "user" turn (Gemini uses systemInstruction field)
+    const geminiContents = options.messages.map((msg) => {
+      const role = msg.role === 'assistant' ? 'model' : 'user';
+      if (msg.role === 'tool') {
+        return {
+          role: 'user' as const,
+          parts: [{ text: `[Tool result]\n${msg.content}` }],
+        };
+      }
+      return { role: role as 'user' | 'model', parts: [{ text: msg.content }] };
+    });
+
+    contents.push(...geminiContents);
+
+    const body: Record<string, unknown> = {
+      systemInstruction: { parts: [{ text: options.systemPrompt }] },
+      contents,
+      generationConfig: { maxOutputTokens: 8192 },
+    };
+
+    // Add tools if present
+    if (options.tools?.length) {
+      body.tools = [{
+        functionDeclarations: options.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters,
+        })),
+      }];
+    }
+
+    return body;
+  }
+
+  private parseResponse(data: GeminiResponse): ChatResponse {
+    const parts = data.candidates?.[0]?.content?.parts ?? [];
+
+    // Check for function calls
+    const funcCalls = parts.filter((p) => p.functionCall);
+    if (funcCalls.length) {
+      return {
+        type: 'tool_calls',
+        content: parts.filter((p) => p.text).map((p) => p.text ?? '').join(''),
+        toolCalls: funcCalls.map((p, idx) => ({
+          id: `gemini-call-${idx}`,
+          name: p.functionCall!.name,
+          arguments: p.functionCall!.args as Record<string, unknown>,
+        })),
+      };
+    }
+
+    const text = parts.filter((p) => p.text).map((p) => p.text ?? '').join('');
+    return { type: 'text', content: text, toolCalls: [] };
+  }
+}
+
+// Gemini API types (minimal)
+interface GeminiContent {
+  role: 'user' | 'model';
+  parts: GeminiPart[];
+}
+interface GeminiPart {
+  text?: string;
+  functionCall?: { name: string; args: unknown };
+  functionResponse?: { name: string; response: unknown };
+}
+interface GeminiResponse {
+  candidates?: Array<{ content?: { parts?: GeminiPart[] } }>;
 }
 
 // ──────────────────────────────────────────
@@ -241,7 +463,6 @@ class OllamaClient implements LLMClient {
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    // Flatten tool results into assistant messages for Ollama (no native tool support)
     const messages = this.convertMessages(options.messages, options.systemPrompt);
 
     const res = await fetch(`${this.baseURL}/api/chat`, {
@@ -277,7 +498,7 @@ class OllamaClient implements LLMClient {
       const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean);
       for (const line of lines) {
         try {
-          const data = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
+          const data = JSON.parse(line) as { message?: { content?: string } };
           if (data.message?.content) onChunk(data.message.content);
         } catch { /* skip malformed line */ }
       }
@@ -290,7 +511,6 @@ class OllamaClient implements LLMClient {
     ];
     for (const msg of messages) {
       if (msg.role === 'tool') {
-        // Represent tool result as an assistant turn for Ollama
         result.push({ role: 'assistant', content: `[Tool result]\n${msg.content}` });
       } else if (msg.role === 'user' || msg.role === 'assistant') {
         result.push({ role: msg.role, content: msg.content });
@@ -307,8 +527,6 @@ function safeParseJSON(raw: string, toolName: string): Record<string, unknown> {
   try {
     return JSON.parse(raw || '{}');
   } catch {
-    // If the LLM emits malformed JSON, return the raw string under a key
-    // so the tool handler can at least receive something meaningful
     console.warn(`[llm-client] Failed to parse tool arguments for "${toolName}": ${raw}`);
     return { _raw: raw };
   }
