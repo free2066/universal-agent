@@ -151,10 +151,13 @@ export class AgentCore {
       await triggerHook(createHookEvent('agent', 'compact', { compacted }));
     }
 
-    await triggerHook(createHookEvent('session', 'start', {
-      domain,
-      model: modelManager.getCurrentModel('main'),
-    }));
+    // session:start fires only on the first turn of a new conversation
+    if (this.history.length === 1) {
+      await triggerHook(createHookEvent('session', 'start', {
+        domain,
+        model: modelManager.getCurrentModel('main'),
+      }));
+    }
 
     // Set up model fallback chain from env (AGENT_FALLBACK_MODELS=model1,model2)
     const fallbackModels = (process.env.AGENT_FALLBACK_MODELS ?? '')

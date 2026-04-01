@@ -37,22 +37,21 @@ function isFallbackUseless(err: unknown): boolean {
 export interface ModelFallbackOptions {
   /**
    * Factory function to create an LLMClient for a given model name.
-   * Defaults to using `createLLMClient` from the LLM client module.
+   * When provided, this is used instead of the default `createLLMClient`.
+   * Useful for testing or custom model routing.
    */
   clientFactory?: (modelName: string) => LLMClient;
 }
 
 export class ModelFallbackChain {
   private readonly fallbackModels: string[];
-  private readonly clientFactory: (modelName: string) => LLMClient;
+  // clientFactory is stored and actually used in _tryFallbacks
+  private readonly clientFactory: ((modelName: string) => LLMClient) | null;
 
   constructor(fallbackModels: string[], opts: ModelFallbackOptions = {}) {
     this.fallbackModels = fallbackModels;
-    // Lazy import to avoid circular dependency at module load time
-    this.clientFactory = opts.clientFactory ?? ((model: string) => {
-      // We resolve this lazily when first needed
-      return { _lazyModel: model } as unknown as LLMClient;
-    });
+    // null means "use the default createLLMClient via dynamic import"
+    this.clientFactory = opts.clientFactory ?? null;
   }
 
   /**
@@ -72,14 +71,23 @@ export class ModelFallbackChain {
     }
   }
 
-  private async _tryFallbacks(options: ChatOptions, lastErr: unknown): Promise<ChatResponse> {
-    const { createLLMClient } = await import('../models/llm-client.js');
+  private async _tryFallbacks(options: ChatOptions, primaryErr: unknown): Promise<ChatResponse> {
+    // Resolve the client factory: use the stored one or fall back to createLLMClient
+    let createClient: (modelName: string) => LLMClient;
+    if (this.clientFactory !== null) {
+      createClient = this.clientFactory;
+    } else {
+      const { createLLMClient } = await import('../models/llm-client.js');
+      createClient = createLLMClient;
+    }
+
+    let lastErr: unknown = primaryErr;
 
     for (let i = 0; i < this.fallbackModels.length; i++) {
       const modelName = this.fallbackModels[i];
       log.info(`Fallback ${i + 1}/${this.fallbackModels.length}: trying ${modelName}`);
       try {
-        const client = createLLMClient(modelName);
+        const client = createClient(modelName);
         const response = await client.chat(options);
         log.info(`Fallback succeeded with ${modelName}`);
         return response;
@@ -89,9 +97,10 @@ export class ModelFallbackChain {
       }
     }
 
+    // lastErr is always set here (at minimum to primaryErr)
     throw new Error(
       `All models failed (primary + ${this.fallbackModels.length} fallbacks). Last error: ${
-        lastErr instanceof Error ? lastErr.message : String(lastErr)
+        lastErr instanceof Error ? (lastErr as Error).message : String(lastErr)
       }`,
     );
   }

@@ -172,6 +172,10 @@ export class SubagentSystem {
   /**
    * Entropy reduction: find subagents that haven't been used in `staleDays`.
    * Returns a list of "zombie" subagents for cleanup.
+   *
+   * Built-in agents (defined in loadBuiltinAgents) are excluded —
+   * they ship with the system and should never appear as "stale".
+   * Only user-defined agents (loaded from .uagent/agents/ or .kode/agents/) are checked.
    */
   findZombieAgents(staleDays = 30): Array<{ name: string; lastUsed: Date | null; callCount: number }> {
     const usage = loadUsage();
@@ -180,15 +184,27 @@ export class SubagentSystem {
     const zombies: Array<{ name: string; lastUsed: Date | null; callCount: number }> = [];
 
     for (const agent of this.agents.values()) {
+      // Skip built-in agents — they are always present and should not be flagged
+      if (this.isBuiltinAgent(agent.name)) continue;
+
       const rec = usage[agent.name];
       if (!rec) {
-        // Never used
+        // User-defined agent never used
         zombies.push({ name: agent.name, lastUsed: null, callCount: 0 });
       } else if (now - rec.lastUsed > staleMs) {
         zombies.push({ name: agent.name, lastUsed: new Date(rec.lastUsed), callCount: rec.callCount });
       }
     }
     return zombies;
+  }
+
+  /** Names of built-in agents (loaded by loadBuiltinAgents) */
+  private static readonly BUILTIN_AGENT_NAMES = new Set([
+    'reviewer', 'architect', 'test-writer', 'data-analyst', 'security-auditor', 'doc-writer',
+  ]);
+
+  private isBuiltinAgent(name: string): boolean {
+    return SubagentSystem.BUILTIN_AGENT_NAMES.has(name);
   }
 
   saveAgent(def: SubagentDef, scope: 'user' | 'project' = 'project') {

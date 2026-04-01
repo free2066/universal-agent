@@ -84,8 +84,11 @@ function findClearableCandidates(
     if (msg.role !== 'tool') continue;
     if (msg.content === CLEARED_PLACEHOLDER) continue;
 
-    // Identify tool name from the assistant message that preceded it
-    const toolName = msg.toolCallId?.split('-')[0] ?? 'unknown';
+    // Identify tool name from toolCallId.
+    // callId format is "${toolName}-${timestamp}", but toolName may itself contain
+    // hyphens (e.g. "web-search"), so we strip only the trailing "-<digits>" suffix.
+    const rawId = msg.toolCallId ?? 'unknown';
+    const toolName = rawId.replace(/-\d+$/, '');
     if (cfg.excludeTools.has(toolName)) continue;
 
     candidates.push({
@@ -111,8 +114,13 @@ export function editContextIfNeeded(
   history: Message[],
   config: Partial<ContextEditorConfig> = {},
 ): number {
-  const cfg = { ...DEFAULT_CTX_EDITOR_CONFIG, ...config };
-  if (config.excludeTools) cfg.excludeTools = config.excludeTools;
+  // Merge config — excludeTools is a Set so it can't be spread-merged safely;
+  // handle it separately to avoid overwriting with undefined.
+  const cfg: ContextEditorConfig = {
+    ...DEFAULT_CTX_EDITOR_CONFIG,
+    ...config,
+    excludeTools: config.excludeTools ?? DEFAULT_CTX_EDITOR_CONFIG.excludeTools,
+  };
 
   const estimatedTokens = estimateHistoryTokens(history);
   if (estimatedTokens <= cfg.trigger) return 0;

@@ -33,9 +33,14 @@ const THRESHOLD = parseInt(process.env.AGENT_TOOL_SELECT_THRESHOLD ?? '12', 10);
 /** Max tools to send to the model (default: 10) */
 const MAX_TOOLS = parseInt(process.env.AGENT_TOOL_SELECT_MAX ?? '10', 10);
 
-/** Tools that are always included regardless of query */
+/** Tools that are always included regardless of query.
+ *
+ * Default list uses the actual registered tool names from fs-tools.ts:
+ *   Bash, Write, Edit, Read, LS, Grep
+ * Override via AGENT_TOOL_SELECT_ALWAYS env var (comma-separated).
+ */
 const ALWAYS_INCLUDE = new Set(
-  (process.env.AGENT_TOOL_SELECT_ALWAYS ?? 'Bash,write_file,edit_file')
+  (process.env.AGENT_TOOL_SELECT_ALWAYS ?? 'Bash,Write,Edit,Read,LS,Grep')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
