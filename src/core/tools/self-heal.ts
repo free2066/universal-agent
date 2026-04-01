@@ -13,8 +13,8 @@
  *  - Dry-run mode for safe preview
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve, join } from 'path';
+import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
+import { resolve, join, dirname } from 'path';
 import { execSync } from 'child_process';
 import type { ToolRegistration } from '../../models/types.js';
 import {
@@ -213,7 +213,14 @@ export const selfHealTool: ToolRegistration = {
     },
   },
   handler: async (args) => {
-    const projectRoot = resolve(process.cwd(), (args.path as string) || '.');
+    const rawPath = resolve(process.cwd(), (args.path as string) || '.');
+
+    // Bug b9: if the caller passes a single file path instead of a directory,
+    // use the file's parent directory as projectRoot so codeInspectorTool
+    // (which expects a directory) doesn't report "File not found".
+    const rawPathStat = existsSync(rawPath) ? statSync(rawPath) : null;
+    const projectRoot = rawPathStat?.isFile() ? dirname(rawPath) : rawPath;
+
     const dryRun = (args.dry_run as boolean) ?? false;
     const minSeverity = (args.severity as Severity) || 'warning';
     const doCommit = (args.commit as boolean) ?? false;

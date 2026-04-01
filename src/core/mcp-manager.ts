@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import type { ToolDefinition, ToolRegistration } from '../models/types.js';
 
@@ -129,6 +129,10 @@ export class MCPManager {
   static initConfig(dir: string = process.cwd()): string {
     const configPath = join(dir, '.mcp.json');
     if (existsSync(configPath)) return `Already exists: ${configPath}`;
+    // Bug #9: auto-create the directory if it doesn't exist
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch { /* ignore if dir already exists */ }
     const template: MCPConfig = {
       servers: { 'example-sse': { name: 'example-sse', type: 'sse', url: 'http://127.0.0.1:3333/sse', enabled: false } },
     };

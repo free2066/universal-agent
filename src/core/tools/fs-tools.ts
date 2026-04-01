@@ -23,6 +23,11 @@ export const readFileTool: ToolRegistration = {
     const filePath = resolve(process.cwd(), args.file_path as string);
     if (!existsSync(filePath)) return `Error: File not found: ${filePath}`;
     try {
+      // Bug b6: detect directory and return friendly message (statSync already imported at top)
+      const st = statSync(filePath);
+      if (st.isDirectory()) {
+        return `Error: Path is a directory, not a file: ${filePath}\nUse the LS tool to list directory contents.`;
+      }
       const content = readFileSync(filePath, 'utf-8');
       const lines = content.split('\n');
       const start = Math.max(0, ((args.start_line as number) || 1) - 1);
@@ -82,6 +87,11 @@ export const editFileTool: ToolRegistration = {
     const filePath = resolve(process.cwd(), args.file_path as string);
     if (!existsSync(filePath)) return `Error: File not found: ${filePath}`;
     try {
+      // Bug #6 (BUG_REPORT_TESTED): detect directory and return friendly message instead of EISDIR crash
+      const st = statSync(filePath);
+      if (st.isDirectory()) {
+        return `Error: Path is a directory, not a file: ${filePath}\nUse the LS tool to list directory contents.`;
+      }
       const content = readFileSync(filePath, 'utf-8');
       const oldStr = args.old_string as string;
       if (!content.includes(oldStr)) {
@@ -267,6 +277,13 @@ export const grepTool: ToolRegistration = {
 
     // Escape the search path to prevent shell injection (single-quote with escaping)
     const escapedSearchPath = searchPath.replace(/'/g, "'\"'\"'");
+
+    // Bug #8: validate regex before passing to grep to give a clear syntax error
+    try {
+      new RegExp(pattern);
+    } catch (regexErr) {
+      return `Error: Invalid regular expression pattern: ${regexErr instanceof Error ? regexErr.message : String(regexErr)}\n  Pattern: ${pattern}\n  Tip: escape special chars like ( ) [ ] { } . * + ? ^ $ | with a backslash`;
+    }
 
     try {
       // Escape the pattern for shell — use single quotes to avoid most injection

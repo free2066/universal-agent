@@ -54,6 +54,34 @@ program
   });
 
 // ── run ──────────────────────────────────────────────────
+// Valid domain values for validation
+const VALID_DOMAINS = ['auto', 'data', 'dev', 'service'];
+
+function validateDomain(domain: string): void {
+  if (!VALID_DOMAINS.includes(domain)) {
+    console.error(chalk.red(`\n✗ Invalid domain: "${domain}"`))
+    console.error(chalk.yellow(`  Valid domains: ${VALID_DOMAINS.join(', ')}`))
+    process.exit(1);
+  }
+}
+
+function validateModel(model: string): void {
+  // Allow any model that looks plausible: known prefixes or ollama:xxx format
+  const knownPrefixes = ['gpt-', 'o1', 'o3', 'o4', 'claude-', 'gemini-', 'deepseek', 'moonshot', 'kimi', 'qwen', 'qwq', 'mistral', 'mixtral', 'ollama:'];
+  const isKnown = knownPrefixes.some((p) => model.startsWith(p));
+  if (!isKnown) {
+    // Also allow models registered in the manager
+    const profiles = modelManager.listProfiles();
+    const isRegistered = profiles.some((p) => p.name === model || p.modelName === model);
+    if (!isRegistered) {
+      console.error(chalk.red(`\n✗ Unknown model: "${model}"`))
+      console.error(chalk.yellow(`  Run: uagent models list  — to see available models`))
+      console.error(chalk.gray(`  Or use a known prefix: gpt-*, claude-*, gemini-*, deepseek*, qwen*, ollama:<name>`))
+      process.exit(1);
+    }
+  }
+}
+
 program
   .command('run <prompt>')
   .description('Execute a single agent task')
@@ -62,6 +90,8 @@ program
   .option('-f, --file <file>', 'Input file path')
   .option('--safe', 'Safe mode')
   .action(async (prompt, options) => {
+    validateDomain(options.domain);
+    validateModel(options.model);
     const agent = new AgentCore({
       domain: options.domain,
       model: options.model,
@@ -76,7 +106,16 @@ program
       spinner.stop();
       console.log('\n' + result);
     } catch (err) {
-      spinner.fail('Error: ' + (err instanceof Error ? err.message : String(err)));
+      spinner.stop();
+      const msg = err instanceof Error ? err.message : String(err);
+      // Friendly API key missing message
+      if (msg.includes('API_KEY') || msg.includes('api key') || msg.includes('authentication') || msg.includes('401')) {
+        console.error(chalk.red('\n✗ API key missing or invalid.'));
+        console.error(chalk.yellow('  Run: uagent config  — to set up your API keys'));
+        console.error(chalk.gray(`  Or set the environment variable (e.g. OPENAI_API_KEY=sk-...)`));
+      } else {
+        console.error(chalk.red('\n✗ ') + msg);
+      }
       process.exit(1);
     }
   });

@@ -59,12 +59,16 @@ Ratio: 1.6 chars/token  # 应该是约 2-3 chars/token
 
 ---
 
-### 5. 设置无效的 model pointer 不报错
-**严重性**: 🟡 低
+### 5. 设置无效的 model pointer 不报错且污染配置
+**严重性**: 🟠 中
 
 ```javascript
 manager.setPointer('invalid_pointer', 'gpt-4o');  // 成功执行，没有报错
+// 之后 getPointers() 返回:
+{ main: 'gpt-4o', task: 'gpt-4o-mini', ..., invalid_pointer: 'gpt-4o' }
 ```
+
+**影响**: 无效指针被永久保存到配置中
 
 ---
 
@@ -72,7 +76,8 @@ manager.setPointer('invalid_pointer', 'gpt-4o');  // 成功执行，没有报错
 **严重性**: 🟠 中
 
 ```javascript
-manager.getClient('nonexistent');
+manager.setPointer('main', 'non-existent-model-12345');
+manager.getClient('main');
 // Error: Cannot read properties of undefined (reading 'startsWith')
 ```
 
@@ -88,6 +93,42 @@ $ Read directory: Error reading file: EISDIR: illegal operation on a directory, 
 ```
 
 **预期行为**: 返回友好的错误提示如 "Error: Path is a directory"
+
+---
+
+### 8. Grep 工具无效正则不报错
+**严重性**: 🟡 低
+
+```javascript
+grepTool.handler({ pattern: '[invalid(', path: 'src' })
+// 返回: "No matches found for pattern: [invalid("
+```
+
+**预期行为**: 应该提示用户正则表达式语法错误
+
+---
+
+### 9. MCP init 在目录不存在时崩溃
+**严重性**: 🟡 低
+
+```javascript
+MCPManager.initConfig('/tmp/nonexistent/dir');
+// Error: ENOENT: no such file or directory
+```
+
+**预期行为**: 自动创建目录或提示用户创建
+
+---
+
+### 10. Self Heal 单文件模式报告 "File not found"
+**严重性**: 🟡 低
+
+```bash
+$ Self Heal on /tmp/test.ts
+// 报告: "File not found" 即使文件存在
+```
+
+**原因**: 可能把文件路径当作目录处理
 
 ---
 
@@ -157,9 +198,38 @@ $ ./dist/cli/index.js domains
 | 类别 | 数量 |
 |------|------|
 | 🔴 严重 Bug | 1 |
-| 🟠 中等 Bug | 4 |
-| 🟡 低优先级 Bug | 2 |
-| ✅ 正常工作 | 9 |
+| 🟠 中等 Bug | 5 |
+| 🟡 低优先级 Bug | 4 |
+| ✅ 正常工作 | 15 |
+
+---
+
+## ✅ 测试覆盖情况
+
+### 已测试的核心功能
+- [x] CLI 命令解析 (--help, domains, agents, models, mcp, init)
+- [x] 构建流程 (npm install, npm run build)
+- [x] 文件工具 (Read, Write, Edit, LS, Grep, Bash)
+- [x] Web 工具 (WebFetch, WebSearch)
+- [x] 代码检查 (InspectCode)
+- [x] 自动修复 (SelfHeal)
+- [x] 模型管理 (ModelManager, 回退链)
+- [x] 工具注册和验证 (ToolRegistry)
+- [x] 上下文压缩 (ContextCompressor, ContextEditor)
+- [x] 工具选择器 (ToolSelector)
+- [x] 子代理系统 (SubagentSystem)
+- [x] MCP 管理 (MCPManager)
+- [x] 会话历史 (SessionHistory)
+- [x] 日志系统 (Logger)
+- [x] 工具重试 (ToolRetry)
+- [x] Domain 路由 (DomainRouter)
+
+### 未测试的功能
+- [ ] 交互式 chat 模式 (需要 API key)
+- [ ] run 命令完整执行 (需要 API key)
+- [ ] 子代理实际运行 (需要 API key)
+- [ ] MCP 服务器连接 (需要外部服务)
+- [ ] 配置向导 (uagent config)
 
 ---
 
@@ -172,10 +242,13 @@ $ ./dist/cli/index.js domains
 2. **Domain/模型名称验证** - 添加有效值检查
 3. **获取不存在模型时的错误处理** - 防止 undefined 访问
 4. **中文 token 估算** - 使用 unicode 范围调整系数
+5. **无效 model pointer 验证** - 防止污染配置
 
 ### 可选修复 (P2)
-5. **无效 model pointer 验证**
 6. **读取目录时的友好错误**
+7. **Grep 无效正则提示**
+8. **MCP init 目录创建**
+9. **Self Heal 单文件模式**
 
 ---
 

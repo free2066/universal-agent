@@ -139,8 +139,18 @@ export class ModelManager {
 
   getClient(pointer: keyof ModelPointers = 'main'): LLMClient {
     const modelName = this.pointers[pointer];
+    if (!modelName) {
+      throw new Error(`No model configured for pointer "${pointer}". Run: uagent models set ${pointer} <model-name>`);
+    }
     const profile = this.profiles.get(modelName);
-    if (!profile) return createLLMClient(modelName);
+    if (!profile) {
+      // Bug #6: unknown model name — give a clear error instead of crashing on undefined.startsWith()
+      throw new Error(
+        `Unknown model "${modelName}" (pointer: ${pointer}).\n` +
+        `  Run: uagent models list  — to see available models\n` +
+        `  Or run: uagent models set ${pointer} <model-name>  — to change the pointer`
+      );
+    }
     // Build the model string the factory expects
     const factoryId = (() => {
       switch (profile.provider) {
@@ -161,7 +171,14 @@ export class ModelManager {
     return this.pointers[pointer];
   }
 
+  /** Valid pointer names — validated in setPointer to prevent config pollution (bug #5) */
+  private static readonly VALID_POINTERS: ReadonlySet<keyof ModelPointers> = new Set(['main', 'task', 'compact', 'quick']);
+
   setPointer(pointer: keyof ModelPointers, modelName: string) {
+    // Bug #5: validate pointer name to prevent unknown keys polluting saved config
+    if (!ModelManager.VALID_POINTERS.has(pointer)) {
+      throw new Error(`Unknown model pointer "${pointer}". Valid pointers: ${[...ModelManager.VALID_POINTERS].join(', ')}`);
+    }
     if (!this.profiles.has(modelName)) {
       // Auto-create profile — infer provider from model name prefix
       const provider = modelName.startsWith('claude') ? 'anthropic'
