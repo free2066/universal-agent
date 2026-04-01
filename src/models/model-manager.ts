@@ -34,6 +34,23 @@ export interface TokenUsage {
 const CONFIG_DIR = resolve(process.env.HOME || '~', '.uagent');
 const CONFIG_FILE = resolve(CONFIG_DIR, 'models.json');
 
+/**
+ * Infer the LLM provider from a model name prefix.
+ * Used when auto-creating a ModelProfile in setPointer() to avoid duplicating
+ * the if-chain in multiple places inside the class.
+ */
+function inferProviderFromModelName(modelName: string): ModelProfile['provider'] {
+  if (modelName.startsWith('claude'))                                          return 'anthropic';
+  if (modelName.startsWith('gemini'))                                          return 'gemini';
+  if (modelName.startsWith('deepseek'))                                        return 'deepseek';
+  if (modelName.startsWith('moonshot') || modelName.startsWith('kimi'))        return 'moonshot';
+  if (modelName.startsWith('qwen') || modelName.startsWith('qwq')
+      || modelName.startsWith('tongyi'))                                        return 'qwen';
+  if (modelName.startsWith('mistral') || modelName.startsWith('mixtral'))      return 'mistral';
+  if (modelName.startsWith('ollama:'))                                          return 'ollama';
+  return 'openai';
+}
+
 export class ModelManager {
   private profiles: Map<string, ModelProfile> = new Map();
   private pointers: ModelPointers = {
@@ -137,6 +154,14 @@ export class ModelManager {
     }, null, 2));
   }
 
+  /**
+   * Cache for LLMClient instances, keyed by factoryId.
+   * Avoids creating a new HTTP client object on every getClient() call.
+   * Cache is invalidated whenever setPointer() or addProfile() is called,
+   * since those may change which factory string a pointer resolves to.
+   */
+  private clientCache = new Map<string, LLMClient>();
+
   getClient(pointer: keyof ModelPointers = 'main'): LLMClient {
     const modelName = this.pointers[pointer];
     if (!modelName) {
@@ -164,15 +189,22 @@ export class ModelManager {
         default:         return profile.modelName; // openai / anthropic
       }
     })();
-    return createLLMClient(factoryId);
+    // Return cached instance to avoid allocating a new HTTP client per call
+    const cached = this.clientCache.get(factoryId);
+    if (cached) return cached;
+    const client = createLLMClient(factoryId);
+    this.clientCache.set(factoryId, client);
+    return client;
   }
 
   getCurrentModel(pointer: keyof ModelPointers = 'main'): string {
     return this.pointers[pointer];
   }
 
-  /** Valid pointer names — validated in setPointer to prevent config pollution (bug #5) */
-  private static readonly VALID_POINTERS: ReadonlySet<keyof ModelPointers> = new Set(['main', 'task', 'compact', 'quick']);
+  /** Valid pointer names — validated in setPointer to prevent config pollution (bug #5)
+   *  inferProviderFromModelName is a module-level helper defined just before this class.
+   */
+  private static readonly VALID_POINTERS: ReadonlySet<keyof ModelPointers> = new Set<keyof ModelPointers>(['main', 'task', 'compact', 'quick']);
 
   setPointer(pointer: keyof ModelPointers, modelName: string) {
     // Bug #5: validate pointer name to prevent unknown keys polluting saved config
@@ -180,26 +212,23 @@ export class ModelManager {
       throw new Error(`Unknown model pointer "${pointer}". Valid pointers: ${[...ModelManager.VALID_POINTERS].join(', ')}`);
     }
     if (!this.profiles.has(modelName)) {
-      // Auto-create profile — infer provider from model name prefix
-      const provider = modelName.startsWith('claude') ? 'anthropic'
-        : modelName.startsWith('gemini') ? 'gemini'
-        : modelName.startsWith('deepseek') ? 'deepseek'
-        : modelName.startsWith('moonshot') || modelName.startsWith('kimi') || modelName.startsWith('kimi-k') ? 'moonshot'
-        : modelName.startsWith('qwen') || modelName.startsWith('qwq') || modelName.startsWith('tongyi') ? 'qwen'
-        : modelName.startsWith('mistral') || modelName.startsWith('mixtral') ? 'mistral'
-        : modelName.startsWith('ollama:') ? 'ollama'
-        : 'openai';
+      // Auto-create a minimal profile so getClient() can function with the new model.
+      // Provider is inferred from the model name prefix via the shared helper.
+      const provider = inferProviderFromModelName(modelName);
       this.profiles.set(modelName, {
         name: modelName, provider, modelName,
         maxTokens: 8192, contextLength: 128000, costPer1kInput: 0, costPer1kOutput: 0, isActive: true,
       });
     }
     this.pointers[pointer] = modelName;
+    // Invalidate cached client for this pointer so next getClient() creates a fresh one.
+    this.clientCache.clear();
     this.saveToDisk();
   }
 
   addProfile(profile: ModelProfile) {
     this.profiles.set(profile.name, profile);
+    this.clientCache.clear(); // invalidate cache since a new profile may change factory routing
     this.saveToDisk();
   }
 

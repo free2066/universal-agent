@@ -188,5 +188,17 @@ function parseDDGResults(html: string, limit: number): SearchResult[] {
     });
   }
 
+  // If HTML is substantial but we parsed nothing, the DDG response structure
+  // has likely changed (class names are routinely updated). Warn the caller
+  // instead of silently returning an empty list.
+  if (!results.length && html.length > 10_000) {
+    // Return a sentinel object so the caller can surface a helpful message.
+    results.push({
+      title: '⚠️ Parse warning',
+      url: '',
+      snippet: 'DuckDuckGo HTML structure may have changed — no results could be extracted.',
+    });
+  }
+
   return results;
 }

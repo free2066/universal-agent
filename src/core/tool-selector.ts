@@ -21,6 +21,8 @@
  */
 
 import type { ToolDefinition, Message } from '../models/types.js';
+import { createLLMClient } from '../models/llm-client.js';
+import { modelManager } from '../models/model-manager.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('tool-selector');
@@ -93,9 +95,7 @@ async function llmSelectTools(
   query: string,
   maxTools: number,
 ): Promise<string[]> {
-  const { createLLMClient } = await import('../models/llm-client.js');
-  const { modelManager } = await import('../models/model-manager.js');
-
+  // createLLMClient and modelManager are now statically imported at the top of the file
   const toolList = tools.map((t) => `- ${t.name}: ${t.description}`).join('\n');
   const prompt = `You are selecting relevant tools for an agent.
 

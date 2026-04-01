@@ -37,11 +37,19 @@ export interface ChatOptions {
   stream?: boolean;
 }
 
-export interface ChatResponse {
-  type: 'text' | 'tool_calls';
-  content: string;
-  toolCalls: ToolCall[];
-}
+/**
+ * ChatResponse uses a discriminated union to let TypeScript narrow the type
+ * in conditional branches:
+ *
+ *   if (response.type === 'text') { /* response.toolCalls is never here *\/ }
+ *   if (response.type === 'tool_calls') { /* response.toolCalls is ToolCall[] here *\/ }
+ *
+ * This prevents accidentally reading toolCalls on a text-only response and
+ * makes every LLMClient implementation's return types self-documenting.
+ */
+export type ChatResponse =
+  | { type: 'text';       content: string; toolCalls?: never }
+  | { type: 'tool_calls'; content: string; toolCalls: ToolCall[] };
 
 export interface LLMClient {
   chat(options: ChatOptions): Promise<ChatResponse>;

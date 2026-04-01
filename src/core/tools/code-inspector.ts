@@ -206,21 +206,21 @@ function scanFile(filePath: string, rootDir: string): Finding[] {
     });
   }
 
-  // ── Multi-line rules (run on full file content) ────────
-  // Long function: count lines between matching braces instead of regex
-  findings.push(...detectLongFunctions(content, relFile));
+  // Pass already-split lines to avoid re-splitting inside detectLongFunctions (b9 opt)
+  findings.push(...detectLongFunctions(lines, relFile));
 
   return findings;
 }
 
 /**
  * Detect functions with more than LONG_FN_THRESHOLD lines by tracking brace depth.
- * Pure-regex cross-line matching is unreliable in single-pass line-by-line scanning.
+ * Accepts already-split lines to avoid a redundant content.split('\n') call
+ * (scanFile already splits the content once; passing lines avoids re-splitting on large files).
  */
-function detectLongFunctions(content: string, relFile: string): Finding[] {
+function detectLongFunctions(lines: string[], relFile: string): Finding[] {
   const LONG_FN_THRESHOLD = 60; // lines
   const findings: Finding[] = [];
-  const lines = content.split('\n');
+  // `lines` is already split by the caller
 
   // Find function definition lines
   const fnDefPattern = /(?:^|\s)(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w]+)\s*=>|\w+\s*\([^)]*\)\s*\{)/;

@@ -133,8 +133,10 @@ export class MCPManager {
     try {
       mkdirSync(dir, { recursive: true });
     } catch { /* ignore if dir already exists */ }
+    // Note: keys are the server names; do NOT add a `name` field inside each entry
+    // (saveConfig() intentionally strips `name` when persisting, to avoid redundancy).
     const template: MCPConfig = {
-      servers: { 'example-sse': { name: 'example-sse', type: 'sse', url: 'http://127.0.0.1:3333/sse', enabled: false } },
+      servers: { 'example-sse': { type: 'sse', url: 'http://127.0.0.1:3333/sse', enabled: false } as MCPServer },
     };
     writeFileSync(configPath, JSON.stringify(template, null, 2));
     return `✓ Created ${configPath}`;

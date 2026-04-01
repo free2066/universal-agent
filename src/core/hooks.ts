@@ -131,6 +131,10 @@ registerHook('tool:after', (event) => {
 });
 
 registerHook('tool:error', (event) => {
+  // Clean up timing entry to prevent Map growth on long-running sessions (b6 fix).
+  // tool:after is NOT fired when a tool throws, so we must clean here too.
+  const callId = event.context.callId as string | undefined;
+  if (callId) toolTimings.delete(callId);
   log.warn(`Tool error: ${event.context.toolName as string} — ${event.context.error as string}`);
 });
 

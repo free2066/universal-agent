@@ -85,7 +85,7 @@ class OpenAIClient implements LLMClient {
       };
     }
 
-    return { type: 'text', content: msg.content || '', toolCalls: [] };
+    return { type: 'text', content: msg.content || '' };
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
@@ -246,7 +246,7 @@ class AnthropicClient implements LLMClient {
       };
     }
 
-    return { type: 'text', content: textBlocks.map((b) => b.text).join(''), toolCalls: [] };
+    return { type: 'text', content: textBlocks.map((b) => b.text).join('') };
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
@@ -429,7 +429,7 @@ class GeminiClient implements LLMClient {
     }
 
     const text = parts.filter((p) => p.text).map((p) => p.text ?? '').join('');
-    return { type: 'text', content: text, toolCalls: [] };
+    return { type: 'text', content: text };
   }
 }
 
@@ -472,7 +472,7 @@ class OllamaClient implements LLMClient {
     if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
     const data = await res.json() as { message?: { content?: string }; error?: string };
     if (data.error) throw new Error(`Ollama error: ${data.error}`);
-    return { type: 'text', content: data.message?.content || '', toolCalls: [] };
+    return { type: 'text', content: data.message?.content || '' };
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {

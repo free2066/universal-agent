@@ -54,13 +54,17 @@ function estimateTokens(text: string, isJson = false): number {
 
   // Weighted divisor: blend Latin divisor and non-Latin divisor
   const latinDivisor = isJson ? 2 : 4;
-  const nonLatinDivisor = 1.5;
+  // CJK characters are typically 1.5–2.5 chars/token in most tokenizers (mean ~2.0).
+  // Using 1.5 over-estimates tokens → compaction triggers too early → wastes LLM calls.
+  // 2.0 is a more accurate midpoint (confirmed via GPT tokenizer on Chinese text).
+  const nonLatinDivisor = 2.0;
   const effectiveDivisor = latinDivisor * (1 - nonLatinRatio) + nonLatinDivisor * nonLatinRatio;
 
   return Math.ceil(text.length / effectiveDivisor);
 }
 
-function estimateMessageTokens(msg: Message): number {
+// Export estimateMessageTokens so context-editor.ts can reuse it (avoids duplicating the CJK correction logic)
+export function estimateMessageTokens(msg: Message): number {
   const contentTokens = estimateTokens(msg.content, msg.role === 'tool');
   const toolCallTokens = msg.toolCalls
     ? msg.toolCalls.reduce(

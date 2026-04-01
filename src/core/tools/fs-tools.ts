@@ -94,13 +94,31 @@ export const editFileTool: ToolRegistration = {
       }
       const content = readFileSync(filePath, 'utf-8');
       const oldStr = args.old_string as string;
-      if (!content.includes(oldStr)) {
-        return `Error: old_string not found in file. Make sure it matches exactly (including whitespace).`;
+
+      // String.replace(string, string): first arg is a literal string (not regex),
+      // but the second arg still interprets $& $1 etc. — escape $ to be safe.
+      const safeReplacement = (args.new_string as string).replace(/\$/g, '$$$$');
+
+      // Fast path: direct match
+      if (content.includes(oldStr)) {
+        // Replace only the first occurrence (safer than replaceAll)
+        const newContent = content.replace(oldStr, safeReplacement);
+        writeFileSync(filePath, newContent, 'utf-8');
+        return `✓ Edit applied to ${filePath}`;
       }
-      // Replace only the first occurrence (safer than replaceAll)
-      const newContent = content.replace(oldStr, (args.new_string as string).replace(/\$/g, '$$$$'));
-      writeFileSync(filePath, newContent, 'utf-8');
-      return `✓ Edit applied to ${filePath}`;
+
+      // Slow path: try normalizing line endings (\r\n → \n) before giving up.
+      // Editors on Windows or git with core.autocrlf may produce CRLF files.
+      const normalizedContent = content.replace(/\r\n/g, '\n');
+      const normalizedOld = oldStr.replace(/\r\n/g, '\n');
+      if (normalizedContent.includes(normalizedOld)) {
+        const newContent = normalizedContent.replace(normalizedOld, safeReplacement);
+        writeFileSync(filePath, newContent, 'utf-8');
+        return `✓ Edit applied to ${filePath} (line endings normalized)`;
+      }
+
+      return `Error: old_string not found in file. Make sure it matches exactly (including whitespace and line endings).\n` +
+        `  Tip: check for leading/trailing spaces or \\r\\n vs \\n differences.`;
     } catch (err) {
       return `Error editing file: ${err instanceof Error ? err.message : String(err)}`;
     }

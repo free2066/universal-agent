@@ -46,7 +46,14 @@ export class AgentCore {
    * and stores the command here. The next user turn is checked: if it's a confirmation
    * ('yes'/'y'/'confirm'/etc.) the command is executed; otherwise it is cancelled.
    */
-  private pendingConfirmation: { command: string; cwd: string; label: string } | null = null;
+  private pendingConfirmation: {
+    command: string;
+    cwd: string;
+    label: string;
+    /** Index in this.history where the synthetic [SYSTEM] message was injected.
+     *  Stored so we can splice it out after the user confirms or cancels (b5 fix). */
+    injectedAt?: number;
+  } | null = null;
 
   constructor(options: AgentOptions) {
     this.currentDomain = options.domain;
@@ -150,11 +157,16 @@ export class AgentCore {
     // ── Pending confirmation check (kstack article #15313 dry-run + confirm flow) ──
     // If there's a dangerous command waiting for approval, the next user turn decides.
     if (this.pendingConfirmation) {
-      const { command, cwd, label } = this.pendingConfirmation;
+      const { command, cwd, label, injectedAt } = this.pendingConfirmation;
       this.pendingConfirmation = null;
 
       const isConfirmed = /^\s*(yes|y|confirm|ok|go|proceed|execute|run it|do it)\s*$/i.test(prompt.trim());
       if (isConfirmed) {
+        // Remove the synthetic [SYSTEM] message injected at the end of the previous turn
+        // so it doesn't pollute the permanent conversation history (fix b5).
+        if (injectedAt !== undefined && this.history.length > injectedAt) {
+          this.history.splice(injectedAt);
+        }
         onChunk(`\n✅ Confirmed. Executing: \`${command}\`\n\n`);
         try {
           const { execSync } = await import('child_process');
@@ -177,6 +189,10 @@ export class AgentCore {
         onChunk('\n');
         return;
       } else {
+        // Cancelled — also clean up the injected synthetic message
+        if (injectedAt !== undefined && this.history.length > injectedAt) {
+          this.history.splice(injectedAt);
+        }
         onChunk(`\n🚫 Cancelled. The following command was NOT executed:\n  \`${command}\`\n  (${label})\n`);
         return;
       }
@@ -215,7 +231,6 @@ export class AgentCore {
       }));
     }
 
-    const allTools = this.registry.getToolDefinitions();
     let iteration = 0;
     const MAX_ITERATIONS = 15;
 
@@ -233,9 +248,14 @@ export class AgentCore {
         model: modelManager.getCurrentModel('main'),
       }));
 
+      // Refresh tool list every iteration to pick up any conditionally-activated tools.
+      // This replaces the previous approach of mutating a shared allTools array
+      // (which had a race condition if runStream were called concurrently).
+      const currentTools = this.registry.getToolDefinitions();
+
       // Tool selection: filter to relevant tools when count > threshold
       const lastUserMsg = [...this.history].reverse().find((m) => m.role === 'user')?.content ?? prompt;
-      const tools = await selectTools(allTools, lastUserMsg, this.history);
+      const tools = await selectTools(currentTools, lastUserMsg, this.history);
 
       let response;
       try {
@@ -326,9 +346,8 @@ export class AgentCore {
             const newlyActivated = this.registry.evaluateConditionals(call.name, result);
             if (newlyActivated.length > 0) {
               onChunk(`\n🔓 Unlocked tools: ${newlyActivated.join(', ')}\n`);
-              // Refresh allTools so the next iteration includes newly activated tools
-              allTools.length = 0;
-              allTools.push(...this.registry.getToolDefinitions());
+              // No need to explicitly refresh — currentTools is re-fetched at the top
+              // of each while iteration, so newly activated tools appear next turn.
             }
 
             await triggerHook(createHookEvent('tool', 'after', {
@@ -353,7 +372,14 @@ export class AgentCore {
                 ? String(call.arguments.cwd)
                 : process.cwd();
 
-              this.pendingConfirmation = { command: dangerousCommand, cwd: cmdCwd, label: header };
+              this.pendingConfirmation = {
+                command: dangerousCommand,
+                cwd: cmdCwd,
+                label: header,
+                // Record history length BEFORE we inject the synthetic [SYSTEM] message
+                // so we can splice it out after the user confirms or cancels (fix b5).
+                injectedAt: this.history.length + toolResults.length,
+              };
 
               // Push a synthetic tool result so history stays valid
               toolResults.push({

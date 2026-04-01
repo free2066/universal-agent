@@ -19,7 +19,7 @@
  */
 
 import type { Message } from '../models/types.js';
-import { estimateHistoryTokens } from './context-compressor.js';
+import { estimateHistoryTokens, estimateMessageTokens } from './context-compressor.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('ctx-editor');
@@ -63,10 +63,6 @@ interface ClearableEntry {
   estimatedTokens: number;
   /** Name of tool that produced this result */
   toolName: string;
-}
-
-function estimateMessageTokens(msg: Message): number {
-  return Math.ceil(msg.content.length / 4) + 4;
 }
 
 /**

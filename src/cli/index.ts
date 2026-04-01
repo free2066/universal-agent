@@ -41,6 +41,8 @@ program
   .option('--safe', 'Enable safe mode (blocks dangerous commands)', false)
   .option('-v, --verbose', 'Show tool call details')
   .action(async (options) => {
+    validateDomain(options.domain);
+    validateModel(options.model);
     printBanner();
     const agent = new AgentCore({
       domain: options.domain,

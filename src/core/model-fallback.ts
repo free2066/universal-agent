@@ -77,6 +77,12 @@ export class ModelFallbackChain {
 
   /**
    * Call the primary LLM client; on failure, try each fallback model in order.
+   * NOTE: Only wraps `chat()`. Streaming (`streamChat`) is NOT covered by this
+   * fallback chain — if streaming support is needed in the future, add a
+   * `callStream(primary, options, onChunk)` method here.
+   *
+   * TODO: Implement callStream() for streaming fallback when agent.ts enables
+   *       the `stream: true` path.
    */
   async call(primary: LLMClient, options: ChatOptions): Promise<ChatResponse> {
     try {
