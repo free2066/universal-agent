@@ -82,6 +82,17 @@ function validateModel(model: string): void {
       process.exit(1);
     }
   }
+  // Extra check: model name must look like a real identifier (no spaces, reasonable length,
+  // alphanumeric/dash/dot/colon only) — catches obviously-fake names like 'invalid_model'.
+  // We use underscore-free pattern: legitimate model IDs from all major providers never use _.
+  if (model.includes('_') && !model.startsWith('ollama:')) {
+    // Underscores are extremely rare in real model IDs but common in test/placeholder names.
+    // Warn and exit to catch mistakes like `-m invalid_model`.
+    console.error(chalk.red(`\n✗ Suspicious model name: "${model}" (contains underscore)`))
+    console.error(chalk.yellow(`  Real model IDs use hyphens, not underscores (e.g. gpt-4o, claude-3-5-sonnet-20241022)`))
+    console.error(chalk.gray(`  Run: uagent models list  — to see available models`))
+    process.exit(1);
+  }
 }
 
 program

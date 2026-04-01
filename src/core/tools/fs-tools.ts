@@ -172,8 +172,9 @@ export const bashTool: ToolRegistration = {
         { pat: /rm\s+-rf\s+/,                     label: 'recursive force delete' },
         { pat: /mkfs/,                              label: 'filesystem format' },
         { pat: /dd\s+if=/,                         label: 'raw disk copy (dd)' },
-        { pat: /\|\s*(ba|z|da)?sh\s*$/,            label: 'pipe to shell (code execution)' },
-        { pat: /\|\s*(ba|z|da)?sh\s+-/,            label: 'pipe to shell (code execution)' },
+        // Match bare shell names (bash, sh, zsh, dash) AND absolute paths (/bin/bash, /usr/bin/bash, etc.)
+        { pat: /\|\s*(\/\S+\/)?(ba|z|da)?sh\s*$/,  label: 'pipe to shell (code execution)' },
+        { pat: /\|\s*(\/\S+\/)?(ba|z|da)?sh\s+-/,  label: 'pipe to shell (code execution)' },
         { pat: /sudo\s+rm\s+-[^\s]*r/,             label: 'sudo recursive delete' },
         { pat: /sudo\s+mkfs/,                       label: 'sudo filesystem format' },
         { pat: /sudo\s+dd\s/,                       label: 'sudo raw disk copy' },

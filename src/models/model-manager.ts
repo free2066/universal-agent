@@ -140,7 +140,16 @@ export class ModelManager {
     try {
       const data = JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));
       if (data.profiles) {
-        for (const p of data.profiles) this.profiles.set(p.name, p);
+        const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'custom']);
+        for (const p of data.profiles) {
+          // Validate each profile before loading: must have a known provider and non-empty modelName.
+          // This prevents test-injected garbage (e.g. 'non-existent-model-12345') from
+          // polluting the active profile list across sessions (fix g3).
+          if (p && typeof p.name === 'string' && typeof p.modelName === 'string'
+              && p.modelName.length > 0 && validProviders.has(p.provider)) {
+            this.profiles.set(p.name, p);
+          }
+        }
       }
       if (data.pointers) {
         // Only merge recognised pointer keys — silently drop any stale / invalid keys
