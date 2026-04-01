@@ -147,7 +147,7 @@ export class ModelManager {
         case 'ollama':   return `ollama:${profile.modelName}`;
         case 'gemini':   return profile.modelName; // starts with 'gemini'
         case 'deepseek': return profile.modelName; // starts with 'deepseek'
-        case 'moonshot': return profile.modelName.startsWith('kimi') ? profile.modelName : profile.modelName;
+        case 'moonshot': return profile.modelName;
         case 'qwen':     return profile.modelName; // starts with 'qwen'
         case 'mistral':  return profile.modelName; // starts with 'mistral'/'mixtral'
         case 'custom':   return `openai-compat:${profile.modelName}`;

@@ -43,7 +43,7 @@ function estimateMessageTokens(msg: Message): number {
   const contentTokens = estimateTokens(msg.content, msg.role === 'tool');
   const toolCallTokens = msg.toolCalls
     ? msg.toolCalls.reduce(
-        (sum, tc) => sum + estimateTokens(JSON.stringify(tc), true),
+        (sum, tc) => sum + estimateTokens(JSON.stringify(tc.arguments), true) + 10,
         0,
       )
     : 0;

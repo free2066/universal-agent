@@ -378,10 +378,8 @@ class GeminiClient implements LLMClient {
 
   private buildRequest(options: ChatOptions) {
     // Convert system prompt + messages to Gemini format
-    const contents: GeminiContent[] = [];
-
     // System instruction as a special "user" turn (Gemini uses systemInstruction field)
-    const geminiContents = options.messages.map((msg) => {
+    const contents = options.messages.map((msg) => {
       const role = msg.role === 'assistant' ? 'model' : 'user';
       if (msg.role === 'tool') {
         return {
@@ -391,8 +389,6 @@ class GeminiClient implements LLMClient {
       }
       return { role: role as 'user' | 'model', parts: [{ text: msg.content }] };
     });
-
-    contents.push(...geminiContents);
 
     const body: Record<string, unknown> = {
       systemInstruction: { parts: [{ text: options.systemPrompt }] },
@@ -420,11 +416,12 @@ class GeminiClient implements LLMClient {
     // Check for function calls
     const funcCalls = parts.filter((p) => p.functionCall);
     if (funcCalls.length) {
+      const callIdBase = `gemini-call-${Date.now()}`;
       return {
         type: 'tool_calls',
         content: parts.filter((p) => p.text).map((p) => p.text ?? '').join(''),
         toolCalls: funcCalls.map((p, idx) => ({
-          id: `gemini-call-${idx}`,
+          id: `${callIdBase}-${idx}`,
           name: p.functionCall!.name,
           arguments: p.functionCall!.args as Record<string, unknown>,
         })),

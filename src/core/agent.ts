@@ -37,6 +37,7 @@ export class AgentCore {
   private verbose: boolean;
   private safeMode: boolean;
   private mcpManager: MCPManager;
+  private fallbackChain: ModelFallbackChain | null;
 
   constructor(options: AgentOptions) {
     this.currentDomain = options.domain;
@@ -52,6 +53,15 @@ export class AgentCore {
     this.router = new DomainRouter();
     this.registry = new ToolRegistry();
     this.mcpManager = new MCPManager();
+
+    // Set up model fallback chain from env (AGENT_FALLBACK_MODELS=model1,model2)
+    const fallbackModels = (process.env.AGENT_FALLBACK_MODELS ?? '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean);
+    this.fallbackChain = fallbackModels.length > 0
+      ? new ModelFallbackChain(fallbackModels)
+      : null;
 
     this.registerAllTools(options.domain);
   }
@@ -159,15 +169,6 @@ export class AgentCore {
       }));
     }
 
-    // Set up model fallback chain from env (AGENT_FALLBACK_MODELS=model1,model2)
-    const fallbackModels = (process.env.AGENT_FALLBACK_MODELS ?? '')
-      .split(',')
-      .map((m) => m.trim())
-      .filter(Boolean);
-    const fallbackChain = fallbackModels.length > 0
-      ? new ModelFallbackChain(fallbackModels)
-      : null;
-
     const allTools = this.registry.getToolDefinitions();
     let iteration = 0;
     const MAX_ITERATIONS = 15;
@@ -198,8 +199,8 @@ export class AgentCore {
           tools,
           stream: false,
         };
-        response = fallbackChain
-          ? await fallbackChain.call(this.llm, chatOpts)
+        response = this.fallbackChain
+          ? await this.fallbackChain.call(this.llm, chatOpts)
           : await this.llm.chat(chatOpts);
       } catch (err) {
         onChunk(`\n❌ LLM error: ${err instanceof Error ? err.message : String(err)}\n`);

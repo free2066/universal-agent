@@ -62,13 +62,19 @@ function maxSimilarityToSelected(
   cache: Map<string, Set<string>>,
 ): number {
   if (selected.length === 0) return 0;
-  const tokensA = cache.get(item.id) ?? tokenize(item.content);
-  if (!cache.has(item.id)) cache.set(item.id, tokensA);
+  let tokensA = cache.get(item.id);
+  if (!tokensA) {
+    tokensA = tokenize(item.content);
+    cache.set(item.id, tokensA);
+  }
 
   let max = 0;
   for (const s of selected) {
-    const tokensB = cache.get(s.id) ?? tokenize(s.content);
-    if (!cache.has(s.id)) cache.set(s.id, tokensB);
+    let tokensB = cache.get(s.id);
+    if (!tokensB) {
+      tokensB = tokenize(s.content);
+      cache.set(s.id, tokensB);
+    }
     const sim = jaccardSimilarity(tokensA, tokensB);
     if (sim > max) max = sim;
   }

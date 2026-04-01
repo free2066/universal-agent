@@ -135,7 +135,8 @@ export function clearHistory(projectRoot?: string): void {
         }
       });
 
-    writeFileSync(HISTORY_FILE, lines.join('\n') + (lines.length ? '\n' : ''), {
+    const outContent = lines.length > 0 ? lines.join('\n') + '\n' : '';
+    writeFileSync(HISTORY_FILE, outContent, {
       encoding: 'utf8',
       mode: 0o600,
     });
