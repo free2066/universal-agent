@@ -216,10 +216,14 @@ class AnthropicClient implements LLMClient {
   async chat(options: ChatOptions): Promise<ChatResponse> {
     const messages = this.convertMessages(options.messages);
     const hasTools = (options.tools?.length ?? 0) > 0;
+    // Respect profile.maxTokens when available (falls back to 8192 for compatibility).
+    // modelManager may not be available here (llm-client has no hard dep on it), so we
+    // read from the environment variable ANTHROPIC_MAX_TOKENS as a soft override.
+    const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
 
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       system: options.systemPrompt,
       messages,
       ...(hasTools ? {
@@ -251,9 +255,10 @@ class AnthropicClient implements LLMClient {
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
     const messages = this.convertMessages(options.messages);
+    const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
     const stream = this.client.messages.stream({
       model: this.model,
-      max_tokens: 8192,
+      max_tokens: maxTokens,
       system: options.systemPrompt,
       messages,
     });
@@ -416,7 +421,9 @@ class GeminiClient implements LLMClient {
     // Check for function calls
     const funcCalls = parts.filter((p) => p.functionCall);
     if (funcCalls.length) {
-      const callIdBase = `gemini-call-${Date.now()}`;
+      // Use a unique suffix to avoid callId collision when multiple tool calls land
+      // in the same millisecond (consistent with agent.ts callId fix).
+      const callIdBase = `gemini-call-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       return {
         type: 'tool_calls',
         content: parts.filter((p) => p.text).map((p) => p.text ?? '').join(''),

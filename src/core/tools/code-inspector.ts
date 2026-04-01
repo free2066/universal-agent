@@ -518,59 +518,16 @@ export const codeInspectorTool: ToolRegistration = {
   },
   handler: async (args) => {
     const targetPath = resolve(process.cwd(), (args.path as string) || '.');
-    const minSeverity = (args.severity as Severity) || 'info';
-    const filterCategory = (args.category as Category | 'all') || 'all';
     const verbose = (args.verbose as boolean) || false;
     const format = (args.format as string) || 'report';
 
-    if (!existsSync(targetPath)) {
-      return `Error: Path not found: ${targetPath}`;
-    }
-
-    // Bug fix: wrap statSync in try/catch to avoid crashing on broken symlinks
-    let st: ReturnType<typeof statSync>;
-    try {
-      st = statSync(targetPath);
-    } catch (err) {
-      return `Error: Cannot stat path: ${targetPath} — ${err instanceof Error ? err.message : String(err)}`;
-    }
-
-    const files = st.isFile()
-      ? [targetPath]
-      : collectFiles(targetPath, ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
-
-    const rootDir = st.isFile() ? resolve(targetPath, '..') : targetPath;
-    const severityOrder: Severity[] = ['info', 'warning', 'error', 'critical'];
-    const minIdx = severityOrder.indexOf(minSeverity);
-
-    let allFindings: Finding[] = [];
-    for (const file of files) {
-      allFindings.push(...scanFile(file, rootDir));
-    }
-
-    // Filter
-    allFindings = allFindings.filter((f) => {
-      const sevOk = severityOrder.indexOf(f.severity) >= minIdx;
-      const catOk = filterCategory === 'all' || f.category === filterCategory;
-      return sevOk && catOk;
+    // Delegate entirely to inspectProject (single source of truth for scan logic)
+    const result = await inspectProject(targetPath, {
+      severityFilter: (args.severity as Severity) || 'info',
+      categoryFilter: (args.category as Category | 'all') || 'all',
     });
 
-    // Sort: critical first, then by file name
-    allFindings.sort((a, b) => {
-      const diff = severityOrder.indexOf(b.severity) - severityOrder.indexOf(a.severity);
-      return diff !== 0 ? diff : a.file.localeCompare(b.file);
-    });
-
-    const summary: Record<Severity, number> = { critical: 0, error: 0, warning: 0, info: 0 };
-    for (const f of allFindings) summary[f.severity]++;
-
-    const result: InspectionResult = {
-      scanned: files.length,
-      findings: allFindings,
-      summary,
-      score: computeScore(allFindings, files.length),
-    };
-
+    // inspectProject already handles not-found / broken-symlink paths gracefully
     if (format === 'json') return JSON.stringify(result, null, 2);
     return formatReport(result, verbose);
   },

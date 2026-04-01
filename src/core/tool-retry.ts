@@ -35,7 +35,24 @@ export const DEFAULT_TOOL_RETRY_CONFIG: ToolRetryConfig = {
   backoffFactor: 2.0,
   maxDelayMs: 10_000,
   jitter: true,
+  // By default, skip retry for HTTP 4xx errors (client errors are permanent)
+  retryOn: isRetryableError,
 };
+
+/**
+ * Default retry predicate: retry on 5xx / network errors; skip on 4xx client errors.
+ * Checks the error message for common HTTP status codes or fetch failure signals.
+ */
+export function isRetryableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Explicitly skip 4xx (client errors): bad request, auth, not found, rate-limit
+  // Note: 429 (rate-limit) is technically retryable but needs back-pressure logic;
+  // leaving it as non-retryable here avoids hammering the endpoint.
+  const clientError = /\b4[0-9]{2}\b/.test(msg);
+  if (clientError) return false;
+  // Retry on 5xx, network failure, timeout, ECONNRESET, etc.
+  return true;
+}
 
 /**
  * Calculate delay for retry attempt `n` (0-indexed).
@@ -78,9 +95,10 @@ export async function withToolRetry<T>(
     } catch (err) {
       lastErr = err;
 
-      // Check if we should retry this error
+      // Check if we should retry this error (always evaluated; default retryOn skips 4xx)
       if (cfg.retryOn && !cfg.retryOn(err)) {
-        log.debug(`Tool "${toolName}" error is not retryable, re-throwing`);
+        const errMsg2 = err instanceof Error ? err.message : String(err);
+        log.debug(`Tool "${toolName}" error is not retryable (skipping retries): ${errMsg2}`);
         throw err;
       }
 

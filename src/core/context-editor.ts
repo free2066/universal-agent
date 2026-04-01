@@ -81,10 +81,11 @@ function findClearableCandidates(
     if (msg.content === CLEARED_PLACEHOLDER) continue;
 
     // Identify tool name from toolCallId.
-    // callId format is "${toolName}-${timestamp}", but toolName may itself contain
-    // hyphens (e.g. "web-search"), so we strip only the trailing "-<digits>" suffix.
+    // callId format is "${toolName}-${timestamp}-${random5chars}" (see agent.ts).
+    // toolName may itself contain hyphens (e.g. "web-search"), so we strip only
+    // the trailing "-<digits>-<alphanum>" or "-<digits>" suffix.
     const rawId = msg.toolCallId ?? 'unknown';
-    const toolName = rawId.replace(/-\d+$/, '');
+    const toolName = rawId.replace(/-\d+-[a-z0-9]+$/, '').replace(/-\d+$/, '');
     if (cfg.excludeTools.has(toolName)) continue;
 
     candidates.push({

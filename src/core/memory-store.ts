@@ -256,10 +256,14 @@ export class MemoryStore {
       item.accessCount += 1;
       item.updatedAt = Date.now();
     }
-    // Persist updated access counts lazily
+    // Persist updated access counts lazily — but only if something actually changed
+    // (i.e. recalled is non-empty, meaning accessCount was bumped on at least one item).
+    // Previously this wrote to disk on every recall even for zero-result queries.
     if (recalled.length > 0) {
       for (const type of (['pinned', 'insight', 'fact'] as MemoryType[])) {
-        if (this.cacheLoaded.has(type)) this.save(type);
+        if (this.cacheLoaded.has(type) && (this.cache.get(type) ?? []).some((m) => recalled.includes(m))) {
+          this.save(type);
+        }
       }
     }
 
@@ -423,19 +427,26 @@ ${convText}`;
 
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
-let _store: MemoryStore | null = null;
+// Key: resolved project path → MemoryStore instance
+// Using a Map instead of a single variable so switching projects within
+// the same process (e.g. multi-repo sessions) gets the correct store.
+const _storeCache = new Map<string, MemoryStore>();
 
 /**
- * Get the global MemoryStore singleton for the current working directory.
- * Call `resetMemoryStore()` in tests to get a fresh instance.
+ * Get the MemoryStore for the given project root (or cwd).
+ * Returns the same instance for repeated calls with the same root.
+ * Call `resetMemoryStore()` in tests to clear the cache.
  */
 export function getMemoryStore(projectRoot?: string): MemoryStore {
-  if (!_store) {
-    _store = new MemoryStore(projectRoot ?? process.cwd());
+  const key = resolve(projectRoot ?? process.cwd());
+  let store = _storeCache.get(key);
+  if (!store) {
+    store = new MemoryStore(key);
+    _storeCache.set(key, store);
   }
-  return _store;
+  return store;
 }
 
 export function resetMemoryStore(): void {
-  _store = null;
+  _storeCache.clear();
 }
