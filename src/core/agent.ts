@@ -11,6 +11,7 @@ import { selfHealTool } from './tools/self-heal.js';
 import { MCPManager } from './mcp-manager.js';
 import { autoCompact } from './context-compressor.js';
 import { addToHistory } from './session-history.js';
+import { getMemoryStore } from './memory-store.js';
 import { createLogger } from './logger.js';
 import { triggerHook, createHookEvent } from './hooks.js';
 import { withToolRetry } from './tool-retry.js';
@@ -232,7 +233,24 @@ export class AgentCore {
 
     // Build system prompt with project context (AGENTS.md)
     const baseSystemPrompt = this.router.getSystemPrompt(domain);
-    const systemPrompt = buildSystemPromptWithContext(baseSystemPrompt);
+    let systemPrompt = buildSystemPromptWithContext(baseSystemPrompt);
+
+    // ── Memory recall: inject relevant long-term memories into system prompt ──
+    // Following mem9's design: pinned memories are always included;
+    // insight/fact are ranked by relevance to the current prompt.
+    try {
+      const store = getMemoryStore(process.cwd());
+      const memories = store.recall(prompt);
+      if (memories.length > 0) {
+        const memLines = memories.map((m) => {
+          const tag = m.type === 'pinned' ? '📌' : m.type === 'insight' ? '💡' : '📝';
+          return `${tag} ${m.content}`;
+        }).join('\n');
+        systemPrompt += `\n\n## Relevant Memories (from previous sessions)\n${memLines}`;
+      }
+    } catch {
+      // Memory recall failure is non-fatal
+    }
 
     const userMessage: Message = {
       role: 'user',

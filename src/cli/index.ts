@@ -273,6 +273,118 @@ program
     }
   });
 
+// ── memory ───────────────────────────────────────────────
+const memCmd = program.command('memory').description('Manage long-term memory for this project');
+
+memCmd.command('list')
+  .description('List all memories for the current project')
+  .option('-t, --type <type>', 'Filter by type: pinned|insight|fact')
+  .action(async (options) => {
+    const { getMemoryStore } = await import('../core/memory-store.js');
+    const store = getMemoryStore(process.cwd());
+    const types = options.type ? [options.type] : undefined;
+    const items = store.list({ types });
+    if (!items.length) {
+      console.log(chalk.gray('\n  No memories found.\n'));
+      return;
+    }
+    const icon: Record<string, string> = { pinned: '📌', insight: '💡', fact: '📝' };
+    console.log(chalk.yellow('\n🧠 Long-term Memories:\n'));
+    for (const m of items) {
+      const ttlStr = m.ttl ? chalk.gray(` [expires ${new Date(m.ttl).toLocaleDateString()}]`) : '';
+      console.log(`  ${icon[m.type] ?? '•'} ${chalk.cyan(m.id)} ${chalk.white(m.content.slice(0, 100))}${ttlStr}`);
+      if (m.tags.length) console.log(`     ${chalk.gray('tags: ' + m.tags.join(', '))}`);
+    }
+    const stats = store.stats();
+    console.log(chalk.gray(`\n  Total: ${stats.total} (📌 ${stats.pinned} pinned, 💡 ${stats.insight} insight, 📝 ${stats.fact} fact)\n`));
+  });
+
+memCmd.command('add <text>')
+  .description('Add a pinned memory (permanent)')
+  .option('-t, --type <type>', 'Memory type: pinned|insight|fact', 'pinned')
+  .option('--tags <tags>', 'Comma-separated tags')
+  .action(async (text, options) => {
+    const { getMemoryStore } = await import('../core/memory-store.js');
+    const store = getMemoryStore(process.cwd());
+    const tags = options.tags ? options.tags.split(',').map((t: string) => t.trim()) : [];
+    const id = store.add({ type: options.type, content: text, tags, source: 'user' });
+    console.log(chalk.green(`✓ Memory saved [${id}]`));
+  });
+
+memCmd.command('delete <id>')
+  .description('Delete a memory by ID')
+  .action(async (id) => {
+    const { getMemoryStore } = await import('../core/memory-store.js');
+    const store = getMemoryStore(process.cwd());
+    const ok = store.delete(id);
+    console.log(ok ? chalk.green(`✓ Deleted ${id}`) : chalk.red(`✗ Memory not found: ${id}`));
+  });
+
+memCmd.command('search <query>')
+  .description('Search memories by relevance')
+  .option('-n, --limit <n>', 'Max results', '5')
+  .action(async (query, options) => {
+    const { getMemoryStore } = await import('../core/memory-store.js');
+    const store = getMemoryStore(process.cwd());
+    const limit = parseInt(options.limit || '5', 10);
+    const results = store.recall(query, { limit });
+    if (!results.length) {
+      console.log(chalk.gray('\n  No relevant memories found.\n'));
+      return;
+    }
+    const icon: Record<string, string> = { pinned: '📌', insight: '💡', fact: '📝' };
+    console.log(chalk.yellow(`\n🔍 Memory search: "${query}"\n`));
+    for (const m of results) {
+      console.log(`  ${icon[m.type] ?? '•'} ${chalk.cyan(m.id)} ${chalk.white(m.content)}`);
+    }
+    console.log();
+  });
+
+memCmd.command('ingest')
+  .description('Trigger Smart Ingest: extract memories from recent session history (requires API key)')
+  .action(async () => {
+    const { getMemoryStore } = await import('../core/memory-store.js');
+    const { getProjectHistory } = await import('../core/session-history.js');
+    const store = getMemoryStore(process.cwd());
+    const history = getProjectHistory(process.cwd());
+    if (!history.length) {
+      console.log(chalk.gray('No session history found to ingest.'));
+      return;
+    }
+    const spinner = ora('Running Smart Ingest (LLM extraction)...').start();
+    try {
+      // Build minimal Message[] from history prompts
+      const messages = history.slice(0, 30).reverse().map((h) => ({
+        role: 'user' as const,
+        content: h.prompt,
+      }));
+      const result = await store.ingest(messages);
+      spinner.succeed(`Ingest complete: +${result.added} added, ~${result.updated} updated, ${result.skipped} skipped`);
+    } catch (err) {
+      spinner.fail('Ingest failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  });
+
+memCmd.command('gc')
+  .description('Garbage collect expired fact memories')
+  .action(async () => {
+    const { getMemoryStore } = await import('../core/memory-store.js');
+    const store = getMemoryStore(process.cwd());
+    const removed = store.gc();
+    console.log(chalk.green(`✓ GC complete: removed ${removed} expired/excess memories`));
+  });
+
+memCmd.command('clear')
+  .description('Clear all memories for this project')
+  .option('-t, --type <type>', 'Only clear specific type: pinned|insight|fact')
+  .action(async (options) => {
+    const { getMemoryStore } = await import('../core/memory-store.js');
+    const store = getMemoryStore(process.cwd());
+    const types = options.type ? [options.type] : undefined;
+    store.clear(types as never);
+    console.log(chalk.green(`✓ Memories cleared${options.type ? ` (type: ${options.type})` : ''}`));
+  });
+
 // ── init ─────────────────────────────────────────────────
 program
   .command('init')
@@ -394,6 +506,63 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     }
     if (input === '/init') {
       console.log(chalk.green(initAgentsMd(process.cwd())));
+      rl.prompt(); return;
+    }
+    // /memory — long-term memory commands (mem9-inspired)
+    if (input.startsWith('/memory')) {
+      const parts = input.split(/\s+/);
+      const sub = parts[1];
+      const { getMemoryStore } = await import('../core/memory-store.js');
+      const store = getMemoryStore(process.cwd());
+
+      if (!sub) {
+        const stats = store.stats();
+        console.log(chalk.yellow('\n🧠 Memory Stats:'));
+        console.log(`  📌 Pinned  : ${stats.pinned}`);
+        console.log(`  💡 Insight : ${stats.insight}`);
+        console.log(`  📝 Fact    : ${stats.fact}`);
+        console.log(chalk.gray('\n  /memory pin <text>  — pin a memory'));
+        console.log(chalk.gray('  /memory list        — list all memories'));
+        console.log(chalk.gray('  /memory forget      — clear all memories'));
+        console.log(chalk.gray('  /memory ingest      — extract insights from this session\n'));
+      } else if (sub === 'pin') {
+        const text = parts.slice(2).join(' ');
+        if (!text) {
+          console.log(chalk.red('Usage: /memory pin <text>'));
+        } else {
+          const id = store.add({ type: 'pinned', content: text, tags: [], source: 'user' });
+          console.log(chalk.green(`📌 Pinned [${id}]: ${text}`));
+        }
+      } else if (sub === 'list') {
+        const items = store.list();
+        if (!items.length) {
+          console.log(chalk.gray('\n  No memories yet.\n'));
+        } else {
+          const icon: Record<string, string> = { pinned: '📌', insight: '💡', fact: '📝' };
+          console.log(chalk.yellow('\n🧠 All memories:\n'));
+          for (const m of items) {
+            console.log(`  ${icon[m.type] ?? '•'} ${chalk.cyan(m.id)}  ${m.content.slice(0, 100)}`);
+            if (m.tags.length) console.log(`     ${chalk.gray('tags: ' + m.tags.join(', '))}`);
+          }
+          console.log();
+        }
+      } else if (sub === 'forget') {
+        store.clear();
+        console.log(chalk.green('✓ All memories cleared for this project'));
+      } else if (sub === 'ingest') {
+        rl.pause();
+        const spinner2 = ora('Running Smart Ingest...').start();
+        try {
+          const history2 = agent.getHistory();
+          const result = await store.ingest(history2);
+          spinner2.succeed(`Ingest: +${result.added} added, ~${result.updated} updated, ${result.skipped} skipped`);
+        } catch (e2) {
+          spinner2.fail('Ingest failed: ' + (e2 instanceof Error ? e2.message : String(e2)));
+        }
+        rl.resume();
+      } else {
+        console.log(chalk.gray('Unknown /memory subcommand. Try: /memory  /memory pin <text>  /memory list  /memory forget  /memory ingest'));
+      }
       rl.prompt(); return;
     }
     // /rules — list loaded rule files (kstack article #15310 SSOT pattern)
