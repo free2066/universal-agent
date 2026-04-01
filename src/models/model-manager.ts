@@ -142,7 +142,16 @@ export class ModelManager {
       if (data.profiles) {
         for (const p of data.profiles) this.profiles.set(p.name, p);
       }
-      if (data.pointers) this.pointers = { ...this.pointers, ...data.pointers };
+      if (data.pointers) {
+        // Only merge recognised pointer keys — silently drop any stale / invalid keys
+        // that may have been written by older versions (fix f2).
+        const validKeys = new Set<string>(['main', 'task', 'compact', 'quick']);
+        for (const [k, v] of Object.entries(data.pointers)) {
+          if (validKeys.has(k) && typeof v === 'string') {
+            (this.pointers as unknown as Record<string, string>)[k] = v;
+          }
+        }
+      }
     } catch { /* ignore */ }
   }
 
@@ -237,7 +246,14 @@ export class ModelManager {
   }
 
   getPointers(): ModelPointers {
-    return { ...this.pointers };
+    // Return only the four canonical pointer keys — never expose stale/invalid
+    // keys that may linger in the in-memory object from old config files (fix f3).
+    return {
+      main:    this.pointers.main,
+      task:    this.pointers.task,
+      compact: this.pointers.compact,
+      quick:   this.pointers.quick,
+    };
   }
 
   recordUsage(inputTokens: number, outputTokens: number, model: string) {

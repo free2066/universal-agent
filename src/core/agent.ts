@@ -29,7 +29,8 @@ export interface AgentOptions {
 }
 
 export class AgentCore {
-  private llm: LLMClient;
+  /** Lazily initialised on first use to avoid API-key checks at construction time. */
+  private llm: LLMClient | null = null;
   private router: DomainRouter;
   private registry: ToolRegistry;
   private history: Message[] = [];
@@ -62,9 +63,13 @@ export class AgentCore {
 
     if (this.safeMode) process.env.AGENT_SAFE_MODE = '1';
 
-    // Set model on manager
+    // Set model on manager.
+    // NOTE: we only call setPointer here, NOT getClient().
+    // getClient() triggers OpenAI SDK construction which validates API keys immediately.
+    // Deferring to the first actual LLM call gives the user a chance to see
+    // the REPL prompt before crashing with a missing-key error (fix f1).
     modelManager.setPointer('main', options.model);
-    this.llm = modelManager.getClient('main');
+    // this.llm is initialised lazily in _getLLM() below.
 
     this.router = new DomainRouter();
     this.registry = new ToolRegistry();
@@ -127,7 +132,13 @@ export class AgentCore {
 
   setModel(model: string) {
     modelManager.setPointer('main', model);
-    this.llm = modelManager.getClient('main');
+    this.llm = null; // reset lazy cache so next _getLLM() picks up the new model
+  }
+
+  /** Return the current LLM client, initialising it on first use (lazy init). */
+  private _getLLM(): LLMClient {
+    if (!this.llm) this.llm = modelManager.getClient('main');
+    return this.llm;
   }
 
   clearHistory() {
@@ -266,8 +277,8 @@ export class AgentCore {
           stream: false,
         };
         response = this.fallbackChain
-          ? await this.fallbackChain.call(this.llm, chatOpts)
-          : await this.llm.chat(chatOpts);
+          ? await this.fallbackChain.call(this._getLLM(), chatOpts)
+          : await this._getLLM().chat(chatOpts);
       } catch (err) {
         onChunk(`\n❌ LLM error: ${err instanceof Error ? err.message : String(err)}\n`);
         break;
@@ -405,8 +416,8 @@ export class AgentCore {
               const confirmOpts = { systemPrompt, messages: this.history, tools: [], stream: false };
               try {
                 const confirmResp = this.fallbackChain
-                  ? await this.fallbackChain.call(this.llm, confirmOpts)
-                  : await this.llm.chat(confirmOpts);
+                  ? await this.fallbackChain.call(this._getLLM(), confirmOpts)
+                  : await this._getLLM().chat(confirmOpts);
                 if (confirmResp.type === 'text') {
                   onChunk(confirmResp.content);
                   this.history.push({ role: 'assistant', content: confirmResp.content });
