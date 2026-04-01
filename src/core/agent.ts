@@ -13,6 +13,10 @@ import { autoCompact } from './context-compressor.js';
 import { addToHistory } from './session-history.js';
 import { createLogger } from './logger.js';
 import { triggerHook, createHookEvent } from './hooks.js';
+import { withToolRetry } from './tool-retry.js';
+import { ModelFallbackChain } from './model-fallback.js';
+import { editContextIfNeeded } from './context-editor.js';
+import { selectTools } from './tool-selector.js';
 
 const log = createLogger('agent');
 
@@ -152,26 +156,48 @@ export class AgentCore {
       model: modelManager.getCurrentModel('main'),
     }));
 
-    const tools = this.registry.getToolDefinitions();
+    // Set up model fallback chain from env (AGENT_FALLBACK_MODELS=model1,model2)
+    const fallbackModels = (process.env.AGENT_FALLBACK_MODELS ?? '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean);
+    const fallbackChain = fallbackModels.length > 0
+      ? new ModelFallbackChain(fallbackModels)
+      : null;
+
+    const allTools = this.registry.getToolDefinitions();
     let iteration = 0;
     const MAX_ITERATIONS = 15;
 
     while (iteration < MAX_ITERATIONS) {
       iteration++;
 
+      // Context editing: selectively clear old tool results before hitting LLM
+      const cleared = editContextIfNeeded(this.history);
+      if (cleared > 0) {
+        onChunk(`\n✂️  Cleared ${cleared} old tool result(s) to free context space\n`);
+      }
+
       await triggerHook(createHookEvent('agent', 'turn', {
         iteration,
         model: modelManager.getCurrentModel('main'),
       }));
 
+      // Tool selection: filter to relevant tools when count > threshold
+      const lastUserMsg = [...this.history].reverse().find((m) => m.role === 'user')?.content ?? prompt;
+      const tools = await selectTools(allTools, lastUserMsg, this.history);
+
       let response;
       try {
-        response = await this.llm.chat({
+        const chatOpts = {
           systemPrompt,
           messages: this.history,
           tools,
           stream: false,
-        });
+        };
+        response = fallbackChain
+          ? await fallbackChain.call(this.llm, chatOpts)
+          : await this.llm.chat(chatOpts);
       } catch (err) {
         onChunk(`\n❌ LLM error: ${err instanceof Error ? err.message : String(err)}\n`);
         break;
@@ -216,7 +242,10 @@ export class AgentCore {
             args: call.arguments,
           }));
           try {
-            const result = await this.registry.execute(call.name, call.arguments);
+            const result = await withToolRetry(
+              () => this.registry.execute(call.name, call.arguments),
+              call.name,
+            );
             await triggerHook(createHookEvent('tool', 'after', {
               callId,
               toolName: call.name,
