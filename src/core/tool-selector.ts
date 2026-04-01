@@ -21,7 +21,6 @@
  */
 
 import type { ToolDefinition, Message } from '../models/types.js';
-import { createLLMClient } from '../models/llm-client.js';
 import { modelManager } from '../models/model-manager.js';
 import { createLogger } from './logger.js';
 
@@ -41,12 +40,16 @@ const MAX_TOOLS = parseInt(process.env.AGENT_TOOL_SELECT_MAX ?? '10', 10);
  *   Bash, Write, Edit, Read, LS, Grep
  * Override via AGENT_TOOL_SELECT_ALWAYS env var (comma-separated).
  */
-const ALWAYS_INCLUDE = new Set(
-  (process.env.AGENT_TOOL_SELECT_ALWAYS ?? 'Bash,Write,Edit,Read,LS,Grep')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean),
-);
+// Normalise to lower-case so env-var overrides like 'bash,write' still match
+// registered names 'Bash', 'Write', etc. (case-insensitive membership check below).
+const ALWAYS_INCLUDE_RAW = (process.env.AGENT_TOOL_SELECT_ALWAYS ?? 'Bash,Write,Edit,Read,LS,Grep')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const ALWAYS_INCLUDE_LOWER = new Set(ALWAYS_INCLUDE_RAW.map((s) => s.toLowerCase()));
+function isAlwaysInclude(name: string): boolean {
+  return ALWAYS_INCLUDE_LOWER.has(name.toLowerCase());
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -107,8 +110,8 @@ ${toolList}
 Select at most ${maxTools} tools that are most likely needed. Respond with a JSON array of tool names only:
 {"tools": ["tool1", "tool2"]}`;
 
-  const model = modelManager.getCurrentModel('quick');
-  const client = createLLMClient(model);
+  // Reuse modelManager's cached client (avoids creating a new HTTP client per call)
+  const client = modelManager.getClient('quick');
 
   const response = await client.chat({
     systemPrompt: 'You are a precise tool selector. Return only JSON.',
@@ -146,8 +149,8 @@ export async function selectTools(
 
   log.debug(`Tool selection: ${tools.length} tools, query="${query.slice(0, 80)}"`);
 
-  const alwaysIncluded = tools.filter((t) => ALWAYS_INCLUDE.has(t.name));
-  const candidates = tools.filter((t) => !ALWAYS_INCLUDE.has(t.name));
+  const alwaysIncluded = tools.filter((t) => isAlwaysInclude(t.name));
+  const candidates = tools.filter((t) => !isAlwaysInclude(t.name));
 
   const remaining = MAX_TOOLS - alwaysIncluded.length;
   if (remaining <= 0) {

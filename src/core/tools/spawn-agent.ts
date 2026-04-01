@@ -71,6 +71,8 @@ async function spawnAndRun(
     projectRoot?: string;
     subagentType?: string;
     domain?: string;
+    /** Max ms to wait for the sub-agent. Default: 5 min. */
+    timeoutMs?: number;
   },
 ): Promise<string> {
   const root = resolve(opts.projectRoot ?? process.cwd());
@@ -104,7 +106,12 @@ async function spawnAndRun(
     verbose: false,
   });
 
-  const result = await agent.run(fullTask);
+  const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000; // 5 min default
+  const runPromise = agent.run(fullTask);
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`SpawnAgent timed out after ${timeoutMs / 1000}s`)), timeoutMs),
+  );
+  const result = await Promise.race([runPromise, timeoutPromise]);
   writeContextFile(root, taskId, result);
   return result;
 }
@@ -167,6 +174,10 @@ export const spawnAgentTool: ToolRegistration = {
           type: 'string',
           description: 'Optional: override model for this spawned agent.',
         },
+        timeout_seconds: {
+          type: 'number',
+          description: 'Max seconds to wait for the sub-agent to complete (default: 300).',
+        },
       },
       required: ['task'],
     },
@@ -180,6 +191,7 @@ export const spawnAgentTool: ToolRegistration = {
       subagent_type,
       domain,
       model,
+      timeout_seconds,
     } = args as {
       task: string;
       task_id?: string;
@@ -188,6 +200,7 @@ export const spawnAgentTool: ToolRegistration = {
       subagent_type?: string;
       domain?: string;
       model?: string;
+      timeout_seconds?: number;
     };
 
     if (!task || typeof task !== 'string') {
@@ -203,6 +216,7 @@ export const spawnAgentTool: ToolRegistration = {
         subagentType: subagent_type,
         domain,
         projectRoot: process.cwd(),
+        timeoutMs: timeout_seconds ? timeout_seconds * 1000 : undefined,
       });
       const saved = task_id ? ` (saved to .uagent/context/${task_id}.md)` : '';
       return `[SpawnAgent result${saved}]\n\n${result}`;
@@ -267,7 +281,11 @@ export const spawnParallelTool: ToolRegistration = {
     }
 
     const results = await Promise.all(
-      tasks.map(async (t) => {
+      tasks.map(async (t, idx) => {
+        if (!t || typeof t.task !== 'string' || !t.task.trim()) {
+          const label = t?.task_id ?? `task[${idx}]`;
+          return `### [${label}] ❌ Skipped\nMissing or empty "task" field.`;
+        }
         try {
           const out = await spawnAndRun(t.task, {
             taskId: t.task_id,

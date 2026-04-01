@@ -374,7 +374,7 @@ export class AgentCore {
             onChunk(`  → ${call.name}(${argsStr}${argsStr.length >= 120 ? '...' : ''})\n`);
           }
 
-          const callId = `${call.name}-${Date.now()}`;
+          const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           await triggerHook(createHookEvent('tool', 'before', {
             callId,
             toolName: call.name,

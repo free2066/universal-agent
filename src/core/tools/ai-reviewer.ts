@@ -248,21 +248,17 @@ export async function reviewCode(options: ReviewOptions = {}): Promise<ReviewRep
   const diff = options.diff ?? getGitDiff(root);
   const files = options.files ?? (diff ? [] : getChangedFiles(root));
 
-  const allIssues: ReviewIssue[] = [];
+  // ── Run static + AI review concurrently (independent — no shared state) ──
+  const [staticIssues, aiIssues] = await Promise.all([
+    options.skipStatic
+      ? Promise.resolve([] as ReviewIssue[])
+      : runStaticReview(root, root).catch(() => [] as ReviewIssue[]),
+    options.skipAI
+      ? Promise.resolve([] as ReviewIssue[])
+      : runAIReview(diff, files, root).catch(() => [] as ReviewIssue[]),
+  ]);
 
-  // ── Static analysis ──
-  if (!options.skipStatic) {
-    try {
-      const staticIssues = await runStaticReview(root, root);
-      allIssues.push(...staticIssues);
-    } catch { /* non-fatal */ }
-  }
-
-  // ── AI review ──
-  if (!options.skipAI) {
-    const aiIssues = await runAIReview(diff, files, root);
-    allIssues.push(...aiIssues);
-  }
+  const allIssues: ReviewIssue[] = [...staticIssues, ...aiIssues];
 
   // Deduplicate by (file + line + title)
   const seen = new Set<string>();

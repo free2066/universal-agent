@@ -109,14 +109,22 @@ export function shouldCompact(
 
 // ── Compaction ────────────────────────────────────────────────────────────────
 
+/** Max chars to include from a single tool result in the compaction prompt */
+const MAX_TOOL_RESULT_CHARS = 1500;
+
 /**
  * Serialize history turns for the compaction prompt.
+ * Long tool results are truncated to prevent the summary prompt itself from
+ * exceeding context limits on large grep/read outputs.
  */
 function serializeTurns(turns: Message[]): string {
   return turns
     .map((m) => {
       if (m.role === 'tool') {
-        return `[Tool result id=${m.toolCallId}]\n${m.content}`;
+        const content = m.content.length > MAX_TOOL_RESULT_CHARS
+          ? m.content.slice(0, MAX_TOOL_RESULT_CHARS) + `\n...(truncated, ${m.content.length - MAX_TOOL_RESULT_CHARS} chars omitted)`
+          : m.content;
+        return `[Tool result id=${m.toolCallId}]\n${content}`;
       }
       if (m.toolCalls?.length) {
         const calls = m.toolCalls

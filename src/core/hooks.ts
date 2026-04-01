@@ -109,7 +109,20 @@ export function createHookEvent(
 // ── Built-in hooks ─────────────────────────────────────────────────────────────
 
 // Performance timing hook for tool calls
+// Stale entries (callId never got a tool:after or tool:error) are evicted
+// by a periodic TTL sweep every 10 minutes — prevents unbounded Map growth
+// in very long sessions if a tool call somehow skips both after/error hooks.
 const toolTimings = new Map<string, number>();
+const TIMING_TTL_MS = 10 * 60 * 1000; // 10 min
+const TIMING_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+const _timingsSweepInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [id, start] of toolTimings) {
+    if (now - start > TIMING_TTL_MS) toolTimings.delete(id);
+  }
+}, TIMING_SWEEP_INTERVAL_MS);
+// Don't keep Node.js alive just for this cleanup timer
+if (_timingsSweepInterval.unref) _timingsSweepInterval.unref();
 
 registerHook('tool:before', (event) => {
   const callId = event.context.callId as string | undefined;
