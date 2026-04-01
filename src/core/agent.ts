@@ -9,6 +9,8 @@ import { webFetchTool, webSearchTool } from './tools/web-tools.js';
 import { codeInspectorTool } from './tools/code-inspector.js';
 import { selfHealTool } from './tools/self-heal.js';
 import { MCPManager } from './mcp-manager.js';
+import { autoCompact } from './context-compressor.js';
+import { addToHistory } from './session-history.js';
 
 export interface AgentOptions {
   domain: string;
@@ -112,6 +114,9 @@ export class AgentCore {
     onChunk: (chunk: string) => void,
     filePath?: string
   ): Promise<void> {
+    // Persist prompt to history file (~/.uagent/history.jsonl)
+    addToHistory(prompt);
+
     // Auto-detect domain
     const domain = this.currentDomain === 'auto'
       ? this.router.detectDomain(prompt)
@@ -130,6 +135,9 @@ export class AgentCore {
     };
 
     this.history.push(userMessage);
+
+    // Auto-compact history if approaching context limit
+    await autoCompact(this.history, onChunk);
 
     const tools = this.registry.getToolDefinitions();
     let iteration = 0;

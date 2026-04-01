@@ -13,6 +13,7 @@ import { initAgentsMd } from '../core/context-loader.js';
 import { MCPManager } from '../core/mcp-manager.js';
 import { codeInspectorTool } from '../core/tools/code-inspector.js';
 import { selfHealTool } from '../core/tools/self-heal.js';
+import { getRecentHistory } from '../core/session-history.js';
 import { printBanner, printHelp } from './ui.js';
 
 // Load env
@@ -305,6 +306,21 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       printBanner();
       rl.prompt();
       return;
+    }
+    if (input.startsWith('/history')) {
+      const parts = input.split(/\s+/);
+      const n = parseInt(parts[1] || '10', 10);
+      const entries = getRecentHistory(isNaN(n) ? 10 : n);
+      if (entries.length === 0) {
+        console.log(chalk.gray('\n  (no history)\n'));
+      } else {
+        console.log(chalk.yellow('\n📜 Recent prompts:'));
+        entries.forEach((e, i) => {
+          console.log(`  ${chalk.gray(String(i + 1).padStart(3) + '.')} ${e.slice(0, 120)}${e.length > 120 ? chalk.gray('…') : ''}`);
+        });
+        console.log();
+      }
+      rl.prompt(); return;
     }
     if (input === '/init') {
       console.log(chalk.green(initAgentsMd(process.cwd())));

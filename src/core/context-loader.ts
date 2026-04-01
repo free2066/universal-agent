@@ -61,8 +61,37 @@ export function loadProjectContext(startDir?: string): AgentsContext {
 
 export function buildSystemPromptWithContext(basePrompt: string, startDir?: string): string {
   const ctx = loadProjectContext(startDir);
-  if (!ctx.instructions) return basePrompt;
-  return `${basePrompt}\n\n---\n## Project Context\n${ctx.instructions}\n---`;
+  const gitStatus = getGitStatus(startDir);
+
+  const sections: string[] = [basePrompt];
+
+  if (ctx.instructions) {
+    sections.push(`---\n## Project Context\n${ctx.instructions}\n---`);
+  }
+
+  if (gitStatus) {
+    sections.push(`---\n## Git Status (at session start — may be stale)\n\`\`\`\n${gitStatus}\n\`\`\`\n---`);
+  }
+
+  return sections.join('\n\n');
+}
+
+/**
+ * Capture a one-time git status snapshot for the system prompt.
+ * Truncated to ~2 KB to avoid inflating the context with large diffs.
+ */
+function getGitStatus(cwd?: string): string | null {
+  const dir = cwd || process.cwd();
+  try {
+    const raw = execSync('git status --short --branch 2>/dev/null', {
+      cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000,
+    }).trim();
+    if (!raw) return null;
+    // Truncate to 2 KB
+    return raw.length > 2048 ? raw.slice(0, 2048) + '\n...(truncated)' : raw;
+  } catch {
+    return null;
+  }
 }
 
 export function initAgentsMd(dir: string): string {

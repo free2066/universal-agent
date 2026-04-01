@@ -13,6 +13,11 @@ export function printHelp() {
   console.log(chalk.yellow('\n📚 Available Commands:'));
   console.log(chalk.white('  /help          ') + chalk.gray('Show this help message'));
   console.log(chalk.white('  /domain <name> ') + chalk.gray('Switch domain (data|dev|service|auto)'));
+  console.log(chalk.white('  /model [name]  ') + chalk.gray('Switch or cycle model'));
+  console.log(chalk.white('  /cost          ') + chalk.gray('Show token usage and cost'));
+  console.log(chalk.white('  /history [n]   ') + chalk.gray('Show last n prompts (default 10)'));
+  console.log(chalk.white('  /inspect [path]') + chalk.gray('Static code inspection'));
+  console.log(chalk.white('  /purify [path] ') + chalk.gray('Auto-fix code issues'));
   console.log(chalk.white('  /clear         ') + chalk.gray('Clear conversation history'));
   console.log(chalk.white('  /exit          ') + chalk.gray('Exit the agent\n'));
 
