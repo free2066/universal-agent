@@ -246,6 +246,17 @@ export class AgentCore {
               () => this.registry.execute(call.name, call.arguments),
               call.name,
             );
+
+            // Conditional lazy tool loading (Harness Engineering — kstack #15309):
+            // After each tool execution, evaluate whether new tools should be unlocked.
+            const newlyActivated = this.registry.evaluateConditionals(call.name, result);
+            if (newlyActivated.length > 0) {
+              onChunk(`\n🔓 Unlocked tools: ${newlyActivated.join(', ')}\n`);
+              // Refresh allTools so the next iteration includes newly activated tools
+              allTools.length = 0;
+              allTools.push(...this.registry.getToolDefinitions());
+            }
+
             await triggerHook(createHookEvent('tool', 'after', {
               callId,
               toolName: call.name,

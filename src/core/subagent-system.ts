@@ -3,6 +3,9 @@ import { resolve, join } from 'path';
 import { parse as parseYaml } from 'yaml';
 import { modelManager } from '../models/model-manager.js';
 import type { ToolRegistration } from '../models/types.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('subagent');
 
 export interface SubagentDef {
   name: string;
@@ -10,6 +13,38 @@ export interface SubagentDef {
   tools?: string[];
   model?: string;
   systemPrompt?: string;
+}
+
+// ── Usage tracking (for entropy-reduction / zombie detection) ─────────────────
+interface UsageRecord {
+  lastUsed: number; // epoch ms
+  callCount: number;
+}
+
+const usageFile = resolve(process.env.HOME || '~', '.uagent', 'agent-usage.json');
+
+function loadUsage(): Record<string, UsageRecord> {
+  try {
+    if (existsSync(usageFile)) {
+      return JSON.parse(readFileSync(usageFile, 'utf-8')) as Record<string, UsageRecord>;
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+function saveUsage(usage: Record<string, UsageRecord>) {
+  try {
+    const dir = resolve(process.env.HOME || '~', '.uagent');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(usageFile, JSON.stringify(usage, null, 2));
+  } catch { /* ignore */ }
+}
+
+function recordUsage(agentName: string) {
+  const usage = loadUsage();
+  const existing = usage[agentName] ?? { lastUsed: 0, callCount: 0 };
+  usage[agentName] = { lastUsed: Date.now(), callCount: existing.callCount + 1 };
+  saveUsage(usage);
 }
 
 export class SubagentSystem {
@@ -96,6 +131,8 @@ export class SubagentSystem {
       return `Error: Subagent "${agentName}" not found. Available: ${Array.from(this.agents.keys()).join(', ')}`;
     }
 
+    recordUsage(agentName);
+
     const model = def.model === 'inherit' || !def.model
       ? (parentModel || modelManager.getCurrentModel('task'))
       : def.model;
@@ -109,6 +146,49 @@ export class SubagentSystem {
       : task;
 
     return agent.run(prompt);
+  }
+
+  /**
+   * Fan-out: run multiple subagents in parallel, return combined results.
+   * Inspired by kstack article #15309 Fan-out parallel Agent pattern.
+   *
+   * Each entry in `tasks` specifies which subagent to run and what task to give it.
+   * All agents run concurrently via Promise.all — the main agent gets a combined report.
+   */
+  async runParallel(
+    tasks: Array<{ agentName: string; task: string }>,
+    parentModel?: string,
+  ): Promise<string> {
+    log.info(`Fan-out: running ${tasks.length} subagents in parallel`);
+    const results = await Promise.all(
+      tasks.map(async ({ agentName, task }) => {
+        const result = await this.runAgent(agentName, task, parentModel);
+        return `### [${agentName}]\n${result}`;
+      }),
+    );
+    return results.join('\n\n---\n\n');
+  }
+
+  /**
+   * Entropy reduction: find subagents that haven't been used in `staleDays`.
+   * Returns a list of "zombie" subagents for cleanup.
+   */
+  findZombieAgents(staleDays = 30): Array<{ name: string; lastUsed: Date | null; callCount: number }> {
+    const usage = loadUsage();
+    const staleMs = staleDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const zombies: Array<{ name: string; lastUsed: Date | null; callCount: number }> = [];
+
+    for (const agent of this.agents.values()) {
+      const rec = usage[agent.name];
+      if (!rec) {
+        // Never used
+        zombies.push({ name: agent.name, lastUsed: null, callCount: 0 });
+      } else if (now - rec.lastUsed > staleMs) {
+        zombies.push({ name: agent.name, lastUsed: new Date(rec.lastUsed), callCount: rec.callCount });
+      }
+    }
+    return zombies;
   }
 
   saveAgent(def: SubagentDef, scope: 'user' | 'project' = 'project') {
@@ -148,23 +228,66 @@ function parseAgentMarkdown(content: string, fallbackName: string): SubagentDef 
 }
 
 // ── Task Tool ────────────────────────────────────────────
+//
+// Supports both single-agent and Fan-out parallel execution.
+// Fan-out is triggered when `parallel_tasks` array is provided.
+//
+// Example — parallel Fan-out (kstack article #15309):
+//   Task({
+//     parallel_tasks: [
+//       { subagent_type: "reviewer", task: "Review auth module" },
+//       { subagent_type: "security-auditor", task: "Audit auth module" }
+//     ]
+//   })
 export function createTaskTool(sys: SubagentSystem): ToolRegistration {
   return {
     definition: {
       name: 'Task',
-      description: `Delegate a task to a specialized subagent. Available: ${sys.listAgents().map((a) => a.name).join(', ')}`,
+      description: [
+        `Delegate a task to a specialized subagent, or fan-out to multiple subagents in parallel.`,
+        `Available subagents: ${sys.listAgents().map((a) => a.name).join(', ')}.`,
+        `For single delegation: use subagent_type + task.`,
+        `For parallel fan-out: use parallel_tasks array with [{subagent_type, task}] entries.`,
+        `Parallel fan-out runs all agents concurrently and merges results — use it for independent subtasks.`,
+      ].join(' '),
       parameters: {
         type: 'object',
         properties: {
-          subagent_type: { type: 'string', description: 'Subagent name to run' },
-          task: { type: 'string', description: 'Task to delegate' },
+          subagent_type: { type: 'string', description: 'Subagent name for single delegation' },
+          task: { type: 'string', description: 'Task description for single delegation' },
           model: { type: 'string', description: 'Optional: override model for this run' },
+          parallel_tasks: {
+            type: 'array',
+            description: 'Fan-out: array of {subagent_type, task} objects to run in parallel',
+            items: {
+              type: 'object',
+              description: 'Each entry: { subagent_type: string, task: string }',
+            },
+          },
         },
-        required: ['subagent_type', 'task'],
+        required: [],
       },
     },
     handler: async (args: Record<string, unknown>) => {
-      const { subagent_type, task, model } = args as { subagent_type: string; task: string; model?: string };
+      const { subagent_type, task, model, parallel_tasks } = args as {
+        subagent_type?: string;
+        task?: string;
+        model?: string;
+        parallel_tasks?: Array<{ subagent_type: string; task: string }>;
+      };
+
+      // Fan-out parallel mode
+      if (Array.isArray(parallel_tasks) && parallel_tasks.length > 0) {
+        return sys.runParallel(
+          parallel_tasks.map((pt) => ({ agentName: pt.subagent_type, task: pt.task })),
+          model,
+        );
+      }
+
+      // Single agent mode
+      if (!subagent_type || !task) {
+        return 'Error: Task tool requires either (subagent_type + task) or parallel_tasks array';
+      }
       return sys.runAgent(subagent_type, task, model);
     },
   };

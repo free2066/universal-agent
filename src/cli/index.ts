@@ -281,12 +281,30 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       console.log(chalk.green(`✓ Domain → ${domain}`));
       rl.prompt(); return;
     }
-    if (input === '/agents') {
-      console.log(chalk.yellow('\n👤 Subagents:'));
-      for (const a of subagentSystem.listAgents()) {
-        console.log(chalk.cyan(`  @run-agent-${a.name.padEnd(18)}`), chalk.gray(a.description));
+    if (input.startsWith('/agents')) {
+      // /agents clean [days] — entropy reduction: list zombie (stale) subagents
+      if (input.startsWith('/agents clean')) {
+        const parts = input.split(/\s+/);
+        const staleDays = parseInt(parts[2] || '30', 10);
+        const zombies = subagentSystem.findZombieAgents(isNaN(staleDays) ? 30 : staleDays);
+        if (zombies.length === 0) {
+          console.log(chalk.green(`\n✓ No stale subagents found (threshold: ${staleDays} days)\n`));
+        } else {
+          console.log(chalk.yellow(`\n🧹 Stale subagents (unused >${staleDays} days):\n`));
+          for (const z of zombies) {
+            const lastStr = z.lastUsed ? z.lastUsed.toLocaleDateString() : 'never used';
+            console.log(chalk.red(`  ✗ ${z.name.padEnd(20)}`), chalk.gray(`last: ${lastStr}, calls: ${z.callCount}`));
+          }
+          console.log(chalk.gray(`\n  Tip: remove unused .uagent/agents/<name>.md files to clean up\n`));
+        }
+      } else {
+        // /agents — list all subagents
+        console.log(chalk.yellow('\n👤 Subagents:'));
+        for (const a of subagentSystem.listAgents()) {
+          console.log(chalk.cyan(`  @run-agent-${a.name.padEnd(18)}`), chalk.gray(a.description));
+        }
+        console.log(chalk.gray('  Tip: /agents clean [days] — show stale subagents\n'));
       }
-      console.log();
       rl.prompt(); return;
     }
     if (input === '/models') {

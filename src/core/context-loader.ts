@@ -59,11 +59,44 @@ export function loadProjectContext(startDir?: string): AgentsContext {
   return { instructions: parts.join('\n\n'), sources, totalBytes };
 }
 
+/**
+ * Harness Engineering: Behavior constraints injected into every system prompt.
+ *
+ * Inspired by kstack article #15309 — prevent "fallback scripting" where the
+ * AI writes code instead of using provided tools.
+ */
+const HARNESS_CONSTRAINTS = `
+---
+## ⚠️ Execution Rules (Mandatory)
+
+You MUST follow these rules at all times:
+
+1. **Use provided tools only** — Never write inline scripts or helper code to perform tasks
+   that can be accomplished with the available tools (Bash, Read, Write, Edit, Grep, LS, etc.).
+   - ✅ Correct: Call the \`Bash\` tool with a shell command
+   - ❌ Wrong: Write a Python script to wrap a shell command
+
+2. **CLI-first execution** — When a capability is available as a CLI command, execute it
+   directly via the \`Bash\` tool. Do not import modules or create wrapper scripts.
+
+3. **No fallback scripting** — If a tool call fails, report the error clearly and ask for
+   guidance. Do NOT silently fall back to writing custom code to work around the failure.
+
+4. **Tool failure handling** — On tool failure:
+   - Report the exact error message
+   - Suggest the correct invocation
+   - Request human intervention if needed
+   - Never attempt to emulate tool behavior with hand-written code
+
+5. **Schema adherence** — Always pass tool arguments using the exact parameter names
+   from the tool's schema. Do not infer or rename fields.
+---`;
+
 export function buildSystemPromptWithContext(basePrompt: string, startDir?: string): string {
   const ctx = loadProjectContext(startDir);
   const gitStatus = getGitStatus(startDir);
 
-  const sections: string[] = [basePrompt];
+  const sections: string[] = [basePrompt, HARNESS_CONSTRAINTS];
 
   if (ctx.instructions) {
     sections.push(`---\n## Project Context\n${ctx.instructions}\n---`);
