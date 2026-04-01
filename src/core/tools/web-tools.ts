@@ -1,6 +1,19 @@
 import type { ToolRegistration } from '../../models/types.js';
 import { mmrRerankSearchResults } from '../mmr.js';
 
+/**
+ * AbortSignal.timeout() polyfill for Node.js < 17.3.
+ * Bug report #16: AbortSignal.timeout is Node 17.3+ only; older runtimes throw TypeError.
+ */
+function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms);
+  }
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(new DOMException('TimeoutError', 'TimeoutError')), ms);
+  return ctrl.signal;
+}
+
 // ─── WebFetch ────────────────────────────────────────────
 export const webFetchTool: ToolRegistration = {
   definition: {
@@ -28,7 +41,7 @@ export const webFetchTool: ToolRegistration = {
           'User-Agent': 'Mozilla/5.0 (compatible; UniversalAgent/1.0)',
           Accept: 'text/html,application/xhtml+xml,*/*',
         },
-        signal: AbortSignal.timeout(15000),
+        signal: timeoutSignal(15000),
       });
 
       if (!res.ok) return `Error: HTTP ${res.status} ${res.statusText}`;
@@ -88,7 +101,7 @@ export const webSearchTool: ToolRegistration = {
           'User-Agent': 'Mozilla/5.0 (compatible; UniversalAgent/1.0)',
           Accept: 'text/html',
         },
-        signal: AbortSignal.timeout(15000),
+        signal: timeoutSignal(15000),
       });
 
       if (!res.ok) return `Search failed: HTTP ${res.status}`;

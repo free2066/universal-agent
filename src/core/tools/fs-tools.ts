@@ -121,14 +121,30 @@ export const bashTool: ToolRegistration = {
     const isSafe = process.env.AGENT_SAFE_MODE === '1';
     if (isSafe) {
       const dangerous = [
-        /rm\s+-rf\s+\//,
+        // Recursive delete from root
+        /rm\s+-[^\s]*r[^\s]*\s+\/[^\s]*/,
+        /rm\s+-rf\s+/,
+        // Disk operations
         /mkfs/,
         /dd\s+if=/,
-        /:\(\)\s*\{\s*:|:&\s*\}/,
-        />\s*\/dev\/[sh]d[a-z]/,
+        // Fork bomb variants
+        /:\(\)\s*\{\s*:|:\&\s*\}/,
+        /:\(\)\{:\|:&\}/,
+        // Writing directly to block devices (including partitions like /dev/sda1)
+        />\s*\/dev\/[sh]d[a-z]\d*/,
+        />\s*\/dev\/nvme/,
+        // Pipe to shell — curl/wget piped to bash/sh/zsh (common code execution vector)
+        /\|\s*(ba|z|da)?sh\s*$/,
+        /\|\s*(ba|z|da)?sh\s+-/,
+        // sudo combined with destructive operations
+        /sudo\s+rm\s+-[^\s]*r/,
+        /sudo\s+mkfs/,
+        /sudo\s+dd\s/,
+        // Overwrite critical system files
+        />\s*\/(etc|bin|sbin|lib|usr|boot)\/[^\s]*/,
       ];
       for (const pat of dangerous) {
-        if (pat.test(command)) return `Blocked in safe mode: potentially destructive command`;
+        if (pat.test(command)) return `Blocked in safe mode: potentially destructive command detected.\n  Pattern matched: ${pat}\n  Use --safe=false to override.`;
       }
     }
 
@@ -235,6 +251,9 @@ export const grepTool: ToolRegistration = {
     const escapedFilePattern = filePattern ? filePattern.replace(/'/g, "'\"'\"'") : '';
     const includeFlag = escapedFilePattern ? `--include='${escapedFilePattern}'` : '';
 
+    // Escape the search path to prevent shell injection (single-quote with escaping)
+    const escapedSearchPath = searchPath.replace(/'/g, "'\"'\"'");
+
     try {
       // Escape the pattern for shell — use single quotes to avoid most injection
       const escapedPattern = pattern.replace(/'/g, "'\"'\"'");
@@ -242,7 +261,7 @@ export const grepTool: ToolRegistration = {
         'grep', '-rn', caseFlag, includeFlag,
         '--exclude-dir=node_modules', '--exclude-dir=.git',
         '-E', `'${escapedPattern}'`,
-        `'${searchPath}'`,
+        `'${escapedSearchPath}'`,
         '2>/dev/null', '| head -50',
       ].filter(Boolean).join(' ');
 

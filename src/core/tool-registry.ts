@@ -65,6 +65,14 @@ function checkType(
     };
   }
 
+  // Recursively validate array items against schema.items (bug report #9)
+  if (actualType === 'array' && schema.items && Array.isArray(value)) {
+    for (let i = 0; i < (value as unknown[]).length; i++) {
+      const itemErr = checkType(`${field}[${i}]`, (value as unknown[])[i], schema.items);
+      if (itemErr) return itemErr;
+    }
+  }
+
   return null;
 }
 

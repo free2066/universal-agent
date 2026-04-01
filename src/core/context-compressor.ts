@@ -33,10 +33,31 @@ const COMPACT_SYSTEM =
 
 /**
  * Rough token estimate from a string.
- * JSON-heavy content uses 2 bytes/token; everything else uses 4.
+ *
+ * Accounts for non-Latin scripts (CJK, Arabic, etc.) which typically encode
+ * as 1-2 chars per token rather than the 4-chars-per-token Latin heuristic.
+ * Without this correction, a conversation in Chinese would be estimated at
+ * ~4× fewer tokens than reality, causing missed compaction triggers.
+ *
+ * Heuristic:
+ *   - CJK / full-width / emoji codepoints  → 1.5 chars/token  (divisor 1.5)
+ *   - Latin + JSON                          → 2 chars/token    (divisor 2)
+ *   - Latin text                            → 4 chars/token    (divisor 4)
  */
 function estimateTokens(text: string, isJson = false): number {
-  return Math.ceil(text.length / (isJson ? 2 : 4));
+  if (!text) return 0;
+  // Count non-ASCII characters that are likely to be CJK/Arabic/etc.
+  // Unicode ranges: CJK Unified (4E00-9FFF), CJK Extension A (3400-4DBF),
+  // Hangul (AC00-D7AF), Arabic (0600-06FF), etc.
+  const nonLatinCount = (text.match(/[\u0600-\u06FF\u0900-\u097F\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/g) ?? []).length;
+  const nonLatinRatio = nonLatinCount / Math.max(text.length, 1);
+
+  // Weighted divisor: blend Latin divisor and non-Latin divisor
+  const latinDivisor = isJson ? 2 : 4;
+  const nonLatinDivisor = 1.5;
+  const effectiveDivisor = latinDivisor * (1 - nonLatinRatio) + nonLatinDivisor * nonLatinRatio;
+
+  return Math.ceil(text.length / effectiveDivisor);
 }
 
 function estimateMessageTokens(msg: Message): number {

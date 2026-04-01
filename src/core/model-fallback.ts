@@ -19,7 +19,7 @@ const log = createLogger('model-fallback');
 
 /**
  * Errors that indicate a fallback won't help (context limit exceeded, etc.)
- * and should be propagated immediately.
+ * and should be propagated immediately without trying fallbacks.
  */
 const NON_FALLBACK_PATTERNS = [
   'context_length_exceeded',
@@ -29,9 +29,30 @@ const NON_FALLBACK_PATTERNS = [
   'too many tokens',
 ];
 
+/**
+ * Errors that indicate we should fallback immediately to the next model,
+ * because the primary model can't serve this request at all.
+ * Includes quota exhaustion and rate limits (retrying same model wastes time).
+ */
+const IMMEDIATE_FALLBACK_PATTERNS = [
+  'rate_limit_exceeded',
+  'rate limit',
+  'insufficient_quota',
+  'quota exceeded',
+  'billing',
+  'exceeded your current quota',
+  'model is currently overloaded',
+  'overloaded',
+];
+
 function isFallbackUseless(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
   return NON_FALLBACK_PATTERNS.some((p) => msg.includes(p));
+}
+
+function isImmediateFallback(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return IMMEDIATE_FALLBACK_PATTERNS.some((p) => msg.includes(p));
 }
 
 export interface ModelFallbackOptions {
@@ -66,7 +87,12 @@ export class ModelFallbackChain {
         throw err;
       }
 
-      log.warn(`Primary model failed: ${err instanceof Error ? err.message : String(err)} — trying fallbacks`);
+      if (isImmediateFallback(err)) {
+        log.warn(`Primary model rate-limited or quota exceeded — skipping retry, going straight to fallback`);
+      } else {
+        log.warn(`Primary model failed: ${err instanceof Error ? err.message : String(err)} — trying fallbacks`);
+      }
+
       return this._tryFallbacks(options, err);
     }
   }
