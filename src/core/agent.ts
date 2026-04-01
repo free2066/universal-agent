@@ -40,6 +40,13 @@ export class AgentCore {
   private fallbackChain: ModelFallbackChain | null;
   /** Accumulated [UNCERTAIN] items across the session (kstack article #15310 confidence mechanism) */
   private uncertainItems: string[] = [];
+  /**
+   * Pending dangerous command waiting for user confirmation (kstack article #15313).
+   * When bashTool returns __CONFIRM_REQUIRED__:<label>\n<command>, the agent loop pauses
+   * and stores the command here. The next user turn is checked: if it's a confirmation
+   * ('yes'/'y'/'confirm'/etc.) the command is executed; otherwise it is cancelled.
+   */
+  private pendingConfirmation: { command: string; cwd: string; label: string } | null = null;
 
   constructor(options: AgentOptions) {
     this.currentDomain = options.domain;
@@ -119,6 +126,7 @@ export class AgentCore {
   clearHistory() {
     this.history = [];
     this.uncertainItems = [];
+    this.pendingConfirmation = null;
   }
 
   getHistory(): Message[] {
@@ -138,6 +146,41 @@ export class AgentCore {
   ): Promise<void> {
     // Persist prompt to history file (~/.uagent/history.jsonl)
     addToHistory(prompt);
+
+    // ── Pending confirmation check (kstack article #15313 dry-run + confirm flow) ──
+    // If there's a dangerous command waiting for approval, the next user turn decides.
+    if (this.pendingConfirmation) {
+      const { command, cwd, label } = this.pendingConfirmation;
+      this.pendingConfirmation = null;
+
+      const isConfirmed = /^\s*(yes|y|confirm|ok|go|proceed|execute|run it|do it)\s*$/i.test(prompt.trim());
+      if (isConfirmed) {
+        onChunk(`\n✅ Confirmed. Executing: \`${command}\`\n\n`);
+        try {
+          const { execSync } = await import('child_process');
+          const output = execSync(command, {
+            cwd,
+            encoding: 'utf-8',
+            timeout: 30000,
+            maxBuffer: 10 * 1024 * 1024,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          onChunk(output.trim() || '(no output)');
+        } catch (err) {
+          const e = err as { stdout?: string; stderr?: string; message?: string };
+          const parts: string[] = [];
+          if (e.stdout?.trim()) parts.push(e.stdout.trim());
+          if (e.stderr?.trim()) parts.push(e.stderr.trim());
+          if (!e.stderr && e.message) parts.push(e.message);
+          onChunk(`\n❌ Command failed:\n${parts.join('\n') || 'Unknown error'}`);
+        }
+        onChunk('\n');
+        return;
+      } else {
+        onChunk(`\n🚫 Cancelled. The following command was NOT executed:\n  \`${command}\`\n  (${label})\n`);
+        return;
+      }
+    }
 
     // Auto-detect domain
     const domain = this.currentDomain === 'auto'
@@ -297,10 +340,60 @@ export class AgentCore {
               const preview = JSON.stringify(result).slice(0, 300);
               onChunk(`  ✓ ${preview}${preview.length === 300 ? '...' : ''}\n`);
             }
+            // ── Dry-run confirmation gate (kstack article #15313) ────────────────
+            // bashTool returns __CONFIRM_REQUIRED__:<label>\n<command> for dangerous
+            // commands instead of executing them. Pause the agent loop and surface
+            // a clear confirmation prompt to the user.
+            const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+            if (resultStr.startsWith('__CONFIRM_REQUIRED__:')) {
+              const firstNewline = resultStr.indexOf('\n');
+              const header = resultStr.slice('__CONFIRM_REQUIRED__:'.length, firstNewline > -1 ? firstNewline : undefined);
+              const dangerousCommand = firstNewline > -1 ? resultStr.slice(firstNewline + 1).trim() : '';
+              const cmdCwd = (call.arguments.cwd as string | undefined)
+                ? String(call.arguments.cwd)
+                : process.cwd();
+
+              this.pendingConfirmation = { command: dangerousCommand, cwd: cmdCwd, label: header };
+
+              // Push a synthetic tool result so history stays valid
+              toolResults.push({
+                role: 'tool',
+                toolCallId: call.id,
+                content: `[Paused for confirmation] Dangerous command detected: ${header}`,
+              });
+
+              // Flush history so far and break — let agent produce a final text response
+              this.history.push(...toolResults);
+
+              // Inject a system-level instruction so the LLM asks for confirmation
+              this.history.push({
+                role: 'user',
+                content:
+                  `[SYSTEM] The Bash tool wants to execute a potentially destructive command.\n` +
+                  `Risk: ${header}\n` +
+                  `Command:\n\`\`\`\n${dangerousCommand}\n\`\`\`\n\n` +
+                  `Please show the user this information and ask them to reply **yes** to execute or **no** to cancel.`,
+              });
+
+              // Run one more LLM turn so the agent surfaces the confirmation prompt
+              const confirmOpts = { systemPrompt, messages: this.history, tools: [], stream: false };
+              try {
+                const confirmResp = this.fallbackChain
+                  ? await this.fallbackChain.call(this.llm, confirmOpts)
+                  : await this.llm.chat(confirmOpts);
+                if (confirmResp.type === 'text') {
+                  onChunk(confirmResp.content);
+                  this.history.push({ role: 'assistant', content: confirmResp.content });
+                }
+              } catch { /* ignore — user will still see the raw prompt */ }
+
+              return; // Pause agent loop; resume when user replies
+            }
+
             toolResults.push({
               role: 'tool',
               toolCallId: call.id,
-              content: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+              content: resultStr,
             });
           } catch (err) {
             await triggerHook(createHookEvent('tool', 'error', {

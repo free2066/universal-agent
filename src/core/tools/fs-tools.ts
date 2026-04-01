@@ -117,34 +117,48 @@ export const bashTool: ToolRegistration = {
     const cwd = args.cwd ? resolve(process.cwd(), args.cwd as string) : process.cwd();
     const timeout = (args.timeout as number) || 30000;
 
-    // Block dangerous patterns in safe mode
+    // Safe mode: dangerous commands require explicit user confirmation before execution.
+    // Inspired by kstack article #15313 — dry-run + confirm flow instead of hard block.
+    //
+    // HARD BLOCK: fork bombs and direct block-device writes are always blocked (no confirm possible).
+    // SOFT BLOCK: other destructive commands return a __CONFIRM_REQUIRED__ sentinel so the
+    //             agent loop can pause, show a dry-run summary, and resume only after the user says yes.
     const isSafe = process.env.AGENT_SAFE_MODE === '1';
     if (isSafe) {
-      const dangerous = [
-        // Recursive delete from root
-        /rm\s+-[^\s]*r[^\s]*\s+\/[^\s]*/,
-        /rm\s+-rf\s+/,
-        // Disk operations
-        /mkfs/,
-        /dd\s+if=/,
-        // Fork bomb variants
-        /:\(\)\s*\{\s*:|:\&\s*\}/,
+      // Always-block patterns (catastrophic / unrecoverable)
+      const hardBlock = [
+        /:\(\)\s*\{\s*:|:\&\s*\}/,   // fork bomb
         /:\(\)\{:\|:&\}/,
-        // Writing directly to block devices (including partitions like /dev/sda1)
-        />\s*\/dev\/[sh]d[a-z]\d*/,
+        />\s*\/dev\/[sh]d[a-z]\d*/,  // write to block device
         />\s*\/dev\/nvme/,
-        // Pipe to shell — curl/wget piped to bash/sh/zsh (common code execution vector)
-        /\|\s*(ba|z|da)?sh\s*$/,
-        /\|\s*(ba|z|da)?sh\s+-/,
-        // sudo combined with destructive operations
-        /sudo\s+rm\s+-[^\s]*r/,
-        /sudo\s+mkfs/,
-        /sudo\s+dd\s/,
-        // Overwrite critical system files
-        />\s*\/(etc|bin|sbin|lib|usr|boot)\/[^\s]*/,
       ];
-      for (const pat of dangerous) {
-        if (pat.test(command)) return `Blocked in safe mode: potentially destructive command detected.\n  Pattern matched: ${pat}\n  Use --safe=false to override.`;
+      for (const pat of hardBlock) {
+        if (pat.test(command)) {
+          return `Blocked in safe mode: catastrophic command not allowed.\n  Pattern matched: ${pat}`;
+        }
+      }
+
+      // Soft-block patterns — require user confirmation (dry-run then confirm)
+      const softBlock: Array<{ pat: RegExp; label: string }> = [
+        { pat: /rm\s+-[^\s]*r[^\s]*\s+\/[^\s]*/, label: 'recursive delete from root path' },
+        { pat: /rm\s+-rf\s+/,                     label: 'recursive force delete' },
+        { pat: /mkfs/,                              label: 'filesystem format' },
+        { pat: /dd\s+if=/,                         label: 'raw disk copy (dd)' },
+        { pat: /\|\s*(ba|z|da)?sh\s*$/,            label: 'pipe to shell (code execution)' },
+        { pat: /\|\s*(ba|z|da)?sh\s+-/,            label: 'pipe to shell (code execution)' },
+        { pat: /sudo\s+rm\s+-[^\s]*r/,             label: 'sudo recursive delete' },
+        { pat: /sudo\s+mkfs/,                       label: 'sudo filesystem format' },
+        { pat: /sudo\s+dd\s/,                       label: 'sudo raw disk copy' },
+        { pat: />\s*\/(etc|bin|sbin|lib|usr|boot)\/[^\s]*/, label: 'overwrite system file' },
+        { pat: /git\s+push\s+.*--force/,            label: 'force git push' },
+        { pat: /git\s+push\s+.*-f\b/,              label: 'force git push' },
+        { pat: /chmod\s+-R\s+[0-7]*7[0-7]*\s+\//,  label: 'recursive world-writable chmod on root' },
+      ];
+      for (const { pat, label } of softBlock) {
+        if (pat.test(command)) {
+          // Return sentinel so agent.ts can pause and ask for user confirmation
+          return `__CONFIRM_REQUIRED__:${label}\n${command}`;
+        }
       }
     }
 
