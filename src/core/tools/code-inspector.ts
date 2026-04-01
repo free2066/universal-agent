@@ -122,6 +122,78 @@ const RULES: Rule[] = [
     suggestion: 'Create a ticket and remove the comment',
   },
 
+  // ── Security rules (OWASP Top 10 / CWE/MITRE Top 25) ──
+  {
+    id: 'command-injection',
+    // exec('cmd ' + userInput) or exec(`cmd ${var}`)
+    pattern: () => /\bexec\s*\(\s*(?:[`'"].*?\$\{|[^)]*?\+\s*[a-zA-Z_$])/,
+    severity: 'critical',
+    category: 'security',
+    message: 'Possible command injection — user data in exec() call',
+    suggestion: 'Use execFile(cmd, [argsArray]) to avoid shell interpolation',
+  },
+  {
+    id: 'path-traversal',
+    // readFileSync('./uploads/' + var) or join(dir, userInput) without validation
+    pattern: () => /(?:readFileSync|writeFileSync|createReadStream|createWriteStream|join\s*\(\s*[^,]+,\s*(?:req\.|params\.|query\.|body\.|args\.))/,
+    severity: 'error',
+    category: 'security',
+    message: 'Potential path traversal — user-controlled path argument',
+    suggestion: 'Resolve the path and assert it starts with the expected base directory',
+  },
+  {
+    id: 'xss-innerhtml',
+    pattern: () => /\.innerHTML\s*[+]?=/,
+    severity: 'error',
+    category: 'security',
+    message: 'innerHTML assignment — potential XSS (CWE-79)',
+    suggestion: 'Use textContent, or sanitise with DOMPurify before assigning innerHTML',
+  },
+  {
+    id: 'eval-usage',
+    pattern: () => /\beval\s*\(/,
+    severity: 'critical',
+    category: 'security',
+    message: 'eval() usage — arbitrary code execution risk (CWE-94)',
+    suggestion: 'Remove eval(). Use JSON.parse() for data, or Function constructor with extreme caution',
+  },
+  {
+    id: 'insecure-random',
+    // Math.random() for security/crypto purposes (detected by nearby context keywords)
+    pattern: () => /Math\.random\s*\(\s*\).*(?:token|secret|key|nonce|salt|id|uuid)/i,
+    severity: 'error',
+    category: 'security',
+    message: 'Math.random() used for security-sensitive value — not cryptographically secure',
+    suggestion: 'Use crypto.randomBytes() or crypto.randomUUID() instead',
+  },
+  {
+    id: 'error-stack-exposure',
+    // res.json/send with err.stack or err.message in error handlers
+    pattern: () => /(?:res\.(?:json|send|status)|response\.(?:json|send))\s*\([^)]*(?:err\.stack|error\.stack)/,
+    severity: 'error',
+    category: 'security',
+    message: 'Stack trace exposed in HTTP response — information disclosure (CWE-209)',
+    suggestion: 'Log err.stack server-side; return only a generic error message to the client',
+  },
+  {
+    id: 'weak-crypto',
+    // MD5 or SHA1 for signing/hashing passwords
+    pattern: () => /createHash\s*\(\s*['"](?:md5|sha1)['"]\s*\)/i,
+    severity: 'error',
+    category: 'security',
+    message: 'Weak hash algorithm (MD5/SHA1) — not suitable for passwords or integrity checks',
+    suggestion: 'Use SHA-256 or bcrypt/argon2 for passwords',
+  },
+  {
+    id: 'prototype-pollution',
+    // Object.assign/merge with user-supplied object at top level
+    pattern: () => /Object\.assign\s*\(\s*(?:this|prototype|Object\.prototype|globalThis|global)/,
+    severity: 'critical',
+    category: 'security',
+    message: 'Potential prototype pollution — merging into prototype or global object',
+    suggestion: 'Validate that merged objects do not contain __proto__, constructor, or prototype keys',
+  },
+
   // ── Performance rules ──────────────────────────────────
   {
     id: 'array-push-in-loop',
