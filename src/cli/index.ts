@@ -596,7 +596,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     prompt: chalk.cyan(`[${options.domain}] `) + chalk.green('❯ '),
   });
 
-  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /agents, /inspect, /purify, /exit\n'));
+  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /agents, /team, /inbox, /tasks, /inspect, /purify, /exit\n'));
 
   rl.prompt();
 
@@ -909,6 +909,27 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       }
       process.stdout.write('\n');
       rl.resume();
+      rl.prompt(); return;
+    }
+    // s09: /team — list all teammates with roles and status
+    if (input === '/team') {
+      const { getTeammateManager } = await import('../core/teammate-manager.js');
+      console.log('\n' + getTeammateManager(process.cwd()).listAll() + '\n');
+      rl.prompt(); return;
+    }
+    // s09: /inbox — drain and display lead inbox
+    if (input === '/inbox') {
+      const { getTeammateManager } = await import('../core/teammate-manager.js');
+      const msgs = getTeammateManager(process.cwd()).bus.readInbox('lead');
+      console.log(msgs.length > 0
+        ? '\n' + JSON.stringify(msgs, null, 2) + '\n'
+        : chalk.gray('\n  (inbox empty)\n'));
+      rl.prompt(); return;
+    }
+    // s07: /tasks — list all tasks on the persistent board
+    if (input === '/tasks') {
+      const { getTaskBoard } = await import('../core/task-board.js');
+      console.log('\n' + getTaskBoard(process.cwd()).listAll() + '\n');
       rl.prompt(); return;
     }
     if (input.startsWith('/purify')) {

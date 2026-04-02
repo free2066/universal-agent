@@ -168,6 +168,19 @@ export class TaskBoard {
       .filter((t) => t.status === 'pending' && !t.owner && t.blockedBy.length === 0)
       .sort((a, b) => a.id - b.id);
   }
+
+  /**
+   * s11 — Claim a task: set owner and status to in_progress.
+   * Used by teammates in idle phase and the `claim_task` lead tool.
+   */
+  claim(id: number, owner: string): string {
+    const task = this.load(id);
+    task.owner = owner;
+    task.status = 'in_progress';
+    task.updatedAt = Date.now();
+    this.save(task);
+    return `Claimed task #${id} for ${owner}`;
+  }
 }
 
 // ─── Singleton per project root ───────────────────────────────────────────────

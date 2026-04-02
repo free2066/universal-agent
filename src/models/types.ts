@@ -28,6 +28,9 @@ export interface ParameterSchema {
   description?: string;
   enum?: string[];
   items?: ParameterSchema;
+  /** For object-typed parameters: nested property definitions */
+  properties?: Record<string, ParameterSchema>;
+  required?: string[];
 }
 
 export interface ChatOptions {

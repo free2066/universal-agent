@@ -49,11 +49,24 @@ export interface ContextEditorConfig {
   excludeTools: Set<string>;
 }
 
+/**
+ * s06 PRESERVE_RESULT_TOOLS — tool names whose results are reference material.
+ * Clearing them forces the agent to re-read files, wasting tokens.
+ * Mirrors learn-claude-code s06's PRESERVE_RESULT_TOOLS = {"read_file"}.
+ */
+export const PRESERVE_RESULT_TOOLS = new Set([
+  'read_file',
+  'read-file',
+  'readFile',
+]);
+
 export const DEFAULT_CTX_EDITOR_CONFIG: ContextEditorConfig = {
   trigger: 80_000,
   keep: 3,
   clearAtLeast: 0,
-  excludeTools: new Set(),
+  // Preserve read_file results — they are reference material the agent
+  // may still need; clearing them triggers pointless re-reads (s06 insight).
+  excludeTools: PRESERVE_RESULT_TOOLS,
 };
 
 interface ClearableEntry {

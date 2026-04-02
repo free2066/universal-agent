@@ -14,6 +14,28 @@ import { loadSkillTool } from './tools/skill-tool.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
 import { backgroundRunTool, checkBackgroundTool } from './tools/background-tools.js';
 import { backgroundManager } from './background-manager.js';
+import { todoWriteTool, todoManager } from './tools/todo-tool.js';
+import {
+  spawnTeammateTool,
+  listTeammatesTool,
+  sendMessageTool,
+  readInboxTool,
+  broadcastTool,
+  shutdownRequestTool,
+  planApprovalTool,
+  claimTaskFromBoardTool,
+  getTeammateManager,
+} from './teammate-manager.js';
+import {
+  worktreeCreateTool,
+  worktreeListTool,
+  worktreeStatusTool,
+  worktreeRunTool,
+  worktreeRemoveTool,
+  worktreeKeepTool,
+  worktreeEventsTool,
+  taskBindWorktreeTool,
+} from './tools/worktree-tools.js';
 import { MCPManager } from './mcp-manager.js';
 import { autoCompact } from './context-compressor.js';
 import { addToHistory } from './session-history.js';
@@ -135,14 +157,41 @@ export class AgentCore {
     this.registry.register(spawnParallelTool);
     this.registry.register(coordinatorRunTool);
 
+    // s03 — in-session todo tracking with nag reminder
+    this.registry.register(todoWriteTool);
+
     // s05 — on-demand skill loading
     this.registry.register(loadSkillTool);
 
-    // s07 — persistent task board
+    // s07 — persistent task board (+ s11 claim)
     this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
+    this.registry.register(claimTaskFromBoardTool);
 
     // s08 — background command execution
     this.registry.registerMany([backgroundRunTool, checkBackgroundTool]);
+
+    // s09/s10/s11 — teammate system
+    this.registry.registerMany([
+      spawnTeammateTool,
+      listTeammatesTool,
+      sendMessageTool,
+      readInboxTool,
+      broadcastTool,
+      shutdownRequestTool,
+      planApprovalTool,
+    ]);
+
+    // s12 — worktree isolation tools
+    this.registry.registerMany([
+      worktreeCreateTool,
+      worktreeListTool,
+      worktreeStatusTool,
+      worktreeRunTool,
+      worktreeRemoveTool,
+      worktreeKeepTool,
+      worktreeEventsTool,
+      taskBindWorktreeTool,
+    ]);
 
     // Domain-specific tools
     this.router.registerTools(this.registry, domain);
@@ -319,6 +368,12 @@ export class AgentCore {
     // who need more turns for complex multi-step tasks (default: 15).
     const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? '15', 10);
 
+    // s03: track rounds since last TodoWrite call; inject nag reminder after 3 rounds
+    let roundsWithoutTodo = 0;
+
+    // s09: get the teammate manager for inbox drain before each LLM call
+    const teamMgr = getTeammateManager(process.cwd());
+
     while (iteration < MAX_ITERATIONS) {
       iteration++;
 
@@ -331,6 +386,15 @@ export class AgentCore {
         this.history.push({
           role: 'user',
           content: `<background-results>\n${notifText}\n</background-results>`,
+        });
+      }
+
+      // s09 — drain lead inbox (messages from teammates) and inject before LLM call
+      const inboxMsgs = teamMgr.bus.readInbox('lead');
+      if (inboxMsgs.length > 0) {
+        this.history.push({
+          role: 'user',
+          content: `<inbox>\n${JSON.stringify(inboxMsgs, null, 2)}\n</inbox>`,
         });
       }
 
@@ -534,6 +598,14 @@ export class AgentCore {
         }
 
         this.history.push(...toolResults);
+
+        // s03: track TodoWrite usage; inject nag reminder if not used for ≥3 rounds
+        const usedTodo = response.toolCalls.some((tc) => tc.name === 'TodoWrite');
+        roundsWithoutTodo = usedTodo ? 0 : roundsWithoutTodo + 1;
+        if (todoManager.hasOpenItems() && roundsWithoutTodo >= 3) {
+          this.history.push({ role: 'user', content: '<reminder>Update your TodoWrite list.</reminder>' });
+          roundsWithoutTodo = 0;
+        }
       }
     }
 
