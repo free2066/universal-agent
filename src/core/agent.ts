@@ -42,6 +42,13 @@ export class AgentCore {
   private safeMode: boolean;
   private mcpManager: MCPManager;
   private fallbackChain: ModelFallbackChain | null;
+  /**
+   * Optional system prompt override injected by a parent agent (kstack article #15343).
+   * When set via setSystemPrompt(), runStream() uses this instead of calling
+   * buildSystemPromptWithContext() — avoids redundant AGENTS.md / git-status
+   * loading in parallel sub-agents that share the same context.
+   */
+  private _systemPromptOverride: string | null = null;
   /** Accumulated [UNCERTAIN] items across the session (kstack article #15310 confidence mechanism) */
   private uncertainItems: string[] = [];
   /**
@@ -154,6 +161,19 @@ export class AgentCore {
     this.llm = null; // reset lazy cache so next _getLLM() picks up the new model
   }
 
+  /**
+   * Inject a pre-built system prompt (shared prompt cache — kstack article #15343).
+   *
+   * When SpawnParallel launches N sub-agents concurrently, each one normally
+   * calls buildSystemPromptWithContext() independently, re-reading AGENTS.md,
+   * rules files, and running execSync('git status') N times.  The parent agent
+   * can call this method ONCE and pass the result down, so all sub-agents share
+   * the identical system prompt string — maximising LLM provider KV-cache hits.
+   */
+  setSystemPrompt(prompt: string): void {
+    this._systemPromptOverride = prompt;
+  }
+
   /** Return the current LLM client, initialising it on first use (lazy init). */
   private _getLLM(): LLMClient {
     if (!this.llm) this.llm = modelManager.getClient('main');
@@ -236,9 +256,12 @@ export class AgentCore {
     // Expand @run-agent-xxx and @ask-xxx mentions before sending
     const expandedPrompt = this.expandMentions(prompt);
 
-    // Build system prompt with project context (AGENTS.md)
+    // Build system prompt with project context (AGENTS.md).
+    // If a parent agent injected a pre-built prompt via setSystemPrompt(), use that
+    // directly so all parallel sub-agents share the SAME prompt string and can hit
+    // the LLM provider's KV-cache (kstack article #15343 shared prompt cache insight).
     const baseSystemPrompt = this.router.getSystemPrompt(domain);
-    let systemPrompt = buildSystemPromptWithContext(baseSystemPrompt);
+    let systemPrompt = this._systemPromptOverride ?? buildSystemPromptWithContext(baseSystemPrompt);
 
     // ── Memory recall: inject relevant long-term memories into system prompt ──
     // Following mem9's design: pinned memories are always included;

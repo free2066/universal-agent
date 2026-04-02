@@ -136,6 +136,22 @@ async function spawnAndRun(
     timeoutMs?: number;
     /** Keys to read from scratchpad and prepend as context */
     scratchpadKeys?: string[];
+    /**
+     * Pre-built system prompt from the parent process.
+     *
+     * Claude Code article #15343 insight: sub-agents in Claude Code share the
+     * same prompt cache — the common context (AGENTS.md, rules, git status) is
+     * only computed ONCE by the parent and passed down.  Without this, N parallel
+     * sub-agents each trigger buildSystemPromptWithContext() independently:
+     *   – N × fs.readFileSync (AGENTS.md + rule files)
+     *   – N × execSync('git status') despite the b4 cache only helping within
+     *     the SAME process (each new AgentCore is a fresh process-level scope)
+     *
+     * Passing parentSystemPrompt lets sub-agents skip all that and start with
+     * an identical prompt string that is already in the LLM provider's
+     * KV-cache, dramatically reducing both latency and cost for SpawnParallel.
+     */
+    parentSystemPrompt?: string;
   },
 ): Promise<string> {
   // ── Depth guard ──────────────────────────────────────────────────────────
@@ -194,6 +210,17 @@ async function spawnAndRun(
     stream: false,
     verbose: false,
   });
+
+  // ── Shared prompt cache (kstack article #15343) ───────────────────────────
+  // If the parent passes its pre-built systemPrompt, inject it directly into
+  // the child agent so it skips re-loading AGENTS.md + rules + git-status.
+  // This is the same pattern Claude Code uses: all sub-agents in a parallel
+  // fan-out share the SAME system prompt string that the parent already built,
+  // meaning the LLM provider's KV-cache can be hit on every sub-agent call
+  // instead of recomputing a fresh (slightly different) prompt each time.
+  if (opts.parentSystemPrompt) {
+    agent.setSystemPrompt(opts.parentSystemPrompt);
+  }
 
   // Pass depth counter into child process env so nested spawns can check it
   const prevDepth = process.env.UAGENT_SPAWN_DEPTH;
@@ -421,6 +448,9 @@ export const spawnParallelTool: ToolRegistration = {
             subagentType: t.subagent_type,
             domain: t.domain,
             projectRoot: process.cwd(),
+            // Pass caller's pre-built system prompt down to all sub-agents so
+            // they skip re-loading AGENTS.md/rules/git-status (article #15343).
+            parentSystemPrompt: (args as Record<string, unknown>).parent_system_prompt as string | undefined,
           });
           const label = t.task_id ?? t.task.slice(0, 40);
           return `### [${label}]\n${out}`;

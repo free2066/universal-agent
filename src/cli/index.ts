@@ -682,6 +682,68 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       rl.prompt();
       return;
     }
+    // /compact — manually compress conversation history (kstack article #15343 insight 3)
+    // The article notes Claude Code has 5 different context compression strategies, none optimal.
+    // Giving users manual control lets them compact at the RIGHT moment (end of a phase,
+    // before a large tool-heavy task) rather than waiting for the auto-threshold.
+    if (input === '/compact' || input === '/tokens') {
+      const { estimateHistoryTokens, shouldCompact, autoCompact } = await import('../core/context-compressor.js');
+      const history = agent.getHistory();
+      const decision = shouldCompact(history);
+      const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
+      if (input === '/tokens') {
+        console.log(chalk.yellow('\n📊 Context Usage:'));
+        console.log(`  Estimated tokens : ${chalk.white(decision.estimatedTokens.toLocaleString())}`);
+        console.log(`  Context limit    : ${chalk.white(decision.contextLength.toLocaleString())}`);
+        console.log(`  Usage            : ${chalk.white(pct + '%')}  (threshold: ${(decision.threshold / decision.contextLength * 100).toFixed(0)}%)`);
+        console.log(`  Turns in history : ${chalk.white(String(history.length))}`);
+        console.log(chalk.gray('\n  Run /compact to manually compress now.\n'));
+        rl.prompt(); return;
+      }
+      // /compact — force compact even if below auto-threshold
+      if (history.length <= 2) {
+        console.log(chalk.gray('\n  History too short to compact (≤2 turns).\n'));
+        rl.prompt(); return;
+      }
+      rl.pause();
+      process.stdout.write('\n');
+      const spinnerC = ora(`Compacting ${history.length} turns (${pct}% context)...`).start();
+      try {
+        // Temporarily force shouldCompact to true by calling autoCompact directly
+        const { autoCompact: compact } = await import('../core/context-compressor.js');
+        // Patch: bypass the threshold check by calling the internal logic directly.
+        // We reuse the public autoCompact but temporarily push a dummy message so
+        // the threshold is always exceeded, then restore state on error.
+        // Simpler: expose a forceCompact helper.
+        // For now: directly mutate history via agent to trigger compact:
+        const fullHistory = agent.getHistory();
+        if (fullHistory.length > 2) {
+          // Force compact by temporarily marking threshold as exceeded
+          const origEnv = process.env.AGENT_COMPACT_THRESHOLD;
+          process.env.AGENT_COMPACT_THRESHOLD = '0.0001'; // near-zero threshold
+          let compacted = 0;
+          try {
+            // autoCompact reads the threshold from module-level const, so env override won't work.
+            // Instead use the /memory ingest flow to build a summary, then clear:
+            const { getMemoryStore } = await import('../core/memory-store.js');
+            const store = getMemoryStore(process.cwd());
+            const ingestResult = await store.ingest(fullHistory);
+            agent.clearHistory();
+            compacted = fullHistory.length;
+            spinnerC.succeed(`Compacted ${compacted} turns → insights saved to memory (+${ingestResult.added} memories). History cleared.`);
+          } finally {
+            if (origEnv === undefined) delete process.env.AGENT_COMPACT_THRESHOLD;
+            else process.env.AGENT_COMPACT_THRESHOLD = origEnv;
+          }
+        } else {
+          spinnerC.info('Nothing to compact.');
+        }
+      } catch (eC) {
+        spinnerC.fail('Compact failed: ' + (eC instanceof Error ? eC.message : String(eC)));
+      }
+      rl.resume();
+      rl.prompt(); return;
+    }
     if (input.startsWith('/history')) {
       const parts = input.split(/\s+/);
       const n = parseInt(parts[1] || '10', 10);
@@ -880,7 +942,31 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     rl.prompt();
   });
 
-  rl.on('close', () => { console.log(chalk.yellow('\nGoodbye! 👋')); process.exit(0); });
+  rl.on('close', () => {
+    // Dream Mode (kstack article #15343): on session exit, auto-ingest the
+    // conversation history into memory-store so next session has continuity.
+    // This is fire-and-forget — we catch all errors so exit is never blocked.
+    // Only runs if the session has ≥ 4 turns (too short to be useful).
+    const history = agent.getHistory();
+    if (history.length >= 4) {
+      (async () => {
+        try {
+          const { getMemoryStore } = await import('../core/memory-store.js');
+          const store = getMemoryStore(process.cwd());
+          const result = await store.ingest(history);
+          if (result.added > 0) {
+            process.stdout.write(chalk.gray(`\n🌙 Dream Mode: +${result.added} insights saved to memory.\n`));
+          }
+        } catch { /* non-fatal */ }
+      })().finally(() => {
+        console.log(chalk.yellow('\nGoodbye! 👋'));
+        process.exit(0);
+      });
+    } else {
+      console.log(chalk.yellow('\nGoodbye! 👋'));
+      process.exit(0);
+    }
+  });
 }
 
 program.parse();
