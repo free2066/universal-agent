@@ -10,6 +10,10 @@ import { codeInspectorTool } from './tools/code-inspector.js';
 import { selfHealTool } from './tools/self-heal.js';
 import { spawnAgentTool, spawnParallelTool } from './tools/spawn-agent.js';
 import { coordinatorRunTool } from './tools/coordinator-tool.js';
+import { loadSkillTool } from './tools/skill-tool.js';
+import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
+import { backgroundRunTool, checkBackgroundTool } from './tools/background-tools.js';
+import { backgroundManager } from './background-manager.js';
 import { MCPManager } from './mcp-manager.js';
 import { autoCompact } from './context-compressor.js';
 import { addToHistory } from './session-history.js';
@@ -130,6 +134,15 @@ export class AgentCore {
     this.registry.register(spawnAgentTool);
     this.registry.register(spawnParallelTool);
     this.registry.register(coordinatorRunTool);
+
+    // s05 — on-demand skill loading
+    this.registry.register(loadSkillTool);
+
+    // s07 — persistent task board
+    this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
+
+    // s08 — background command execution
+    this.registry.registerMany([backgroundRunTool, checkBackgroundTool]);
 
     // Domain-specific tools
     this.router.registerTools(this.registry, domain);
@@ -308,6 +321,18 @@ export class AgentCore {
 
     while (iteration < MAX_ITERATIONS) {
       iteration++;
+
+      // s08 — drain background task notifications and inject before LLM call
+      const bgNotifs = backgroundManager.drainNotifications();
+      if (bgNotifs.length > 0) {
+        const notifText = bgNotifs
+          .map((n) => `[bg:${n.taskId}] ${n.status}: ${n.result}`)
+          .join('\n');
+        this.history.push({
+          role: 'user',
+          content: `<background-results>\n${notifText}\n</background-results>`,
+        });
+      }
 
       // Context editing: selectively clear old tool results before hitting LLM
       const cleared = editContextIfNeeded(this.history);

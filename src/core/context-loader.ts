@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'fs';
 import { resolve, join, dirname } from 'path';
 import { execSync } from 'child_process';
+import { getSkillLoader } from './skill-loader.js';
 
 export interface AgentsContext {
   instructions: string;
@@ -170,6 +171,17 @@ export function buildSystemPromptWithContext(basePrompt: string, startDir?: stri
   if (gitStatus) {
     sections.push(`---\n## Git Status (at session start — may be stale)\n\`\`\`\n${gitStatus}\n\`\`\`\n---`);
   }
+
+  // s05 — Layer 1 skill injection: skill names + descriptions only (~100 tokens total).
+  // Full skill bodies are loaded on-demand via the load_skill tool (Layer 2).
+  try {
+    const skillDescriptions = getSkillLoader(startDir ?? process.cwd()).getDescriptions();
+    if (skillDescriptions) {
+      sections.push(
+        `---\n## Available Skills (use load_skill to access full instructions)\n${skillDescriptions}\n---`,
+      );
+    }
+  } catch { /* non-fatal: no skills dir */ }
 
   return sections.join('\n\n');
 }

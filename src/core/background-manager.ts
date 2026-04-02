@@ -1,0 +1,144 @@
+/**
+ * Background Manager — s08-style non-blocking command execution.
+ *
+ * Spawn long-running commands (npm test, npm run build, etc.) in background
+ * child processes. The agent doesn't block — it gets a task_id immediately
+ * and can do other work. Results are pushed to a notification queue that is
+ * drained and injected into the conversation before the next LLM call.
+ *
+ *   Main thread              Background process
+ *   +-----------------+      +-----------------+
+ *   | agent loop      |      | task executes   |
+ *   | ...             |      | ...             |
+ *   | [LLM call] <----+----- | enqueue(result) |
+ *   |  ^drain queue   |      +-----------------+
+ *   +-----------------+
+ *
+ *   Timeline:
+ *   Agent ----[spawn A]----[spawn B]----[other work]----
+ *                 |              |
+ *                 v              v
+ *              [A runs]      [B runs]         (parallel)
+ *                 |              |
+ *                 +-- notification queue --> [results injected]
+ *
+ * s08 motto: "Fire and forget — the agent doesn't block while the command runs."
+ */
+
+import { spawn } from 'child_process';
+import { randomBytes } from 'crypto';
+import { resolve } from 'path';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type BgTaskStatus = 'running' | 'completed' | 'timeout' | 'error';
+
+export interface BgTask {
+  id: string;
+  command: string;
+  status: BgTaskStatus;
+  result: string | null;
+  startedAt: number;
+}
+
+export interface BgNotification {
+  taskId: string;
+  status: BgTaskStatus;
+  command: string;
+  result: string;
+}
+
+// ─── BackgroundManager ────────────────────────────────────────────────────────
+
+export class BackgroundManager {
+  private tasks = new Map<string, BgTask>();
+  private notificationQueue: BgNotification[] = [];
+
+  run(command: string, cwd?: string): string {
+    const id = randomBytes(4).toString('hex');
+    const task: BgTask = {
+      id,
+      command,
+      status: 'running',
+      result: null,
+      startedAt: Date.now(),
+    };
+    this.tasks.set(id, task);
+
+    const workdir = resolve(cwd ?? process.cwd());
+    const chunks: Buffer[] = [];
+
+    const proc = spawn('sh', ['-c', command], {
+      cwd: workdir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+    });
+
+    proc.stdout?.on('data', (d: Buffer) => chunks.push(d));
+    proc.stderr?.on('data', (d: Buffer) => chunks.push(d));
+
+    // 5-minute timeout guard
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      this.finalize(id, 'timeout', 'Error: Timeout (300s)');
+    }, 300_000);
+
+    proc.on('close', () => {
+      clearTimeout(timer);
+      if (task.status === 'timeout') return; // already handled
+      const output = Buffer.concat(chunks).toString('utf-8').trim().slice(0, 50_000);
+      this.finalize(id, 'completed', output || '(no output)');
+    });
+
+    proc.on('error', (err: Error) => {
+      clearTimeout(timer);
+      if (task.status !== 'running') return;
+      this.finalize(id, 'error', `Error: ${err.message}`);
+    });
+
+    return `Background task ${id} started: ${command.slice(0, 80)}`;
+  }
+
+  private finalize(id: string, status: BgTaskStatus, result: string): void {
+    const task = this.tasks.get(id);
+    if (!task) return;
+    task.status = status;
+    task.result = result;
+    this.notificationQueue.push({
+      taskId: id,
+      status,
+      command: task.command.slice(0, 80),
+      result: result.slice(0, 500),
+    });
+  }
+
+  check(taskId?: string): string {
+    if (taskId) {
+      const t = this.tasks.get(taskId);
+      if (!t) return `Error: Unknown task ${taskId}`;
+      return `[${t.status}] ${t.command.slice(0, 60)}\n${t.result ?? '(running)'}`;
+    }
+    if (this.tasks.size === 0) return 'No background tasks.';
+    return [...this.tasks.entries()]
+      .map(([id, t]) => `${id}: [${t.status}] ${t.command.slice(0, 60)}`)
+      .join('\n');
+  }
+
+  /**
+   * Return and clear all pending completion notifications.
+   * Called by the agent loop BEFORE each LLM call to inject results.
+   */
+  drainNotifications(): BgNotification[] {
+    const items = [...this.notificationQueue];
+    this.notificationQueue = [];
+    return items;
+  }
+
+  hasPending(): boolean {
+    return [...this.tasks.values()].some((t) => t.status === 'running');
+  }
+}
+
+// ─── Singleton ────────────────────────────────────────────────────────────────
+
+export const backgroundManager = new BackgroundManager();
