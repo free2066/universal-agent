@@ -1,493 +1,468 @@
 /**
- * Free Model Detector — Auto-detect available free LLM APIs at startup.
+ * Free Model Detector — Dynamically fetch the latest free models from OpenRouter at startup.
  *
- * Problem: Users have to manually set API keys and model names.
- * Solution: On startup, probe all known free-tier providers in parallel,
- *           pick the best available one, and auto-set model pointers.
+ * Core strategy:
+ *   1. Call OpenRouter /api/v1/models to get the live list of ALL available models
+ *   2. Filter to models where pricing.prompt === "0" AND pricing.completion === "0" (truly free)
+ *   3. Score each by context window + known quality signals (model name heuristics)
+ *   4. Pick the best-scoring model and set it as the main model pointer
  *
- * Detection strategy (in priority order):
- *   1. Check which API keys are configured in env
- *   2. Send a minimal "ping" request (1-2 tokens) to verify the key actually works
- *   3. Score each candidate by: quality tier × context window × cost=0
- *   4. Set model-manager pointers to the best available free model
+ * Key handling:
+ *   - OPENROUTER_API_KEY in env → use it (higher rate limits, no throttle)
+ *   - No key → prompt user to get a free key via browser; wait for input; write to .env
+ *   - User can skip key prompt → falls back to anonymous OpenRouter + other providers
  *
- * Free providers supported:
- *   - Google Gemini     (GEMINI_API_KEY)     — gemini-2.5-flash, 1M ctx, 1500 req/day
- *   - Groq              (GROQ_API_KEY)       — llama-3.3-70b, deepseek-r1, ultra-fast
- *   - DeepSeek          (DEEPSEEK_API_KEY)   — deepseek-chat, free signup credits
- *   - Alibaba Qwen      (DASHSCOPE_API_KEY)  — qwen3-8b free tier
- *   - Ollama (local)    (no key needed)      — any locally installed model
- *   - SiliconFlow       (SILICONFLOW_API_KEY)— many open-source models free
- *   - OpenRouter        (OPENROUTER_API_KEY) — many free models available
+ * Fallback chain (if OpenRouter fails or is skipped):
+ *   - Gemini  (GEMINI_API_KEY)     → free 1500 req/day
+ *   - Groq    (GROQ_API_KEY)       → free 14400 req/day
+ *   - Ollama  (local)              → no limits
+ *
+ * OpenRouter free model API:
+ *   GET https://openrouter.ai/api/v1/models
+ *   Filter: pricing.prompt === "0" && pricing.completion === "0"
+ *   Sort: tool-support first, then quality score, then context length
  */
 
+import { createInterface } from 'readline';
+import { existsSync, readFileSync, appendFileSync } from 'fs';
+import { resolve } from 'path';
 import type { ModelPointers } from './model-manager.js';
 
-export interface FreeModelCandidate {
-  /** Unique name used as model pointer (e.g. 'gemini-2.5-flash') */
-  name: string;
-  /** Display name for UI */
-  displayName: string;
-  /** Provider identifier */
-  provider: string;
-  /** API key env var name (empty string = no key needed, e.g. Ollama) */
-  keyEnvVar: string;
-  /** Model name to pass to the API */
-  modelName: string;
-  /** Base URL for the API */
-  baseURL: string;
-  /** Context window in tokens */
-  contextLength: number;
-  /** Quality score 1-10 (higher = better for complex tasks) */
-  qualityScore: number;
-  /** Speed score 1-10 (higher = faster response) */
-  speedScore: number;
-  /** Whether this model supports function calling / tool use */
-  supportsTools: boolean;
-  /** Whether this is truly free (no credit card required) */
-  isTrulyFree: boolean;
-  /** Free tier limits description */
-  freeTierNote: string;
-}
-
-export interface DetectionResult {
-  /** Whether auto-detection found any usable free model */
-  found: boolean;
-  /** Best available free model for the main pointer */
-  best: FreeModelCandidate | null;
-  /** Best lightweight model for quick/task/compact */
-  bestQuick: FreeModelCandidate | null;
-  /** All available candidates sorted by score */
-  available: FreeModelCandidate[];
-  /** Providers that have keys configured but failed ping test */
-  failed: string[];
-  /** Providers with no key configured at all */
-  unconfigured: string[];
-}
-
-// ── Free model catalog (priority-ordered) ────────────────────────────────────
-// Each candidate is probed in parallel. The first group that responds wins.
-
-const FREE_CANDIDATES: FreeModelCandidate[] = [
-  // ── Group 1: Best quality free models ─────────────────────────────────────
-  {
-    name: 'gemini-2.5-flash',
-    displayName: 'Gemini 2.5 Flash (Google AI Studio)',
-    provider: 'gemini',
-    keyEnvVar: 'GEMINI_API_KEY',
-    modelName: 'gemini-2.5-flash',
-    baseURL: 'https://generativelanguage.googleapis.com/v1beta',
-    contextLength: 1048576,
-    qualityScore: 9,
-    speedScore: 8,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: '1500 req/day, 1M token context, no credit card',
-  },
-  {
-    name: 'gemini-2.5-flash-lite',
-    displayName: 'Gemini 2.5 Flash Lite (Google AI Studio)',
-    provider: 'gemini',
-    keyEnvVar: 'GEMINI_API_KEY',
-    modelName: 'gemini-2.5-flash-lite',
-    baseURL: 'https://generativelanguage.googleapis.com/v1beta',
-    contextLength: 1048576,
-    qualityScore: 7,
-    speedScore: 10,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: '1500 req/day free, ultra-fast',
-  },
-  {
-    name: 'gemini-2.0-flash',
-    displayName: 'Gemini 2.0 Flash (Google AI Studio)',
-    provider: 'gemini',
-    keyEnvVar: 'GEMINI_API_KEY',
-    modelName: 'gemini-2.0-flash',
-    baseURL: 'https://generativelanguage.googleapis.com/v1beta',
-    contextLength: 1048576,
-    qualityScore: 8,
-    speedScore: 9,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: '1500 req/day free, 1M token context',
-  },
-
-  // ── Group 2: Groq (ultra-fast inference, free tier) ────────────────────────
-  {
-    name: 'groq:llama-3.3-70b',
-    displayName: 'Llama 3.3 70B via Groq (ultra-fast)',
-    provider: 'groq',
-    keyEnvVar: 'GROQ_API_KEY',
-    modelName: 'llama-3.3-70b-versatile',
-    baseURL: 'https://api.groq.com/openai/v1',
-    contextLength: 128000,
-    qualityScore: 8,
-    speedScore: 10,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: '14,400 req/day free, blazing fast',
-  },
-  {
-    name: 'groq:deepseek-r1',
-    displayName: 'DeepSeek R1 via Groq (reasoning)',
-    provider: 'groq',
-    keyEnvVar: 'GROQ_API_KEY',
-    modelName: 'deepseek-r1-distill-llama-70b',
-    baseURL: 'https://api.groq.com/openai/v1',
-    contextLength: 128000,
-    qualityScore: 9,
-    speedScore: 7,
-    supportsTools: false,
-    isTrulyFree: true,
-    freeTierNote: 'Free tier available, strong reasoning',
-  },
-  {
-    name: 'groq:qwen3-32b',
-    displayName: 'Qwen3 32B via Groq',
-    provider: 'groq',
-    keyEnvVar: 'GROQ_API_KEY',
-    modelName: 'qwen-qwq-32b',
-    baseURL: 'https://api.groq.com/openai/v1',
-    contextLength: 128000,
-    qualityScore: 8,
-    speedScore: 8,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: 'Free tier, good reasoning',
-  },
-
-  // ── Group 3: SiliconFlow (many free open-source models) ───────────────────
-  {
-    name: 'siliconflow:qwen3-8b',
-    displayName: 'Qwen3 8B via SiliconFlow',
-    provider: 'siliconflow',
-    keyEnvVar: 'SILICONFLOW_API_KEY',
-    modelName: 'Qwen/Qwen3-8B',
-    baseURL: 'https://api.siliconflow.cn/v1',
-    contextLength: 32768,
-    qualityScore: 7,
-    speedScore: 9,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: '14M tokens/month free',
-  },
-  {
-    name: 'siliconflow:deepseek-v3',
-    displayName: 'DeepSeek V3 via SiliconFlow',
-    provider: 'siliconflow',
-    keyEnvVar: 'SILICONFLOW_API_KEY',
-    modelName: 'deepseek-ai/DeepSeek-V3',
-    baseURL: 'https://api.siliconflow.cn/v1',
-    contextLength: 65536,
-    qualityScore: 9,
-    speedScore: 7,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: 'Free credits on signup',
-  },
-
-  // ── Group 4: OpenRouter (many free models) ─────────────────────────────────
-  {
-    name: 'openrouter:gemma3-27b',
-    displayName: 'Gemma 3 27B via OpenRouter',
-    provider: 'openrouter',
-    keyEnvVar: 'OPENROUTER_API_KEY',
-    modelName: 'google/gemma-3-27b-it:free',
-    baseURL: 'https://openrouter.ai/api/v1',
-    contextLength: 96000,
-    qualityScore: 8,
-    speedScore: 7,
-    supportsTools: false,
-    isTrulyFree: true,
-    freeTierNote: 'Free tier, no credit card',
-  },
-  {
-    name: 'openrouter:llama4-scout',
-    displayName: 'Llama 4 Scout via OpenRouter',
-    provider: 'openrouter',
-    keyEnvVar: 'OPENROUTER_API_KEY',
-    modelName: 'meta-llama/llama-4-scout:free',
-    baseURL: 'https://openrouter.ai/api/v1',
-    contextLength: 512000,
-    qualityScore: 8,
-    speedScore: 7,
-    supportsTools: false,
-    isTrulyFree: true,
-    freeTierNote: 'Free tier via OpenRouter',
-  },
-
-  // ── Group 5: DeepSeek direct API ──────────────────────────────────────────
-  {
-    name: 'deepseek-chat',
-    displayName: 'DeepSeek Chat (deepseek.com)',
-    provider: 'deepseek',
-    keyEnvVar: 'DEEPSEEK_API_KEY',
-    modelName: 'deepseek-chat',
-    baseURL: 'https://api.deepseek.com/v1',
-    contextLength: 128000,
-    qualityScore: 9,
-    speedScore: 7,
-    supportsTools: true,
-    isTrulyFree: false,
-    freeTierNote: 'Free credits on signup, very cheap after',
-  },
-
-  // ── Group 6: Ollama (local, no key needed) ─────────────────────────────────
-  {
-    name: 'ollama:qwen3',
-    displayName: 'Qwen3 (local Ollama)',
-    provider: 'ollama',
-    keyEnvVar: '',
-    modelName: 'qwen3',
-    baseURL: '',
-    contextLength: 32768,
-    qualityScore: 7,
-    speedScore: 5,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: 'Fully local, no API limits',
-  },
-  {
-    name: 'ollama:llama3.3',
-    displayName: 'Llama 3.3 (local Ollama)',
-    provider: 'ollama',
-    keyEnvVar: '',
-    modelName: 'llama3.3',
-    baseURL: '',
-    contextLength: 131072,
-    qualityScore: 7,
-    speedScore: 5,
-    supportsTools: true,
-    isTrulyFree: true,
-    freeTierNote: 'Fully local, no API limits',
-  },
-  {
-    name: 'ollama:deepseek-r1',
-    displayName: 'DeepSeek R1 (local Ollama)',
-    provider: 'ollama',
-    keyEnvVar: '',
-    modelName: 'deepseek-r1',
-    baseURL: '',
-    contextLength: 32768,
-    qualityScore: 8,
-    speedScore: 4,
-    supportsTools: false,
-    isTrulyFree: true,
-    freeTierNote: 'Fully local, no API limits',
-  },
-];
-
-// ── Ping testers per provider ─────────────────────────────────────────────────
-
-async function pingGemini(apiKey: string, modelName: string, baseURL: string): Promise<boolean> {
-  try {
-    const url = `${baseURL}/models/${modelName}:generateContent?key=${apiKey}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'hi' }] }], generationConfig: { maxOutputTokens: 1 } }),
-      signal: AbortSignal.timeout(8000),
-    });
-    return res.status === 200;
-  } catch { return false; }
-}
-
-async function pingOpenAICompat(apiKey: string, modelName: string, baseURL: string, extraHeaders?: Record<string, string>): Promise<boolean> {
-  try {
-    const res = await fetch(`${baseURL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        ...extraHeaders,
-      },
-      body: JSON.stringify({
-        model: modelName,
-        messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 1,
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-    return res.status === 200;
-  } catch { return false; }
-}
-
-async function pingOllama(modelName: string): Promise<boolean> {
-  try {
-    const baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-    // First check if Ollama is running
-    const listRes = await fetch(`${baseURL}/api/tags`, { signal: AbortSignal.timeout(3000) });
-    if (!listRes.ok) return false;
-    const data = await listRes.json() as { models?: Array<{ name: string }> };
-    // Check if the specific model is installed
-    return (data.models ?? []).some((m) => m.name.startsWith(modelName));
-  } catch { return false; }
-}
-
-async function pingCandidate(c: FreeModelCandidate): Promise<boolean> {
-  const key = c.keyEnvVar ? (process.env[c.keyEnvVar] ?? '') : '';
-
-  // Skip if key required but not set
-  if (c.keyEnvVar && !key) return false;
-
-  switch (c.provider) {
-    case 'gemini':
-      return pingGemini(key, c.modelName, c.baseURL);
-
-    case 'groq':
-    case 'siliconflow':
-    case 'deepseek':
-      return pingOpenAICompat(key, c.modelName, c.baseURL);
-
-    case 'openrouter':
-      return pingOpenAICompat(key, c.modelName, c.baseURL, {
-        'HTTP-Referer': 'https://github.com/free2066/universal-agent',
-        'X-Title': 'universal-agent',
-      });
-
-    case 'ollama':
-      return pingOllama(c.modelName);
-
-    default:
-      return false;
-  }
-}
-
-// ── Main detector ─────────────────────────────────────────────────────────────
+// ── Key bootstrap helpers ─────────────────────────────────────────────────────
 
 /**
- * Probe all free model candidates in parallel.
- * Returns sorted list of available ones with the best candidate first.
- *
- * @param silent - suppress console output (default: false)
+ * Persist a key=value pair to the nearest .env file.
+ * Tries cwd/.env first, then ~/.uagent/.env as fallback.
  */
-export async function detectFreeModes(silent = false): Promise<DetectionResult> {
-  if (!silent) {
-    process.stdout.write('🔍 Detecting available free models...');
-  }
+function persistKeyToEnv(key: string, value: string): void {
+  const candidates = [
+    resolve(process.cwd(), '.env'),
+    resolve(process.env.HOME ?? '~', '.uagent', '.env'),
+  ];
+  const target = candidates.find(existsSync) ?? candidates[0];
+  // If the key already exists in the file, don't append a duplicate
+  try {
+    const existing = readFileSync(target, 'utf-8');
+    if (existing.includes(`${key}=`)) return; // already set
+  } catch { /* file may not exist yet */ }
+  appendFileSync(target, `\n${key}=${value}\n`);
+}
 
-  // Group candidates by whether they have a key configured
-  const withKey: FreeModelCandidate[] = [];
-  const noKey: FreeModelCandidate[] = [];
-  const unconfigured: string[] = [];
+/**
+ * Open a URL in the default browser (cross-platform).
+ * Silently ignores errors (e.g. headless environment).
+ */
+async function openBrowser(url: string): Promise<void> {
+  const { spawn } = await import('child_process');
+  const cmd = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'start'
+    : 'xdg-open';
+  spawn(cmd, [url], { detached: true, stdio: 'ignore' }).unref();
+}
 
-  for (const c of FREE_CANDIDATES) {
-    if (!c.keyEnvVar) {
-      // Ollama — no key needed, always probe
-      withKey.push(c);
-    } else if (process.env[c.keyEnvVar]) {
-      withKey.push(c);
-    } else {
-      // Deduplicate provider names in unconfigured list
-      if (!unconfigured.includes(c.provider)) unconfigured.push(c.provider);
-      noKey.push(c);
+/**
+ * Interactively prompt the user to get an OpenRouter API key.
+ * Opens the key page in their browser, then waits for them to paste the key.
+ * Pressing Enter without a value = skip.
+ *
+ * Returns the key if provided, or null if skipped.
+ */
+async function promptForOpenRouterKey(): Promise<string | null> {
+  const KEY_URL = 'https://openrouter.ai/keys';
+
+  console.log('\n┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  🔑  OpenRouter API Key Setup (one-time, takes 30 seconds)  │');
+  console.log('├─────────────────────────────────────────────────────────────┤');
+  console.log('│  OpenRouter gives you FREE access to 100+ open-source LLMs. │');
+  console.log('│  No credit card required.                                    │');
+  console.log('│                                                              │');
+  console.log(`│  1. Opening: ${KEY_URL}`);
+  console.log('│  2. Sign in with GitHub / Google                             │');
+  console.log('│  3. Click "Create Key" → copy the key                        │');
+  console.log('│  4. Paste it below and press Enter                           │');
+  console.log('│                                                              │');
+  console.log('│  (Press Enter without typing to skip and use anonymous mode) │');
+  console.log('└─────────────────────────────────────────────────────────────┘\n');
+
+  // Try to open browser (non-blocking)
+  await openBrowser(KEY_URL).catch(() => {});
+
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question('  Paste your OpenRouter API key: ', (answer) => {
+      rl.close();
+      const key = answer.trim();
+      resolve(key || null);
+    });
+    // Timeout after 2 minutes — auto-skip if user doesn't respond
+    setTimeout(() => { rl.close(); resolve(null); }, 120_000);
+  });
+}
+
+// ── OpenRouter API types ──────────────────────────────────────────────────────
+
+interface OpenRouterModel {
+  id: string;
+  name: string;
+  description?: string;
+  context_length: number;
+  pricing: {
+    prompt: string;      // "0" = free
+    completion: string;  // "0" = free
+    request?: string;
+    image?: string;
+  };
+  top_provider?: {
+    context_length?: number;
+    max_completion_tokens?: number;
+    is_moderated?: boolean;
+  };
+  architecture?: {
+    modality?: string;
+    tokenizer?: string;
+    instruct_type?: string;
+  };
+  supported_generation_methods?: string[];
+}
+
+interface OpenRouterModelsResponse {
+  data: OpenRouterModel[];
+}
+
+// ── Quality scoring heuristics ────────────────────────────────────────────────
+
+/**
+ * Known high-quality model families and their base quality scores (0-100).
+ * Used to rank free models when we can't measure actual quality.
+ * Higher = better for agentic/coding tasks.
+ */
+const MODEL_QUALITY_HINTS: Array<{ pattern: RegExp; score: number; supportsTools: boolean }> = [
+  // Frontier free models (highest quality)
+  { pattern: /gemini-2\.5/i,                  score: 95, supportsTools: true  },
+  { pattern: /gemini-2\.0-flash/i,            score: 88, supportsTools: true  },
+  { pattern: /deepseek-r1(?!.*distill)/i,     score: 90, supportsTools: false },
+  { pattern: /deepseek-v3/i,                  score: 88, supportsTools: true  },
+  { pattern: /deepseek-r1-distill.*70b/i,     score: 83, supportsTools: false },
+  { pattern: /llama-4-maverick/i,             score: 87, supportsTools: true  },
+  { pattern: /llama-4-scout/i,               score: 82, supportsTools: true  },
+  { pattern: /llama-3\.3-70b/i,              score: 80, supportsTools: true  },
+  { pattern: /qwen3-235b/i,                  score: 88, supportsTools: true  },
+  { pattern: /qwen3-72b/i,                   score: 82, supportsTools: true  },
+  { pattern: /qwen3-30b/i,                   score: 78, supportsTools: true  },
+  { pattern: /qwq-32b/i,                     score: 80, supportsTools: false },
+  { pattern: /gemma-3-27b/i,                 score: 76, supportsTools: false },
+  { pattern: /gemma-3-12b/i,                 score: 70, supportsTools: false },
+  { pattern: /mistral-7b/i,                  score: 60, supportsTools: false },
+  { pattern: /phi-4/i,                       score: 72, supportsTools: false },
+  { pattern: /llama-3\.1-70b/i,             score: 75, supportsTools: true  },
+  { pattern: /llama-3\.1-8b/i,              score: 58, supportsTools: true  },
+  // Small/fast models (lower quality but good for quick tasks)
+  { pattern: /gemini-2\.5-flash-lite/i,      score: 80, supportsTools: true  },
+  { pattern: /qwen3-8b/i,                    score: 65, supportsTools: true  },
+  { pattern: /deepseek-r1-distill.*8b/i,     score: 62, supportsTools: false },
+];
+
+function scoreModel(model: OpenRouterModel): { score: number; supportsTools: boolean } {
+  // Find matching quality hint
+  for (const hint of MODEL_QUALITY_HINTS) {
+    if (hint.pattern.test(model.id) || hint.pattern.test(model.name)) {
+      return { score: hint.score, supportsTools: hint.supportsTools };
     }
   }
+  // Unknown model: base score from context length (larger context = likely better model)
+  const ctxScore = Math.min(30, Math.log2(model.context_length / 1000) * 5);
+  return { score: Math.round(ctxScore), supportsTools: false };
+}
 
-  // Probe all candidates with keys in parallel (with timeout)
-  const results = await Promise.allSettled(
-    withKey.map(async (c) => ({ candidate: c, ok: await pingCandidate(c) })),
-  );
+// ── OpenRouter fetcher ────────────────────────────────────────────────────────
 
-  const available: FreeModelCandidate[] = [];
-  const failed: string[] = [];
+export interface RankedFreeModel {
+  id: string;           // openrouter model id, e.g. "google/gemini-2.0-flash-exp:free"
+  name: string;         // human-readable name
+  score: number;        // composite quality score
+  contextLength: number;
+  supportsTools: boolean;
+  isFree: boolean;
+}
 
-  for (const r of results) {
-    if (r.status === 'fulfilled') {
-      if (r.value.ok) {
-        available.push(r.value.candidate);
-      } else {
-        // Had a key but ping failed
-        const provider = r.value.candidate.provider;
-        if (r.value.candidate.keyEnvVar && !failed.includes(provider)) {
-          failed.push(provider);
-        }
-      }
-    }
+/**
+ * Fetch the live list of free models from OpenRouter's public API.
+ * Works with or without an API key (anonymous access is allowed).
+ *
+ * Returns models sorted by quality score descending.
+ */
+export async function fetchOpenRouterFreeModels(apiKey?: string): Promise<RankedFreeModel[]> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'HTTP-Referer': 'https://github.com/free2066/universal-agent',
+    'X-Title': 'universal-agent',
+  };
+  if (apiKey) {
+    headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  // Sort available by composite score: quality * 0.6 + speed * 0.4
-  // Prefer models that support tools (needed for agent functionality)
-  available.sort((a, b) => {
-    const scoreA = a.qualityScore * 0.6 + a.speedScore * 0.4 + (a.supportsTools ? 1 : 0);
-    const scoreB = b.qualityScore * 0.6 + b.speedScore * 0.4 + (b.supportsTools ? 1 : 0);
-    return scoreB - scoreA;
+  const res = await fetch('https://openrouter.ai/api/v1/models', {
+    headers,
+    signal: AbortSignal.timeout(12000),
   });
 
-  if (!silent) {
-    if (available.length > 0) {
-      process.stdout.write(` ✅ Found ${available.length} free model(s)\n`);
+  if (!res.ok) {
+    throw new Error(`OpenRouter models API returned ${res.status}: ${await res.text().catch(() => '')}`);
+  }
+
+  const data = await res.json() as OpenRouterModelsResponse;
+  const models = data.data ?? [];
+
+  // Filter to truly free models only (both prompt and completion cost = 0)
+  const freeModels = models.filter((m) =>
+    m.pricing.prompt === '0' && m.pricing.completion === '0',
+  );
+
+  // Score and rank
+  const ranked: RankedFreeModel[] = freeModels.map((m) => {
+    const { score, supportsTools } = scoreModel(m);
+    return {
+      id: m.id,
+      name: m.name,
+      score,
+      contextLength: m.context_length,
+      supportsTools,
+      isFree: true,
+    };
+  });
+
+  // Sort: tool-supporting models first, then by quality score, then context length
+  ranked.sort((a, b) => {
+    // Tool support is critical for agent functionality
+    if (a.supportsTools !== b.supportsTools) return a.supportsTools ? -1 : 1;
+    if (b.score !== a.score) return b.score - a.score;
+    return b.contextLength - a.contextLength;
+  });
+
+  return ranked;
+}
+
+// ── Fallback providers (if OpenRouter not available) ─────────────────────────
+
+async function tryGemini(): Promise<RankedFreeModel | null> {
+  const key = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'hi' }] }], generationConfig: { maxOutputTokens: 1 } }),
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (res.status === 200) {
+      return { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', score: 95, contextLength: 1048576, supportsTools: true, isFree: true };
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+async function tryGroq(): Promise<RankedFreeModel | null> {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.status === 200) {
+      return { id: 'groq:llama-3.3-70b', name: 'Llama 3.3 70B (Groq)', score: 80, contextLength: 128000, supportsTools: true, isFree: true };
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+async function tryOllama(): Promise<RankedFreeModel | null> {
+  try {
+    const base = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+    const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return null;
+    const data = await res.json() as { models?: Array<{ name: string }> };
+    const installed = (data.models ?? []).map((m) => m.name);
+    // Prefer qwen3 > llama3.3 > deepseek-r1 if installed
+    for (const preferred of ['qwen3', 'llama3.3', 'deepseek-r1', 'llama3']) {
+      if (installed.some((n) => n.startsWith(preferred))) {
+        return { id: `ollama:${preferred}`, name: `${preferred} (local Ollama)`, score: 70, contextLength: 32768, supportsTools: true, isFree: true };
+      }
+    }
+    // Use whatever is installed
+    if (installed.length > 0) {
+      const first = installed[0].split(':')[0];
+      return { id: `ollama:${first}`, name: `${first} (local Ollama)`, score: 60, contextLength: 32768, supportsTools: false, isFree: true };
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// ── Main export ───────────────────────────────────────────────────────────────
+
+export interface DetectionResult {
+  found: boolean;
+  best: RankedFreeModel | null;
+  bestQuick: RankedFreeModel | null;        // fastest/lightest model for quick tasks
+  available: RankedFreeModel[];
+  source: 'openrouter' | 'gemini' | 'groq' | 'ollama' | 'none';
+  anonymous: boolean;                        // true = no API key, using anonymous OpenRouter
+  totalFreeModels: number;                   // total free models found on OpenRouter
+}
+
+/**
+ * Try OpenRouter with a given key and return ranked free models.
+ * Returns null if OpenRouter is unreachable or returns no free models.
+ */
+async function tryOpenRouter(apiKey?: string, silent = false): Promise<RankedFreeModel[] | null> {
+  try {
+    const models = await fetchOpenRouterFreeModels(apiKey);
+    return models.length > 0 ? models : null;
+  } catch (err) {
+    if (!silent) process.stdout.write(` ⚠️  OpenRouter: ${err instanceof Error ? err.message : String(err)}\n`);
+    return null;
+  }
+}
+
+/**
+ * Main entry: detect best available free model.
+ *
+ * Flow:
+ *   1. If OPENROUTER_API_KEY is set → use it directly
+ *   2. If not set AND not silent → prompt user to get a free key (opens browser)
+ *      - User pastes key → save to .env → retry OpenRouter with that key
+ *      - User skips (Enter) → try anonymous OpenRouter (rate-limited)
+ *   3. If OpenRouter fails/skipped → fallback to Gemini / Groq / Ollama
+ *
+ * @param silent - suppress all prompts and progress output (used in non-interactive contexts)
+ */
+export async function detectFreeModes(silent = false): Promise<DetectionResult> {
+  let apiKey = process.env.OPENROUTER_API_KEY;
+
+  // ── Step 1: Auto-prompt for key if not set (interactive mode only) ────────
+  if (!apiKey && !silent) {
+    process.stdout.write('\n');
+    const newKey = await promptForOpenRouterKey();
+    if (newKey) {
+      // Persist to .env so future runs don't need to prompt again
+      persistKeyToEnv('OPENROUTER_API_KEY', newKey);
+      // Also set in current process so the rest of the session can use it
+      process.env.OPENROUTER_API_KEY = newKey;
+      apiKey = newKey;
+      console.log('\n✅ Key saved! It will be used automatically from now on.\n');
     } else {
-      process.stdout.write(` ❌ No free models detected\n`);
+      console.log('\n⏩ Skipped. Using anonymous OpenRouter access (rate-limited).\n');
     }
   }
 
-  // Best for main: highest composite score that supports tools (for agent use)
-  const best = available.find((c) => c.supportsTools) ?? available[0] ?? null;
+  const anonymous = !apiKey;
 
-  // Best for quick/compact: highest speed score
-  const bestQuick = [...available]
-    .sort((a, b) => b.speedScore - a.speedScore)[0] ?? null;
+  // ── Step 2: Try OpenRouter (primary) ──────────────────────────────────────
+  if (!silent) process.stdout.write('🔍 Fetching latest free models from OpenRouter...');
+  const orModels = await tryOpenRouter(apiKey, silent);
 
+  if (orModels) {
+    if (!silent) process.stdout.write(` ✅ Found ${orModels.length} free model(s)\n`);
+    const best = orModels[0];
+    const bestQuick =
+      orModels.find((m) => m.contextLength <= 32768 && m.supportsTools) ??
+      orModels.find((m) => m.supportsTools) ??
+      orModels[0];
+
+    return {
+      found: true,
+      best,
+      bestQuick,
+      available: orModels.slice(0, 10),
+      source: 'openrouter',
+      anonymous,
+      totalFreeModels: orModels.length,
+    };
+  }
+
+  // ── Step 3: Fallback chain (Gemini / Groq / Ollama) ───────────────────────
+  if (!silent) process.stdout.write('🔍 OpenRouter unavailable, trying fallback providers...');
+  const [gemini, groq, ollama] = await Promise.all([tryGemini(), tryGroq(), tryOllama()]);
+  const fallbacks = [gemini, groq, ollama].filter(Boolean) as RankedFreeModel[];
+  fallbacks.sort((a, b) => b.score - a.score);
+
+  if (fallbacks.length > 0) {
+    if (!silent) process.stdout.write(` ✅ Found ${fallbacks.length} fallback model(s)\n`);
+    return {
+      found: true,
+      best: fallbacks[0],
+      bestQuick: fallbacks[fallbacks.length - 1],
+      available: fallbacks,
+      source: gemini ? 'gemini' : groq ? 'groq' : 'ollama',
+      anonymous: false,
+      totalFreeModels: fallbacks.length,
+    };
+  }
+
+  if (!silent) process.stdout.write(' ❌ No free models found\n');
   return {
-    found: available.length > 0,
-    best,
-    bestQuick,
-    available,
-    failed,
-    unconfigured,
+    found: false, best: null, bestQuick: null, available: [],
+    source: 'none', anonymous, totalFreeModels: 0,
   };
 }
 
 /**
- * Build recommended ModelPointers from a detection result.
- * Returns null if no free models were found.
+ * Build ModelPointers from detection result.
  */
 export function buildPointersFromDetection(result: DetectionResult): Partial<ModelPointers> | null {
   if (!result.found || !result.best) return null;
 
-  const main = result.best.name;
-  const quick = result.bestQuick?.name ?? main;
-
-  return {
-    main,
-    task: main,
-    compact: quick,
-    quick,
+  /**
+   * Convert a RankedFreeModel id to the pointer string the LLM client factory expects.
+   * OpenRouter model ids (e.g. "google/gemini-2.0-flash-exp:free") need the "openrouter:" prefix
+   * UNLESS the model is actually served by a different provider we talk to directly
+   * (gemini→GeminiClient, groq:→GroqClient, ollama:→OllamaClient).
+   */
+  const toPointer = (id: string): string => {
+    if (result.source !== 'openrouter') return id;
+    if (id.startsWith('gemini') || id.startsWith('groq:') || id.startsWith('ollama:')) return id;
+    return `openrouter:${id}`;
   };
+
+  const mainId = toPointer(result.best.id);
+  const quickId = result.bestQuick ? toPointer(result.bestQuick.id) : mainId;
+
+  return { main: mainId, task: mainId, compact: quickId, quick: quickId };
 }
 
 /**
- * Generate a human-readable summary of detected free models.
+ * Human-readable summary of what was detected.
  */
 export function formatDetectionSummary(result: DetectionResult): string {
   const lines: string[] = [];
 
-  if (result.found) {
-    lines.push(`✅ Auto-selected free model: **${result.best?.displayName}**`);
-    if (result.best?.name !== result.bestQuick?.name) {
-      lines.push(`⚡ Quick model: **${result.bestQuick?.displayName}**`);
-    }
-    if (result.available.length > 1) {
-      lines.push(`\n📋 All available free models:`);
-      for (const c of result.available) {
-        lines.push(`   • ${c.displayName} (score: ${(c.qualityScore * 0.6 + c.speedScore * 0.4).toFixed(1)}) — ${c.freeTierNote}`);
+  if (result.found && result.best) {
+    const modelLabel = result.best.name;
+    lines.push(`✅ Auto-selected free model: **${modelLabel}**`);
+    if (result.source === 'openrouter') {
+      lines.push(`   Source: OpenRouter (${result.totalFreeModels} free models available${result.anonymous ? ', anonymous mode' : ''})`);
+      if (result.bestQuick && result.bestQuick.id !== result.best.id) {
+        lines.push(`⚡ Quick/compact model: **${result.bestQuick.name}**`);
       }
     }
+    if (result.anonymous) {
+      lines.push('');
+      lines.push('💡 You are using OpenRouter in anonymous mode (rate-limited).');
+      lines.push('   For higher limits, add your key to .env:');
+      lines.push('   OPENROUTER_API_KEY=<your-key>   # Get free at: https://openrouter.ai/keys');
+    }
   } else {
-    lines.push(`❌ No free models detected.`);
-    lines.push(`\nTo use a free model, set one of these env vars in your .env file:`);
-    lines.push(`   GEMINI_API_KEY=...        # Google AI Studio (1500 req/day free)`);
-    lines.push(`   GROQ_API_KEY=...          # Groq (14400 req/day free)`);
-    lines.push(`   SILICONFLOW_API_KEY=...   # SiliconFlow (14M tokens/month free)`);
-    lines.push(`   OPENROUTER_API_KEY=...    # OpenRouter (many free models)`);
-    lines.push(`\nOr install Ollama locally (no API key needed):`);
-    lines.push(`   https://ollama.com → ollama pull qwen3`);
-  }
-
-  if (result.failed.length > 0) {
-    lines.push(`\n⚠️  Key configured but ping failed: ${result.failed.join(', ')}`);
+    lines.push('❌ No free models detected.');
+    lines.push('');
+    lines.push('Options:');
+    lines.push('  1. Add to .env:  OPENROUTER_API_KEY=<key>   → https://openrouter.ai/keys (free)');
+    lines.push('  2. Add to .env:  GEMINI_API_KEY=<key>       → https://aistudio.google.com/apikey (free)');
+    lines.push('  3. Install Ollama locally                   → https://ollama.com → ollama pull qwen3');
   }
 
   return lines.join('\n');
