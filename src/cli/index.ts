@@ -107,6 +107,20 @@ function validateModel(model: string): void {
   }
 }
 
+/**
+ * Infer which env var name is likely missing based on an error message.
+ * Used to jump directly to the right key prompt in configureAgent().
+ */
+function inferProviderEnvKey(errMsg: string): string | undefined {
+  if (errMsg.includes('gemini') || errMsg.includes('GEMINI'))   return 'GEMINI_API_KEY';
+  if (errMsg.includes('groq')   || errMsg.includes('GROQ'))     return 'GROQ_API_KEY';
+  if (errMsg.includes('openrouter') || errMsg.includes('OPENROUTER')) return 'OPENROUTER_API_KEY';
+  if (errMsg.includes('deepseek') || errMsg.includes('DEEPSEEK')) return 'DEEPSEEK_API_KEY';
+  if (errMsg.includes('anthropic') || errMsg.includes('ANTHROPIC')) return 'ANTHROPIC_API_KEY';
+  if (errMsg.includes('siliconflow') || errMsg.includes('SILICONFLOW')) return 'SILICONFLOW_API_KEY';
+  return undefined; // will show all providers
+}
+
 program
   .command('run <prompt>')
   .description('Execute a single agent task')
@@ -172,11 +186,20 @@ program
     } catch (err) {
       spinner.stop();
       const msg = err instanceof Error ? err.message : String(err);
-      // Friendly API key missing message
-      if (msg.includes('API_KEY') || msg.includes('api key') || msg.includes('authentication') || msg.includes('401')) {
+      // Detect API key errors — auto-trigger interactive setup instead of just printing and exiting
+      const isAuthError = msg.includes('API_KEY') || msg.includes('api key') ||
+        msg.includes('authentication') || msg.includes('401') || msg.includes('403') ||
+        msg.includes('Unauthorized') || msg.includes('invalid_api_key') ||
+        msg.includes('No API key') || msg.includes('api-key');
+      if (isAuthError) {
         console.error(chalk.red('\n✗ API key missing or invalid.'));
-        console.error(chalk.yellow('  Run: uagent config  — to set up your API keys'));
-        console.error(chalk.gray(`  Or set the environment variable (e.g. OPENAI_API_KEY=sk-...)`));
+        console.log(chalk.yellow('  Let\'s set up your API keys now...\n'));
+        const { configureAgent } = await import('./configure.js');
+        await configureAgent(
+          'API authentication failed — please add or update your key',
+          inferProviderEnvKey(msg),
+        );
+        console.log(chalk.gray('  Restart uagent to apply the new key.'));
       } else {
         console.error(chalk.red('\n✗ ') + msg);
       }
@@ -1057,7 +1080,35 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       await agent.runStream(input, (chunk) => process.stdout.write(chunk));
       process.stdout.write('\n\n');
     } catch (err) {
-      console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAuthError =
+        msg.includes('401') || msg.includes('403') ||
+        msg.includes('Unauthorized') || msg.includes('invalid_api_key') ||
+        msg.includes('API_KEY') || msg.includes('api key') ||
+        msg.includes('authentication') || msg.includes('No API key') ||
+        msg.includes('api-key') || msg.includes('Authentication');
+      if (isAuthError) {
+        console.error(chalk.red('\n✗ API key missing or invalid.'));
+        console.log(chalk.yellow('\n  Starting API key setup...\n'));
+        try {
+          const { configureAgent } = await import('./configure.js');
+          await configureAgent(
+            'API authentication failed — please add or update your key',
+            inferProviderEnvKey(msg),
+          );
+          // Reload env so new key takes effect in current process
+          const { config: loadEnv } = await import('dotenv');
+          const { resolve: r } = await import('path');
+          loadEnv({ path: r(process.cwd(), '.env'), override: true });
+          // Invalidate model client cache so next request uses the fresh key
+          modelManager.clearClientCache();
+          console.log(chalk.green('✓ Keys updated. Try your request again.\n'));
+        } catch (cfgErr) {
+          console.error(chalk.gray('  Config error: ' + (cfgErr instanceof Error ? cfgErr.message : String(cfgErr))));
+        }
+      } else {
+        console.error(chalk.red('\n✗ ') + msg);
+      }
     }
     rl.resume();
     rl.prompt();

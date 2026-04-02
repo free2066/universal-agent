@@ -260,6 +260,11 @@ export class ModelManager {
     this.saveToDisk();
   }
 
+  /** Invalidate the LLM client cache (call after updating API keys at runtime). */
+  clearClientCache(): void {
+    this.clientCache.clear();
+  }
+
   addProfile(profile: ModelProfile) {
     this.profiles.set(profile.name, profile);
     this.clientCache.clear(); // invalidate cache since a new profile may change factory routing
