@@ -10,6 +10,7 @@ import { codeInspectorTool } from './tools/code-inspector.js';
 import { selfHealTool } from './tools/self-heal.js';
 import { spawnAgentTool, spawnParallelTool } from './tools/spawn-agent.js';
 import { coordinatorRunTool } from './tools/coordinator-tool.js';
+import { businessDefectDetectorTool } from './tools/business-defect-detector.js';
 import { reverseAnalyzeTool } from './tools/reverse-analyze.js';
 import { loadSkillTool } from './tools/skill-tool.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
@@ -157,6 +158,7 @@ export class AgentCore {
     this.registry.register(spawnAgentTool);
     this.registry.register(spawnParallelTool);
     this.registry.register(coordinatorRunTool);
+    this.registry.register(businessDefectDetectorTool);
     this.registry.register(reverseAnalyzeTool);
     // s03 — in-session todo tracking with nag reminder
     this.registry.register(todoWriteTool);
