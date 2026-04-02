@@ -117,6 +117,62 @@ export class SubagentSystem {
         model: 'inherit',
         systemPrompt: 'You are a technical writer. Write clear, concise, and comprehensive documentation. Use examples and code snippets.',
       },
+      // ── Cowork Forge-inspired roles ──────────────────────────────────────────
+      //
+      // pm-agent: Post-delivery project manager.
+      // Handles bug reports, feature requests, project questions, and stage navigation.
+      // Mirrors Cowork Forge's PM Agent that stays active after project delivery:
+      // "PM Agent持续交互 — 修复bug、添加功能、咨询"
+      {
+        name: 'pm-agent',
+        description:
+          'Post-delivery project manager. Handles bug reports, feature requests, project questions. ' +
+          'Navigates the project lifecycle and coordinates with other agents. ' +
+          'Inspired by Cowork Forge PM Agent: "修复bug、添加功能、咨询".',
+        tools: ['Read', 'Grep', 'LS'],
+        model: 'inherit',
+        systemPrompt: [
+          'You are a seasoned project manager overseeing an AI-assisted software project.',
+          'Your role is to:',
+          '  1. Triage incoming requests (bug reports, feature requests, questions)',
+          '  2. Clarify requirements and break them into actionable tasks',
+          '  3. Identify which files/modules are affected',
+          '  4. Coordinate with specialized agents (reviewer, architect, test-writer)',
+          '  5. Track open issues and report project status',
+          '',
+          'Guidelines:',
+          '  - Always read relevant files before responding',
+          '  - Write clear, developer-friendly task descriptions',
+          '  - Flag blockers and risks proactively',
+          '  - Speak concisely — busy engineers hate padding',
+        ].join('\n'),
+      },
+      // change-triage: Intelligent change impact analysis agent.
+      // Analyzes diffs, identifies affected modules, and assesses risk.
+      // Mirrors Cowork Forge's Change Triage Agent: "增量更新，智能识别受影响文件"
+      {
+        name: 'change-triage',
+        description:
+          'Analyze code changes (diffs/PRs) for impact, risk, and affected modules. ' +
+          'Inspired by Cowork Forge: "增量更新，智能识别并只更新受影响文件".',
+        tools: ['Read', 'Grep', 'LS', 'Bash'],
+        model: 'inherit',
+        systemPrompt: [
+          'You are a change impact analyst. Your job is to:',
+          '  1. Analyze code changes (diffs, PRs, or commit descriptions)',
+          '  2. Identify all affected modules, files, and downstream dependencies',
+          '  3. Classify risk level: LOW / MEDIUM / HIGH / CRITICAL',
+          '  4. Recommend which tests to run and which teams to notify',
+          '  5. Flag breaking changes, API changes, and migration requirements',
+          '',
+          'Output format:',
+          '  ## Change Summary',
+          '  ## Affected Files',
+          '  ## Risk Assessment: <level>',
+          '  ## Required Actions',
+          '  ## Recommended Tests',
+        ].join('\n'),
+      },
     ];
     for (const agent of builtins) this.agents.set(agent.name, agent);
   }
@@ -130,11 +186,22 @@ export class SubagentSystem {
     for (const dir of searchPaths) {
       if (!existsSync(dir)) continue;
       try {
-        const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
+        const files = readdirSync(dir).filter((f) => f.endsWith('.md') || f.endsWith('.json'));
         for (const file of files) {
           const content = readFileSync(join(dir, file), 'utf-8');
-          const agent = parseAgentMarkdown(content, file.replace('.md', ''));
-          if (agent) this.agents.set(agent.name, agent);
+          const fallbackName = file.replace(/\.(md|json)$/, '');
+          const agent = file.endsWith('.json')
+            ? parseAgentJson(content, fallbackName)
+            : parseAgentMarkdown(content, fallbackName);
+          if (agent) {
+            // Builtin-protection: never let user-defined agents override built-ins
+            // Inspired by Cowork Forge's role protection: built-in roles cannot be overridden
+            if (this.isBuiltinAgent(agent.name)) {
+              log.debug(`Skipping user-defined agent "${agent.name}" — shadows a built-in agent`);
+              continue;
+            }
+            this.agents.set(agent.name, agent);
+          }
         }
       } catch { /* ignore */ }
     }
@@ -219,6 +286,8 @@ export class SubagentSystem {
   /** Names of built-in agents (loaded by loadBuiltinAgents) */
   private static readonly BUILTIN_AGENT_NAMES = new Set([
     'reviewer', 'architect', 'test-writer', 'data-analyst', 'security-auditor', 'doc-writer',
+    // Cowork Forge-inspired built-ins (added in optimization pass)
+    'pm-agent', 'change-triage',
   ]);
 
   private isBuiltinAgent(name: string): boolean {
@@ -258,6 +327,41 @@ function parseAgentMarkdown(content: string, fallbackName: string): SubagentDef 
       model: (frontmatter.model as string) || 'inherit',
       systemPrompt: body || undefined,
     };
+  } catch { return null; }
+}
+
+/**
+ * Parse an agent definition from a JSON file.
+ * Supports Cowork Forge's JSON agent format and universal-agent's own format.
+ *
+ * Expected JSON structure (flexible — all fields optional except one of id/name):
+ *   {
+ *     "id": "my-agent",           // or "name"
+ *     "name": "My Agent",         // display name or agent id
+ *     "description": "...",
+ *     "tools": ["Read", "Write"],
+ *     "model": { "name": "gpt-4.1" } | "gpt-4.1",
+ *     "instruction": "...",        // or "systemPrompt"
+ *     "systemPrompt": "..."
+ *   }
+ *
+ * Inspired by Cowork Forge's custom agent JSON format:
+ * "Agent角色编辑：调整指令、工具集、模型参数"
+ */
+function parseAgentJson(content: string, fallbackName: string): SubagentDef | null {
+  try {
+    const obj = JSON.parse(content) as Record<string, unknown>;
+    const name = (obj.id as string) || (obj.name as string) || fallbackName;
+    const description = (obj.description as string) || '';
+    const tools = Array.isArray(obj.tools) ? (obj.tools as string[]) : [];
+    const modelVal = obj.model;
+    const model = typeof modelVal === 'string'
+      ? modelVal
+      : (modelVal && typeof modelVal === 'object' && 'name' in modelVal)
+        ? String((modelVal as Record<string, unknown>).name)
+        : 'inherit';
+    const systemPrompt = (obj.instruction as string) || (obj.systemPrompt as string) || undefined;
+    return { name, description, tools, model, systemPrompt };
   } catch { return null; }
 }
 

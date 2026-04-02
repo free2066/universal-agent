@@ -1,12 +1,19 @@
 /**
  * MemoryStore — Long-term memory for universal-agent
  *
- * Inspired by mem9's architecture (see kstack article):
- *   - pinned:  permanent user-specified rules / preferences
- *   - insight: LLM-extracted project knowledge (Smart Ingest)
- *   - fact:    short-lived context facts (default 7-day TTL)
+ * Inspired by mem9's architecture and Cowork Forge's 4-type memory system
+ * (kstack article #15345 "我组建了一个虚拟产研团队，7个成员全是AI"):
  *
- * Storage: ~/.uagent/memory/<project-hash>/{pinned,insight,fact}.jsonl
+ * Memory types:
+ *   - pinned:    permanent user-specified rules / preferences
+ *   - insight:   LLM-extracted project knowledge (Smart Ingest)
+ *   - fact:      short-lived context facts (default 7-day TTL)
+ *   - iteration: task retrospective snapshots — what was done, problems found,
+ *                tech debt created (inspired by Cowork Forge's "迭代知识记忆").
+ *                Survives 90 days. Max 50 entries per project.
+ *                Retrieved via getRecentIterations() for system prompt injection.
+ *
+ * Storage: ~/.uagent/memory/<project-hash>/{pinned,insight,fact,iteration}.jsonl
  * No external dependencies — pure Node.js file I/O.
  */
 
@@ -19,11 +26,11 @@ import { createHash } from 'crypto';
 
 import { modelManager } from '../models/model-manager.js';
 import { rankMemories } from './memory-search.js';
-import type { Message } from '../models/types.js';
+import type { Message, ToolRegistration } from '../models/types.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type MemoryType = 'pinned' | 'insight' | 'fact';
+export type MemoryType = 'pinned' | 'insight' | 'fact' | 'iteration';
 export type MemorySource = 'user' | 'agent' | 'ingest';
 
 export interface MemoryItem {
@@ -58,13 +65,17 @@ const MEMORY_ROOT = join(CONFIG_DIR, 'memory');
 
 /** Maximum memories per type per project */
 const MAX_PER_TYPE: Record<MemoryType, number> = {
-  pinned:  500,
-  insight: 200,
-  fact:    300,
+  pinned:    500,
+  insight:   200,
+  fact:      300,
+  iteration:  50,  // keep last 50 task retrospectives per project
 };
 
 /** Default TTL for fact memories: 7 days */
 const FACT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Default TTL for iteration snapshots: 90 days (longer-lived project knowledge) */
+export const ITERATION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** Minimum content-similarity threshold for LWW dedup (0-1) */
 const DEDUP_THRESHOLD = 0.8;
@@ -153,7 +164,11 @@ export class MemoryStore {
       createdAt: now,
       updatedAt: now,
       accessCount: 0,
-      ttl: input.type === 'fact' && !input.ttl ? now + FACT_TTL_MS : input.ttl,
+      ttl: input.type === 'fact' && !input.ttl
+        ? now + FACT_TTL_MS
+        : input.type === 'iteration' && !input.ttl
+          ? now + ITERATION_TTL_MS
+          : input.ttl,
     };
     items.push(item);
     this.trimToLimit(items, input.type);
@@ -165,7 +180,7 @@ export class MemoryStore {
    * Get a single memory item by id.
    */
   get(id: string): MemoryItem | undefined {
-    for (const type of (['pinned', 'insight', 'fact'] as MemoryType[])) {
+    for (const type of (['pinned', 'insight', 'fact', 'iteration'] as MemoryType[])) {
       const found = this.load(type).find((m) => m.id === id);
       if (found) return found;
     }
@@ -177,7 +192,7 @@ export class MemoryStore {
    * Returns true if found and deleted.
    */
   delete(id: string): boolean {
-    for (const type of (['pinned', 'insight', 'fact'] as MemoryType[])) {
+    for (const type of (['pinned', 'insight', 'fact', 'iteration'] as MemoryType[])) {
       const items = this.load(type);
       const idx = items.findIndex((m) => m.id === id);
       if (idx !== -1) {
@@ -193,7 +208,7 @@ export class MemoryStore {
    * List memories for this project, optionally filtered by type.
    */
   list(options: { types?: MemoryType[] } = {}): MemoryItem[] {
-    const types = options.types ?? ['pinned', 'insight', 'fact'];
+    const types = options.types ?? ['pinned', 'insight', 'fact', 'iteration'];
     return types.flatMap((t) => this.load(t));
   }
 
@@ -201,7 +216,7 @@ export class MemoryStore {
    * Update a memory item's content and tags.
    */
   update(id: string, patch: Partial<Pick<MemoryItem, 'content' | 'tags' | 'ttl'>>): boolean {
-    for (const type of (['pinned', 'insight', 'fact'] as MemoryType[])) {
+    for (const type of (['pinned', 'insight', 'fact', 'iteration'] as MemoryType[])) {
       const items = this.load(type);
       const item = items.find((m) => m.id === id);
       if (item) {
@@ -217,7 +232,7 @@ export class MemoryStore {
    * Clear all memories for this project.
    */
   clear(types?: MemoryType[]): void {
-    const target = types ?? (['pinned', 'insight', 'fact'] as MemoryType[]);
+    const target = types ?? (['pinned', 'insight', 'fact', 'iteration'] as MemoryType[]);
     for (const type of target) {
       this.cache.set(type, []);
       this.cacheLoaded.add(type);
@@ -232,8 +247,9 @@ export class MemoryStore {
    *
    * Algorithm:
    *   1. Always include all `pinned` items (they are project-wide rules)
-   *   2. Rank remaining items by TF-IDF + time decay via RRF
-   *   3. Return pinned + top-K ranked
+   *   2. Rank insight/fact items by TF-IDF + time decay via RRF
+   *   3. Always inject most recent 3 `iteration` snapshots (time-sorted, no ranking)
+   *   4. Return pinned + top-K ranked + recent iterations
    */
   recall(query: string, options: RecallOptions = {}): MemoryItem[] {
     const { types, limit = 8 } = options;
@@ -241,26 +257,30 @@ export class MemoryStore {
     // Always load pinned
     const pinned = this.load('pinned');
 
+    // Rank insight/fact by relevance
     const rankable: MemoryItem[] = [];
     for (const type of (['insight', 'fact'] as MemoryType[])) {
       if (!types || types.includes(type)) {
         rankable.push(...this.load(type));
       }
     }
-
     const ranked = rankMemories(query, rankable, limit).map((r) => r.item);
 
+    // Always inject recent iteration snapshots (last 3, time-sorted descending)
+    // Inspired by Cowork Forge's "迭代知识记忆" — cross-session project knowledge
+    const recentIterations = (!types || types.includes('iteration'))
+      ? this.getRecentIterations(3)
+      : [];
+
     // Bump access count for recalled items (for LRU stats)
-    const recalled = [...pinned, ...ranked];
+    const recalled = [...pinned, ...ranked, ...recentIterations];
     for (const item of recalled) {
       item.accessCount += 1;
       item.updatedAt = Date.now();
     }
     // Persist updated access counts lazily — but only if something actually changed
-    // (i.e. recalled is non-empty, meaning accessCount was bumped on at least one item).
-    // Previously this wrote to disk on every recall even for zero-result queries.
     if (recalled.length > 0) {
-      for (const type of (['pinned', 'insight', 'fact'] as MemoryType[])) {
+      for (const type of (['pinned', 'insight', 'fact', 'iteration'] as MemoryType[])) {
         if (this.cacheLoaded.has(type) && (this.cache.get(type) ?? []).some((m) => recalled.includes(m))) {
           this.save(type);
         }
@@ -268,6 +288,24 @@ export class MemoryStore {
     }
 
     return recalled;
+  }
+
+  /**
+   * Get the most recent iteration snapshots for this project.
+   * Returns items sorted by creation time (newest first).
+   *
+   * Used by:
+   *   - recall() to inject recent iterations into system prompt automatically
+   *   - agent.ts to display iteration history in context
+   *
+   * Inspired by Cowork Forge's 4-layer memory system:
+   * "迭代知识记忆" — captures what was done, problems found, tech debt created.
+   */
+  getRecentIterations(limit = 5): MemoryItem[] {
+    return this.load('iteration')
+      .filter((m) => !m.ttl || m.ttl > Date.now()) // exclude expired
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
   }
 
   // ── Smart Ingest ──────────────────────────────────────────────────────────
@@ -359,30 +397,35 @@ ${convText}`;
   // ── GC ───────────────────────────────────────────────────────────────────
 
   /**
-   * Garbage collect expired `fact` memories and prune over-limit entries.
+   * Garbage collect expired memories and prune over-limit entries.
    * Returns count of removed items.
    */
   gc(): number {
     let removed = 0;
     const now = Date.now();
 
-    // Remove expired facts
-    const facts = this.load('fact');
-    const validFacts = facts.filter((m) => {
-      if (m.ttl && m.ttl < now) { removed++; return false; }
-      return true;
-    });
-    if (removed > 0) {
-      this.cache.set('fact', validFacts);
-      this.save('fact');
+    // Remove expired fact + iteration memories
+    for (const type of (['fact', 'iteration'] as MemoryType[])) {
+      const items = this.load(type);
+      const valid = items.filter((m) => {
+        if (m.ttl && m.ttl < now) { removed++; return false; }
+        return true;
+      });
+      if (valid.length !== items.length) {
+        this.cache.set(type, valid);
+        this.save(type);
+      }
     }
 
-    // Prune over-limit insight memories (remove least-accessed)
-    for (const type of (['insight', 'fact'] as MemoryType[])) {
+    // Prune over-limit entries (remove least-accessed)
+    for (const type of (['insight', 'fact', 'iteration'] as MemoryType[])) {
       const items = this.load(type);
       const max = MAX_PER_TYPE[type];
       if (items.length > max) {
-        const sorted = [...items].sort((a, b) => b.accessCount - a.accessCount);
+        // For iteration: keep newest N (time-sorted) rather than most-accessed
+        const sorted = type === 'iteration'
+          ? [...items].sort((a, b) => b.createdAt - a.createdAt)
+          : [...items].sort((a, b) => b.accessCount - a.accessCount);
         const pruned = sorted.slice(max);
         removed += pruned.length;
         this.cache.set(type, sorted.slice(0, max));
@@ -395,11 +438,12 @@ ${convText}`;
 
   // ── Stats ────────────────────────────────────────────────────────────────
 
-  stats(): { pinned: number; insight: number; fact: number; total: number } {
+  stats(): { pinned: number; insight: number; fact: number; iteration: number; total: number } {
     const pinned = this.load('pinned').length;
     const insight = this.load('insight').length;
     const fact = this.load('fact').length;
-    return { pinned, insight, fact, total: pinned + insight + fact };
+    const iteration = this.load('iteration').length;
+    return { pinned, insight, fact, iteration, total: pinned + insight + fact + iteration };
   }
 
   // ── Private Helpers ───────────────────────────────────────────────────────

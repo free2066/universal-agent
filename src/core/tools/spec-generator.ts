@@ -457,6 +457,8 @@ export async function generateSpec(
   // "标注不阻塞" — failures here never block saving the spec.
   let pmReviewContent = '';
   let qualityContent = '';
+  let finalSpecContent = specContent; // may be revised by Actor-Critic loop below
+  let actorCriticTrace = ''; // records whether a revision was triggered
 
   if (!opts.skipPmReview && !opts.skipQualityCheck) {
     // Run both reviews in parallel
@@ -498,6 +500,87 @@ export async function generateSpec(
     }
   }
 
+  // ── Stage 2.5: Actor-Critic Revision Loop (Cowork Forge pattern) ──────────
+  // Inspired by Cowork Forge's Actor-Critic: "每个阶段不是生成即结束，而是生成→审查→迭代"
+  // If PM review found P0 defects, run ONE revision pass where the Actor (LLM)
+  // rewrites the spec with the PM review feedback injected.
+  // Capped at 1 iteration to prevent infinite loops.
+  if (pmReviewContent && !opts.skipPmReview) {
+    const initialDefects = parsePmReviewSummary(pmReviewContent);
+    if (initialDefects.p0 > 0) {
+      try {
+        const revisionPrompt = [
+          `You are a senior software architect. You previously wrote a technical specification,`,
+          `but a PM review found ${initialDefects.p0} P0 defects that MUST be fixed before development starts.`,
+          ``,
+          `## Original Requirement`,
+          description,
+          ``,
+          `## PM Review Feedback (P0 defects to address)`,
+          pmReviewContent,
+          ``,
+          `## Current Spec (to be revised)`,
+          specContent,
+          ``,
+          `## Your Task`,
+          `Revise the spec to address ALL P0 defects from the PM review above.`,
+          `Keep the same section structure. Be concrete and specific.`,
+          `Output ONLY the revised spec (no prose, no preamble).`,
+        ].join('\n');
+
+        const revisionResponse = await client.chat({
+          systemPrompt:
+            'You are a senior software architect revising a spec based on PM review feedback. ' +
+            'Address all P0 defects. Keep the same structure. Output only the revised spec.',
+          messages: [{ role: 'user', content: revisionPrompt }],
+        });
+
+        const revisedContent = revisionResponse.content.trim();
+        if (revisedContent && revisedContent.length > 100) {
+          finalSpecContent = revisedContent;
+
+          // Re-run PM review on the revised spec (non-blocking)
+          // to track whether revision actually fixed the P0s
+          try {
+            const reReview = await client.chat({
+              systemPrompt: 'You are a 10-year veteran product manager. Be thorough and critical.',
+              messages: [{ role: 'user', content: buildPmReviewPrompt(revisedContent, description) }],
+            });
+            const revisedReviewContent = reReview.content.trim();
+            const revisedDefects = parsePmReviewSummary(revisedReviewContent);
+
+            actorCriticTrace = [
+              `## Actor-Critic Revision Trace`,
+              ``,
+              `> **Pattern**: Cowork Forge Actor-Critic ("生成→审查→迭代")`,
+              `> **Trigger**: PM Review found ${initialDefects.p0} P0 defect(s)`,
+              `> **Action**: Actor (LLM) revised spec in response to Critic (PM Review) feedback`,
+              `> **Result**: Post-revision P0 count: ${revisedDefects.p0} (was: ${initialDefects.p0})`,
+              ``,
+              `### Pre-Revision Defects`,
+              `P0: ${initialDefects.p0} | P1: ${initialDefects.p1} | P2: ${initialDefects.p2}`,
+              ``,
+              `### Post-Revision Defects`,
+              `P0: ${revisedDefects.p0} | P1: ${revisedDefects.p1} | P2: ${revisedDefects.p2}`,
+            ].join('\n');
+
+            // Use post-revision review as the canonical PM review
+            pmReviewContent = revisedReviewContent;
+          } catch {
+            actorCriticTrace = [
+              `## Actor-Critic Revision Trace`,
+              `> **Trigger**: PM Review found ${initialDefects.p0} P0 defect(s) — spec revised.`,
+              `> **Re-review**: Failed (non-fatal). Revision was applied.`,
+            ].join('\n');
+          }
+        }
+      } catch {
+        // Actor-Critic revision failure is non-fatal — proceed with original spec
+        actorCriticTrace = `## Actor-Critic Revision Trace\n> Revision attempted but failed (non-fatal). Original spec retained.`;
+      }
+    }
+  }
+
   // ── Stage 3: Parse results ────────────────────────────────────────────────
   const tasks = parseTasksFromSpec(specContent);
   const affectedFiles = parseAffectedFiles(specContent);
@@ -512,7 +595,13 @@ export async function generateSpec(
     : undefined;
 
   // ── Stage 4: Assemble final document (spec + reviews appended inline) ─────
-  const sections: string[] = [specContent];
+  // Use finalSpecContent (may be the Actor-Critic revised version)
+  const sections: string[] = [finalSpecContent];
+
+  // If Actor-Critic revised the spec, append the trace for transparency
+  if (actorCriticTrace) {
+    sections.push(`\n\n---\n\n${actorCriticTrace}`);
+  }
 
   if (pmReviewContent) {
     const summary = pmReview!.defects;

@@ -1,24 +1,25 @@
 /**
- * CoordinatorRun Tool — R→S→I→V Four-phase Multi-Agent Pipeline
+ * CoordinatorRun Tool — R→S→Critic→I→V Five-phase Multi-Agent Pipeline
  *
- * Inspired by Claude Code's "Coordinator Mode" (CLAUDE_CODE_COORDINATOR_MODE):
+ * Inspired by Claude Code's "Coordinator Mode" and Cowork Forge's Actor-Critic pattern
+ * (kstack article #15345 "我组建了一个虚拟产研团队，7个成员全是AI"):
+ *
  * The Coordinator acts as a pure orchestrator — it ONLY spawns agents and synthesizes
  * results. It never directly writes files, runs commands, or touches code.
  *
- * Four phases (mirrors Claude Code's design exactly):
- *   Phase 1 — Research:        Multiple worker agents run IN PARALLEL, exploring the
- *                               codebase, gathering facts, writing to scratchpad.
- *   Phase 2 — Synthesis:       Coordinator itself reads all scratchpad entries and
- *                               produces a concrete implementation plan. Must NOT say
- *                               "based on your findings" — must read and specify exactly.
- *   Phase 3 — Implementation:  Multiple worker agents run IN PARALLEL, each implementing
- *                               a specific part of the plan. Use 'main' (strong) model.
- *   Phase 4 — Verification:    Worker agents verify the implementation (tests, lint, review).
- *                               Use 'quick' model (broad sweep, not deep reasoning).
+ * Five phases (original 4 + Critic Review from Cowork Forge):
+ *   Phase 1 — Research:        Parallel worker agents explore the codebase, write to scratchpad.
+ *   Phase 2 — Synthesis:       Coordinator reads findings, produces concrete implementation plan.
+ *   Phase 2.5 — Critic Review: Independent Critic agent audits the synthesis plan.
+ *                               If plan has major gaps, triggers one refinement loop.
+ *                               Inspired by Cowork Forge's Actor-Critic pattern:
+ *                               "每个阶段不是生成即结束，而是生成→审查→迭代"
+ *   Phase 3 — Implementation:  Parallel worker agents execute the (possibly refined) plan.
+ *   Phase 4 — Verification:    Worker agents verify results (tests, lint, review).
  *
  * Tool role isolation (mirrors Claude Code's INTERNAL_COORDINATOR_TOOLS):
- *   - Coordinator: can ONLY spawn agents and synthesize. No Bash, no file writes.
- *   - Workers:     cannot use coordination tools (no SpawnAgent, no SpawnParallel).
+ *   - Coordinator: can ONLY orchestrate — never writes files or runs commands directly.
+ *   - Workers:     cannot use coordination tools (recursive-bomb safe).
  *   - This is enforced via UAGENT_WORKER_MODE=1 env var in worker processes.
  *
  * Usage:
@@ -33,17 +34,128 @@ import type { ToolRegistration } from '../../models/types.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
+/**
+ * FlowConfig — Parameterize the Coordinator pipeline behavior.
+ *
+ * Inspired by Cowork Forge's Flow JSON configuration:
+ * "开发流程可以通过JSON配置定制，包括阶段顺序、Agent角色、工具集"
+ *
+ * Key options:
+ *   skip_critic:           Skip Critic Review phase (fast mode, saves ~30s)
+ *   skip_verification:     Skip Phase 4 Verification (useful for pure research runs)
+ *   max_parallel:          Limit concurrent worker agents (default: unlimited)
+ *   stop_on_impl_failure:  Abort pipeline if any implementation worker returns ERROR
+ */
+export interface FlowConfig {
+  /** Skip Critic Review (Phase 2.5) — fast mode. Default: false */
+  skip_critic?: boolean;
+  /** Skip Verification (Phase 4). Default: false */
+  skip_verification?: boolean;
+  /** Max concurrent workers per phase. Default: unlimited */
+  max_parallel?: number;
+  /** Stop implementation phase if any worker returns ERROR. Default: false */
+  stop_on_impl_failure?: boolean;
+}
+
+export interface CriticReview {
+  /** PASS: plan is good, proceed to implementation */
+  verdict: 'PASS' | 'REVISE';
+  /** Issues found by Critic (empty if PASS) */
+  issues: string[];
+  /** Refined plan (only present when verdict === 'REVISE') */
+  refinedPlan?: string;
+}
+
 export interface CoordinatorResult {
   goal: string;
   scratchpadId: string;
   phases: {
     research: string[];
     synthesis: string;
+    criticReview?: CriticReview;
     implementation: string[];
     verification: string[];
   };
   success: boolean;
   summary: string;
+}
+
+// ── Critic Review phase ────────────────────────────────────────────────────
+// Actor-Critic pattern from Cowork Forge (kstack #15345):
+//   Actor (Synthesis) generates the plan.
+//   Critic audits the plan for gaps, contradictions, infeasible tasks.
+//   If REVISE: feeds issues back to Synthesis for one refinement pass.
+// Uses 'quick' model — Critic should be fast, not deep reasoning.
+
+async function runCriticReview(
+  plan: string,
+  goal: string,
+  projectRoot: string,
+  critId: string,
+): Promise<CriticReview> {
+  const { AgentCore } = await import('../agent.js');
+  const model = modelManager.getCurrentModel('quick'); // Critic uses quick model (fast)
+
+  const agent = new AgentCore({
+    domain: 'auto',
+    model,
+    stream: false,
+    verbose: false,
+  });
+
+  const criticPrompt = [
+    `# Critic Review Phase`,
+    ``,
+    `## Goal`,
+    goal,
+    ``,
+    `## Synthesis Plan to Review`,
+    plan,
+    ``,
+    `## Your Role`,
+    `You are a critical reviewer (Critic agent). Your job is to audit the implementation plan above.`,
+    `Be strict. Find gaps before they become bugs.`,
+    ``,
+    `## Check for these issues:`,
+    `1. **Completeness**: Are all aspects of the goal covered? Are there missing steps?`,
+    `2. **Dependencies**: Are task dependencies correct? Will task N definitely have what it needs?`,
+    `3. **Feasibility**: Are there tasks that are vague, contradictory, or technically infeasible?`,
+    `4. **Risks**: Are there obvious risks the plan ignores?`,
+    ``,
+    `## Output Format (STRICT — return valid JSON only)`,
+    `{`,
+    `  "verdict": "PASS" | "REVISE",`,
+    `  "issues": ["issue 1", "issue 2"],`,
+    `  "refinedPlan": "<revised full plan — only include if verdict is REVISE>"`,
+    `}`,
+    ``,
+    `Rules:`,
+    `- Return PASS if the plan is solid (minor nitpicks don't count — only real gaps)`,
+    `- Return REVISE only if there are P0 issues that would cause implementation failure`,
+    `- If REVISE, include a fully corrected version of the plan in refinedPlan`,
+    `- Return ONLY the JSON object — no prose, no markdown fences`,
+  ].join('\n');
+
+  try {
+    const raw = await agent.run(criticPrompt);
+    // Extract JSON from response (may include extra prose)
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      // If no JSON found, treat as PASS (non-blocking)
+      return { verdict: 'PASS', issues: [] };
+    }
+    const parsed = JSON.parse(jsonMatch[0]) as CriticReview;
+    const result: CriticReview = {
+      verdict: parsed.verdict === 'REVISE' ? 'REVISE' : 'PASS',
+      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+      refinedPlan: parsed.refinedPlan,
+    };
+    scratchpadWrite(projectRoot, critId, JSON.stringify(result, null, 2));
+    return result;
+  } catch {
+    // Critic failure is non-blocking (标注不阻塞原则)
+    return { verdict: 'PASS', issues: ['[Critic error — proceeding with original plan]'] };
+  }
 }
 
 // ── Synthesis phase ────────────────────────────────────────────────────────
@@ -151,24 +263,65 @@ async function runWorkersParallel(
 
 // ── Main coordinator orchestration ────────────────────────────────────────
 
+/**
+ * Concurrency limiter: run `tasks` in batches of `maxParallel`.
+ * When `maxParallel` is undefined or <= 0, runs all concurrently (existing behavior).
+ * Inspired by Cowork Forge's configurable parallelism: "max_parallel controls worker concurrency"
+ */
+async function runWorkersLimited<T>(
+  tasks: Array<() => Promise<T>>,
+  maxParallel?: number,
+): Promise<T[]> {
+  if (!maxParallel || maxParallel <= 0 || maxParallel >= tasks.length) {
+    return Promise.all(tasks.map((fn) => fn()));
+  }
+
+  const results: T[] = new Array(tasks.length);
+  let idx = 0;
+
+  async function worker(): Promise<void> {
+    while (idx < tasks.length) {
+      const i = idx++;
+      results[i] = await tasks[i]();
+    }
+  }
+
+  const workers = Array.from({ length: maxParallel }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 async function runCoordinator(
   goal: string,
   researchTasks: string[],
   scratchpadId: string,
   projectRoot: string,
   timeoutMs: number,
+  flowConfig: FlowConfig = {},
 ): Promise<CoordinatorResult> {
   const root = resolve(projectRoot);
 
-  // ── Phase 1: Research (parallel) ─────────────────────────────────────────
-  const researchResults = await runWorkersParallel(researchTasks, 'research', {
-    scratchpadId,
-    projectRoot: root,
-    timeoutMs,
+  // ── Phase 1: Research (parallel, optionally limited) ────────────────────
+  const researchFns = researchTasks.map((task, idx) => async () => {
+    const taskId = `${scratchpadId}-research-${idx}`;
+    try {
+      const { spawnAgentTool } = await import('./spawn-agent.js');
+      const result = await spawnAgentTool.handler({
+        task,
+        task_id: taskId,
+        role: 'research',
+        mode: 'empty',
+        timeout_seconds: timeoutMs / 1000,
+      }) as string;
+      scratchpadWrite(root, taskId, result);
+      return result;
+    } catch (err) {
+      return `[research ${idx}] Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
   });
+  const researchResults = await runWorkersLimited(researchFns, flowConfig.max_parallel);
 
   // ── Phase 2: Synthesis (coordinator only) ─────────────────────────────────
-  // Read all scratchpad entries written by research workers
   const scratchKeys = scratchpadList(root).filter((k) => k.startsWith(scratchpadId));
   const scratchEntries = scratchKeys
     .map((k) => {
@@ -180,26 +333,89 @@ async function runCoordinator(
 
   const synthPlan = await runSynthesis(goal, scratchEntries, root, scratchpadId);
 
-  // ── Phase 3: Implementation (parallel) ────────────────────────────────────
-  const implTasks = extractTasks(synthPlan, 'Task');
-  const implResults = await runWorkersParallel(implTasks, 'implementation', {
-    scratchpadId,
-    projectRoot: root,
-    timeoutMs,
+  // ── Phase 2.5: Critic Review (Actor-Critic, skippable via FlowConfig) ──────
+  // Inspired by Cowork Forge: "每个阶段不是生成即结束，而是生成→审查→迭代"
+  // Skip when flow_config.skip_critic=true (fast mode)
+  let criticReview: CriticReview = { verdict: 'PASS', issues: [] };
+  if (!flowConfig.skip_critic) {
+    criticReview = await runCriticReview(
+      synthPlan,
+      goal,
+      root,
+      `${scratchpadId}-critic`,
+    );
+  }
+  const finalPlan = criticReview.verdict === 'REVISE' && criticReview.refinedPlan
+    ? criticReview.refinedPlan
+    : synthPlan;
+
+  // ── Phase 3: Implementation (parallel, optionally limited) ────────────────
+  // stop_on_impl_failure: abort if any worker returns ERROR keyword
+  const implTasks = extractTasks(finalPlan, 'Task');
+  const implFns = implTasks.map((task, idx) => async () => {
+    const taskId = `${scratchpadId}-implementation-${idx}`;
+    try {
+      const { spawnAgentTool } = await import('./spawn-agent.js');
+      return await spawnAgentTool.handler({
+        task,
+        task_id: taskId,
+        role: 'implementation',
+        mode: 'empty',
+        timeout_seconds: timeoutMs / 1000,
+      }) as string;
+    } catch (err) {
+      return `[implementation ${idx}] Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
   });
 
-  // ── Phase 4: Verification (parallel) ──────────────────────────────────────
-  const verifyTasks = extractTasks(synthPlan, 'Verify');
-  const verifyResults = await runWorkersParallel(verifyTasks, 'verify', {
-    scratchpadId,
-    projectRoot: root,
-    timeoutMs,
-  });
+  let implResults: string[];
+  if (flowConfig.stop_on_impl_failure) {
+    // Sequential with early abort on ERROR
+    implResults = [];
+    for (const fn of implFns) {
+      const result = await fn();
+      implResults.push(result);
+      if (/\b(ERROR)\b/i.test(result)) {
+        implResults.push(`[Pipeline aborted: stop_on_impl_failure=true, ERROR detected in implementation worker ${implResults.length - 1}]`);
+        break;
+      }
+    }
+  } else {
+    implResults = await runWorkersLimited(implFns, flowConfig.max_parallel);
+  }
 
-  // Determine overall success: no verify task should contain "FAIL" or "ERROR"
+  // ── Phase 4: Verification (parallel, skippable via FlowConfig) ────────────
+  let verifyResults: string[] = [];
+  if (!flowConfig.skip_verification) {
+    const verifyTasks = extractTasks(finalPlan, 'Verify');
+    const verifyFns = verifyTasks.map((task, idx) => async () => {
+      const taskId = `${scratchpadId}-verify-${idx}`;
+      try {
+        const { spawnAgentTool } = await import('./spawn-agent.js');
+        return await spawnAgentTool.handler({
+          task,
+          task_id: taskId,
+          role: 'verify',
+          mode: 'empty',
+          timeout_seconds: timeoutMs / 1000,
+        }) as string;
+      } catch (err) {
+        return `[verify ${idx}] Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    });
+    verifyResults = await runWorkersLimited(verifyFns, flowConfig.max_parallel);
+  }
+
+  // Determine overall success
   const failed = verifyResults.some((r) =>
     /\b(FAIL|FAILED|ERROR|❌)\b/i.test(r),
   );
+
+  const criticLine = flowConfig.skip_critic
+    ? `- ⏭️ Critic Review (SKIPPED — fast mode via flow_config.skip_critic)`
+    : criticReview.verdict === 'PASS'
+      ? `- ✅ Critic Review (PASS — plan approved)`
+      : `- ⚡ Critic Review (REVISED — ${criticReview.issues.length} issue(s) addressed)`;
 
   const summary = [
     `# Coordinator Run: ${goal}`,
@@ -207,11 +423,12 @@ async function runCoordinator(
     `## Phases Completed`,
     `- ✅ Research (${researchResults.length} workers)`,
     `- ✅ Synthesis`,
+    criticLine,
     `- ${failed ? '⚠️' : '✅'} Implementation (${implResults.length} workers)`,
     `- ${failed ? '❌' : '✅'} Verification (${verifyResults.length} workers)`,
     ``,
-    `## Implementation Plan`,
-    synthPlan.slice(0, 1000) + (synthPlan.length > 1000 ? '\n...(truncated)' : ''),
+    `## Implementation Plan${criticReview.verdict === 'REVISE' ? ' (Critic-Refined)' : ''}`,
+    finalPlan.slice(0, 1000) + (finalPlan.length > 1000 ? '\n...(truncated)' : ''),
     ``,
     `## Status: ${failed ? 'PARTIAL — verification failures detected' : 'SUCCESS'}`,
   ].join('\n');
@@ -225,6 +442,7 @@ async function runCoordinator(
     phases: {
       research: researchResults,
       synthesis: synthPlan,
+      criticReview,
       implementation: implResults,
       verification: verifyResults,
     },
@@ -233,22 +451,23 @@ async function runCoordinator(
   };
 }
 
+
 // ── Tool registration ──────────────────────────────────────────────────────
 
 export const coordinatorRunTool: ToolRegistration = {
   definition: {
     name: 'CoordinatorRun',
     description: [
-      'Orchestrate a complex task using a four-phase multi-agent pipeline:',
+      'orchestrate a complex task using a five-phase multi-agent pipeline (Actor-Critic enhanced):',
       '  Phase 1 — Research:        Parallel worker agents explore the codebase and gather facts',
       '  Phase 2 — Synthesis:       Coordinator reads all findings, produces concrete plan (NO vague delegation)',
-      '  Phase 3 — Implementation:  Parallel worker agents execute the plan (uses strong model)',
+      '  Phase 2.5 — Critic Review: Critic agent audits the plan; REVISE verdict triggers one refinement loop',
+      '  Phase 3 — Implementation:  Parallel worker agents execute the (possibly refined) plan',
       '  Phase 4 — Verification:    Worker agents verify results (tests, lint, review)',
       '',
-      'Key design principles (from Claude Code source):',
+      'Key design principles (Claude Code + Cowork Forge Actor-Critic pattern):',
       '  - Coordinator ONLY orchestrates — never writes files or runs commands directly',
-      '  - Worker agents are isolated — no access to coordination tools (recursive-bomb safe)',
-      '  - Research workers use quick/cheap model; Implementation workers use main/strong model',
+      '  - Critic uses quick model (fast audit); Implementation uses main model (strong execution)',
       '  - Workers share findings via scratchpad directory (.uagent/scratchpad/)',
       '  - Synthesis MUST specify exactly what to do — forbidden to say "based on your findings"',
       '',
@@ -280,6 +499,24 @@ export const coordinatorRunTool: ToolRegistration = {
           type: 'number',
           description: 'Timeout per worker agent in seconds (default: 300). Total time may be up to 4x this.',
         },
+        flow_config: {
+          type: 'object',
+          description: [
+            'Optional FlowConfig to customize pipeline behavior (Cowork Forge-inspired).',
+            'Properties:',
+            '  skip_critic: boolean — Skip Critic Review (Phase 2.5). Fast mode. Default: false',
+            '  skip_verification: boolean — Skip Verification (Phase 4). Default: false',
+            '  max_parallel: number — Max concurrent workers per phase. Default: unlimited',
+            '  stop_on_impl_failure: boolean — Abort if any impl worker returns ERROR. Default: false',
+            'Example: { "skip_critic": true, "max_parallel": 3 }',
+          ].join('\n'),
+          properties: {
+            skip_critic: { type: 'boolean' },
+            skip_verification: { type: 'boolean' },
+            max_parallel: { type: 'number' },
+            stop_on_impl_failure: { type: 'boolean' },
+          },
+        },
       },
       required: ['goal', 'research_tasks', 'scratchpad_id'],
     },
@@ -290,11 +527,13 @@ export const coordinatorRunTool: ToolRegistration = {
       research_tasks,
       scratchpad_id,
       timeout_seconds,
+      flow_config,
     } = args as {
       goal: string;
       research_tasks: string[];
       scratchpad_id: string;
       timeout_seconds?: number;
+      flow_config?: FlowConfig;
     };
 
     if (!goal || typeof goal !== 'string') {
@@ -319,6 +558,7 @@ export const coordinatorRunTool: ToolRegistration = {
         scratchpad_id,
         process.cwd(),
         (timeout_seconds ?? 300) * 1000,
+        flow_config ?? {},
       );
       return result.summary;
     } catch (err) {

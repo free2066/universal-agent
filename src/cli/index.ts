@@ -37,7 +37,7 @@ program
   .command('chat', { isDefault: true })
   .description('Start interactive agent session')
   .option('-d, --domain <domain>', 'Domain (data|dev|service|auto)', 'auto')
-  .option('-m, --model <model>', 'Model to use', 'gpt-4o')
+  .option('-m, --model <model>', 'Model to use', 'gpt-4.1')
   .option('--safe', 'Enable safe mode (blocks dangerous commands)', false)
   .option('-v, --verbose', 'Show tool call details')
   .action(async (options) => {
@@ -99,7 +99,7 @@ program
   .command('run <prompt>')
   .description('Execute a single agent task')
   .option('-d, --domain <domain>', 'Domain', 'auto')
-  .option('-m, --model <model>', 'Model', 'gpt-4o')
+  .option('-m, --model <model>', 'Model', 'gpt-4.1')
   .option('-f, --file <file>', 'Input file path')
   .option('--safe', 'Safe mode')
   .option('--context <ids>', 'Comma-separated context IDs to inject from .uagent/context/ (e.g. proj-struct,dep-graph)')

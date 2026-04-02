@@ -88,6 +88,7 @@ export function applyDecay(baseScore: number, item: MemoryItem): number {
     pinned: 0,
     insight: 0.02,
     fact: 0.1,
+    iteration: 0.01,  // iteration snapshots decay very slowly (half-life ≈ 70 days)
   };
   const rate = decayRate[item.type] ?? 0.05;
   const daysSince = (Date.now() - item.updatedAt) / (1000 * 60 * 60 * 24);
