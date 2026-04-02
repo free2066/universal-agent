@@ -16,20 +16,32 @@ export interface SubagentDef {
 }
 
 // ── Usage tracking (for entropy-reduction / zombie detection) ─────────────────
+// In-memory cache that batches disk writes: recordUsage() only flushes to disk
+// when the dirty flag is set AND at least USAGE_FLUSH_INTERVAL_MS have elapsed
+// since the last flush. This avoids a readFileSync+writeFileSync pair on every
+// single subagent call in high-frequency SpawnParallel scenarios.
 interface UsageRecord {
   lastUsed: number; // epoch ms
   callCount: number;
 }
 
 const usageFile = resolve(process.env.HOME || '~', '.uagent', 'agent-usage.json');
+const USAGE_FLUSH_INTERVAL_MS = 30_000; // flush at most once per 30 s
+
+let _usageCache: Record<string, UsageRecord> | null = null;
+let _usageDirty = false;
+let _usageLastFlush = 0;
 
 function loadUsage(): Record<string, UsageRecord> {
+  if (_usageCache) return _usageCache;
   try {
     if (existsSync(usageFile)) {
-      return JSON.parse(readFileSync(usageFile, 'utf-8')) as Record<string, UsageRecord>;
+      _usageCache = JSON.parse(readFileSync(usageFile, 'utf-8')) as Record<string, UsageRecord>;
+      return _usageCache;
     }
   } catch { /* ignore */ }
-  return {};
+  _usageCache = {};
+  return _usageCache;
 }
 
 function saveUsage(usage: Record<string, UsageRecord>) {
@@ -37,6 +49,8 @@ function saveUsage(usage: Record<string, UsageRecord>) {
     const dir = resolve(process.env.HOME || '~', '.uagent');
     mkdirSync(dir, { recursive: true });
     writeFileSync(usageFile, JSON.stringify(usage, null, 2));
+    _usageLastFlush = Date.now();
+    _usageDirty = false;
   } catch { /* ignore */ }
 }
 
@@ -44,7 +58,11 @@ function recordUsage(agentName: string) {
   const usage = loadUsage();
   const existing = usage[agentName] ?? { lastUsed: 0, callCount: 0 };
   usage[agentName] = { lastUsed: Date.now(), callCount: existing.callCount + 1 };
-  saveUsage(usage);
+  _usageDirty = true;
+  // Only flush if enough time has elapsed (batching writes for high-frequency calls)
+  if (Date.now() - _usageLastFlush >= USAGE_FLUSH_INTERVAL_MS) {
+    saveUsage(usage);
+  }
 }
 
 export class SubagentSystem {
@@ -326,8 +344,25 @@ export const askExpertModelTool: ToolRegistration = {
   },
   handler: async (args: Record<string, unknown>) => {
     const { model, question, context } = args as { model: string; question: string; context?: string };
-    const { createLLMClient } = await import('../models/llm-client.js');
-    const client = createLLMClient(model);
+    // Re-use modelManager's cached LLMClient so we don't allocate a new HTTP
+    // client object on every AskExpertModel call.  We temporarily point 'task'
+    // at the requested model, grab the (now-cached) client, then restore the
+    // previous pointer so we don't leave a persistent side-effect.
+    const prevTaskModel = modelManager.getCurrentModel('task');
+    let client;
+    try {
+      modelManager.setPointer('task', model);
+      client = modelManager.getClient('task');
+    } catch {
+      // Unknown model not in profiles — fall back to direct instantiation
+      const { createLLMClient } = await import('../models/llm-client.js');
+      client = createLLMClient(model);
+    } finally {
+      // Restore original task pointer to avoid persistent side-effect
+      if (prevTaskModel && prevTaskModel !== model) {
+        try { modelManager.setPointer('task', prevTaskModel); } catch { /* ignore */ }
+      }
+    }
     const prompt = context ? `${question}\n\nContext:\n${context}` : question;
     try {
       const response = await client.chat({

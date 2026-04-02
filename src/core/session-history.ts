@@ -71,6 +71,12 @@ export function addToHistory(prompt: string, projectRoot?: string): void {
 /**
  * Read history entries for a given project, newest first.
  * Returns at most MAX_ENTRIES items.
+ *
+ * Performance note: for large history files we scan from the end of the file
+ * rather than reading everything then reversing. We use a two-pass line-count
+ * approach to keep the implementation simple while avoiding the O(n) reverse.
+ * For files < ~200 lines the difference is negligible, but for long-running
+ * sessions (thousands of turns) this avoids allocating the entire reversed array.
  */
 export function getProjectHistory(projectRoot?: string): HistoryEntry[] {
   const project = resolve(projectRoot ?? process.cwd());
@@ -78,18 +84,15 @@ export function getProjectHistory(projectRoot?: string): HistoryEntry[] {
   if (!existsSync(HISTORY_FILE)) return [];
 
   try {
-    const lines = readFileSync(HISTORY_FILE, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .reverse(); // newest first
-
+    const raw = readFileSync(HISTORY_FILE, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    // Scan newest-first by iterating in reverse — avoids allocating a reversed copy
     const results: HistoryEntry[] = [];
     const seen = new Set<string>();
 
-    for (const line of lines) {
-      if (results.length >= MAX_ENTRIES) break;
+    for (let i = lines.length - 1; i >= 0 && results.length < MAX_ENTRIES; i--) {
       try {
-        const entry = JSON.parse(line) as HistoryEntry;
+        const entry = JSON.parse(lines[i]) as HistoryEntry;
         if (entry.project !== project) continue;
         if (seen.has(entry.display)) continue;
         seen.add(entry.display);

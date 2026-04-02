@@ -2,6 +2,21 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import type { ToolDefinition, ToolRegistration } from '../models/types.js';
 
+/**
+ * AbortSignal.timeout() polyfill for Node.js < 17.3.
+ * AbortSignal.timeout is only available from Node 17.3+; older runtimes throw
+ * TypeError: AbortSignal.timeout is not a function.  This helper falls back to
+ * a manual AbortController + setTimeout on older Node versions.
+ */
+function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms);
+  }
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(new DOMException('TimeoutError', 'TimeoutError')), ms);
+  return ctrl.signal;
+}
+
 export interface MCPServer {
   name: string;
   type: 'stdio' | 'sse' | 'http';
@@ -66,7 +81,7 @@ export class MCPManager {
     const baseUrl = server.url.replace(/\/sse$/, '');
     const timeout = parseInt(process.env.MCP_CONNECTION_TIMEOUT_MS || '5000');
     const res = await fetch(`${baseUrl}/tools`, {
-      signal: AbortSignal.timeout(timeout),
+      signal: timeoutSignal(timeout),
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} from ${baseUrl}/tools`);
@@ -96,7 +111,7 @@ export class MCPManager {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ arguments: args }),
-          signal: AbortSignal.timeout(timeout),
+          signal: timeoutSignal(timeout),
         });
         if (!res.ok) throw new Error(`MCP tool error: HTTP ${res.status}`);
         const data = await res.json() as { content?: Array<{ text?: string }> };

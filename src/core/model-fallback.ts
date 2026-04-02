@@ -14,6 +14,7 @@
 
 import type { LLMClient, ChatOptions, ChatResponse } from '../models/types.js';
 import { createLogger } from './logger.js';
+import { createLLMClient as _createLLMClient } from '../models/llm-client.js';
 
 const log = createLogger('model-fallback');
 
@@ -104,14 +105,12 @@ export class ModelFallbackChain {
   }
 
   private async _tryFallbacks(options: ChatOptions, primaryErr: unknown): Promise<ChatResponse> {
-    // Resolve the client factory: use the stored one or fall back to createLLMClient
-    let createClient: (modelName: string) => LLMClient;
-    if (this.clientFactory !== null) {
-      createClient = this.clientFactory;
-    } else {
-      const { createLLMClient } = await import('../models/llm-client.js');
-      createClient = createLLMClient;
-    }
+    // Resolve the client factory: use the stored one or fall back to the statically
+    // imported createLLMClient.  Previously used dynamic import() on every fallback
+    // call which caused a micro-delay and bypassed Node's module cache in some
+    // bundler configs.  Static import is resolved once at module load time.
+    const createClient: (modelName: string) => LLMClient =
+      this.clientFactory ?? _createLLMClient;
 
     let lastErr: unknown = primaryErr;
 

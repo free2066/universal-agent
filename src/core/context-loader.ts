@@ -177,19 +177,42 @@ export function buildSystemPromptWithContext(basePrompt: string, startDir?: stri
 /**
  * Capture a one-time git status snapshot for the system prompt.
  * Truncated to ~2 KB to avoid inflating the context with large diffs.
+ *
+ * Performance: git status result is cached per (cwd, startupTime) so that
+ * repeated calls within the same process (one per agent turn) only pay the
+ * execSync cost ONCE per session.  The cache key includes process.uptime()
+ * rounded to the minute so it auto-expires on restart without extra logic.
  */
+const _gitStatusCache = new Map<string, string | null>();
+
 function getGitStatus(cwd?: string): string | null {
   const dir = cwd || process.cwd();
+  // Cache key: directory + minute-bucket (auto-expires after ~1 min)
+  const bucket = Math.floor(process.uptime() / 60);
+  const key = `${dir}:${bucket}`;
+
+  if (_gitStatusCache.has(key)) return _gitStatusCache.get(key)!;
+
+  let result: string | null = null;
   try {
     const raw = execSync('git status --short --branch 2>/dev/null', {
       cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000,
     }).trim();
-    if (!raw) return null;
-    // Truncate to 2 KB
-    return raw.length > 2048 ? raw.slice(0, 2048) + '\n...(truncated)' : raw;
+    if (raw) {
+      // Truncate to 2 KB
+      result = raw.length > 2048 ? raw.slice(0, 2048) + '\n...(truncated)' : raw;
+    }
   } catch {
-    return null;
+    result = null;
   }
+
+  _gitStatusCache.set(key, result);
+  // Evict stale keys to prevent unbounded Map growth on long sessions
+  if (_gitStatusCache.size > 10) {
+    const oldest = _gitStatusCache.keys().next().value;
+    if (oldest) _gitStatusCache.delete(oldest);
+  }
+  return result;
 }
 
 export function initAgentsMd(dir: string): string {

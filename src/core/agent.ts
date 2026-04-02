@@ -279,7 +279,9 @@ export class AgentCore {
     }
 
     let iteration = 0;
-    const MAX_ITERATIONS = 15;
+    // Allow override via AGENT_MAX_ITERATIONS env var for power users
+    // who need more turns for complex multi-step tasks (default: 15).
+    const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? '15', 10);
 
     while (iteration < MAX_ITERATIONS) {
       iteration++;
