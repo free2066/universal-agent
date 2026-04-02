@@ -1,25 +1,21 @@
 /**
  * SpawnAgent Tool — Isolated sub-agent execution with context handoff
  *
- * Inspired by kstack article #15339 "Evil Mode" multi-agent self-organization:
+ * Inspired by kstack article #15339 (multi-agent self-organization) and
+ * kstack article #15340 (Claude Code multi-agent architecture):
+ *
  * Three primitives: Thread Reference (perceive), Spawn Thread (create), Post Message (communicate).
  *
- * SpawnAgent implements the "Spawn Thread" + "Thread Reference" primitives for universal-agent:
- *   - Spawns a fresh AgentCore instance with an isolated message history (Empty mode)
- *   - Optionally injects parent context via .uagent/context/<id>.md files (Reference mode)
- *   - Writes its output to .uagent/context/<task-id>.md for downstream tasks to consume
- *   - Supports fork mode: inherits the parent's current conversation history
+ * Key design decisions adopted from Claude Code's source analysis:
+ *  1. Sub-agents cannot re-spawn agents (recursive-bomb prevention via SPAWN_DEPTH env var)
+ *  2. Scratchpad shared directory (.uagent/scratchpad/) for worker→worker findings sharing
+ *  3. Heterogeneous model dispatch: caller can tag role=research|implementation|verify
+ *     to automatically pick quick vs main model
  *
- * Usage (AI calling the tool):
- *   SpawnAgent({ task: "Analyze security vulnerabilities in src/auth/", task_id: "sec-audit" })
- *   SpawnAgent({ task: "...", context_ids: ["proj-struct", "dep-graph"] })  // Reference mode
- *   SpawnAgent({ task: "...", mode: "fork", parent_history: [...] })         // Fork mode
- *
- * Context files are stored in .uagent/context/ (flat JSON-like markdown) and can be
- * referenced by downstream tasks for cross-agent communication.
+ * Context files (.uagent/context/<id>.md) remain the cross-agent communication channel.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { modelManager } from '../../models/model-manager.js';
 import type { ToolRegistration } from '../../models/types.js';
@@ -59,6 +55,70 @@ function writeContextFile(projectRoot: string, taskId: string, result: string) {
   writeFileSync(contextPath(projectRoot, taskId), content, 'utf-8');
 }
 
+// ── Scratchpad helpers ─────────────────────────────────────────────────────
+// A shared bulletin-board directory where all workers in a session can post
+// findings. Analogous to Claude Code's `tengu_scratch` feature flag.
+// All writes are sync (tiny markdown snippets) to keep the helper import-free.
+
+function scratchpadDir(projectRoot: string): string {
+  return join(projectRoot, '.uagent', 'scratchpad');
+}
+
+export function scratchpadWrite(projectRoot: string, key: string, content: string): void {
+  const dir = scratchpadDir(projectRoot);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${key}.md`), content, 'utf-8');
+}
+
+export function scratchpadRead(projectRoot: string, key: string): string | null {
+  const p = join(scratchpadDir(projectRoot), `${key}.md`);
+  return existsSync(p) ? readFileSync(p, 'utf-8') : null;
+}
+
+export function scratchpadList(projectRoot: string): string[] {
+  const dir = scratchpadDir(projectRoot);
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir)
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => f.replace(/\.md$/, ''));
+  } catch { return []; }
+}
+
+// ── Heterogeneous model dispatch ───────────────────────────────────────────
+// Research/verify tasks → quick model (cheaper, faster broad exploration)
+// Implementation tasks  → main model  (strongest, precise code editing)
+// This mirrors Claude Code's pattern: "难的任务用 Opus，简单的用 Haiku"
+
+type AgentRole = 'research' | 'implementation' | 'verify' | 'auto';
+
+function resolveModelForRole(role: AgentRole, override?: string): string {
+  if (override) return override;
+  switch (role) {
+    case 'research':
+    case 'verify':
+      return modelManager.getCurrentModel('quick');
+    case 'implementation':
+      return modelManager.getCurrentModel('main');
+    default:
+      return modelManager.getCurrentModel('main');
+  }
+}
+
+// ── Recursive-bomb guard ───────────────────────────────────────────────────
+// Claude Code's AgentTool explicitly strips the AgentTool from sub-agent tool
+// sets so sub-agents cannot re-spawn. We enforce the same constraint via an
+// environment variable depth counter:
+//   UAGENT_SPAWN_DEPTH=0  (top-level agent)
+//   UAGENT_SPAWN_DEPTH=1  (first-level sub-agent, may still spawn)
+//   UAGENT_SPAWN_DEPTH>=MAX  → refuse to spawn
+
+const MAX_SPAWN_DEPTH = parseInt(process.env.UAGENT_MAX_SPAWN_DEPTH ?? '2', 10);
+
+function currentSpawnDepth(): number {
+  return parseInt(process.env.UAGENT_SPAWN_DEPTH ?? '0', 10);
+}
+
 // ── Spawn execution ────────────────────────────────────────────────────────
 
 async function spawnAndRun(
@@ -67,20 +127,35 @@ async function spawnAndRun(
     taskId?: string;
     contextIds?: string[];
     mode?: 'empty' | 'reference' | 'fork';
+    role?: AgentRole;
     parentModel?: string;
     projectRoot?: string;
     subagentType?: string;
     domain?: string;
     /** Max ms to wait for the sub-agent. Default: 5 min. */
     timeoutMs?: number;
+    /** Keys to read from scratchpad and prepend as context */
+    scratchpadKeys?: string[];
   },
 ): Promise<string> {
+  // ── Depth guard ──────────────────────────────────────────────────────────
+  const depth = currentSpawnDepth();
+  if (depth >= MAX_SPAWN_DEPTH) {
+    return (
+      `[SpawnAgent blocked] Recursive spawn limit reached (depth=${depth}, max=${MAX_SPAWN_DEPTH}).\n` +
+      `Sub-agents may not re-spawn agents. Increase UAGENT_MAX_SPAWN_DEPTH to override.`
+    );
+  }
+
   const root = resolve(opts.projectRoot ?? process.cwd());
   const taskId = opts.taskId ?? `task-${Date.now()}`;
   const mode = opts.mode ?? 'empty';
+  const role = opts.role ?? 'auto';
 
-  // Build the task prompt, optionally prepending reference context
+  // ── Build full task prompt ────────────────────────────────────────────────
   let fullTask = task;
+
+  // Inject reference context files
   if (mode === 'reference' && opts.contextIds?.length) {
     const ctxContent = loadContextFiles(root, opts.contextIds);
     if (ctxContent) {
@@ -88,16 +163,30 @@ async function spawnAndRun(
     }
   }
 
-  // If a specific subagent type is requested, delegate via SubagentSystem
+  // Inject scratchpad findings (shared bulletin board)
+  if (opts.scratchpadKeys?.length) {
+    const parts: string[] = [];
+    for (const key of opts.scratchpadKeys) {
+      const val = scratchpadRead(root, key);
+      if (val) parts.push(`### Scratchpad [${key}]\n${val}`);
+    }
+    if (parts.length > 0) {
+      fullTask = `## Shared Findings\n${parts.join('\n\n')}\n\n---\n${fullTask}`;
+    }
+  }
+
+  // ── Model selection ───────────────────────────────────────────────────────
+  const model = resolveModelForRole(role, opts.parentModel);
+
+  // ── Delegate to subagent system if a named type is requested ─────────────
   if (opts.subagentType) {
     const { subagentSystem } = await import('../subagent-system.js');
-    const result = await subagentSystem.runAgent(opts.subagentType, fullTask, opts.parentModel);
+    const result = await subagentSystem.runAgent(opts.subagentType, fullTask, model);
     writeContextFile(root, taskId, result);
     return result;
   }
 
-  // Otherwise spawn a fully isolated AgentCore
-  const model = opts.parentModel ?? modelManager.getCurrentModel('main');
+  // ── Spawn a fully isolated AgentCore, injecting depth+1 ──────────────────
   const { AgentCore } = await import('../agent.js');
   const agent = new AgentCore({
     domain: (opts.domain as 'auto' | 'data' | 'dev' | 'service') ?? 'auto',
@@ -106,8 +195,19 @@ async function spawnAndRun(
     verbose: false,
   });
 
+  // Pass depth counter into child process env so nested spawns can check it
+  const prevDepth = process.env.UAGENT_SPAWN_DEPTH;
+  process.env.UAGENT_SPAWN_DEPTH = String(depth + 1);
+
   const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000; // 5 min default
-  const runPromise = agent.run(fullTask);
+  const runPromise = agent.run(fullTask).finally(() => {
+    // Restore parent's depth after child completes
+    if (prevDepth === undefined) {
+      delete process.env.UAGENT_SPAWN_DEPTH;
+    } else {
+      process.env.UAGENT_SPAWN_DEPTH = prevDepth;
+    }
+  });
   const timeoutPromise = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error(`SpawnAgent timed out after ${timeoutMs / 1000}s`)), timeoutMs),
   );
@@ -116,7 +216,7 @@ async function spawnAndRun(
   return result;
 }
 
-// ── Tool definition ────────────────────────────────────────────────────────
+// ── Tool definitions ────────────────────────────────────────────────────────
 
 export const spawnAgentTool: ToolRegistration = {
   definition: {
@@ -125,6 +225,8 @@ export const spawnAgentTool: ToolRegistration = {
       'Spawn an isolated sub-agent to execute a task in a fresh context (Empty mode).',
       'Optionally inject shared context from previous sub-agents (Reference mode).',
       'The result is automatically saved to .uagent/context/<task_id>.md for downstream tasks.',
+      '',
+      'Sub-agents cannot re-spawn other agents (recursive-bomb prevention).',
       '',
       'Use this tool when:',
       '  - A task can be fully described in self-contained instructions',
@@ -136,9 +238,11 @@ export const spawnAgentTool: ToolRegistration = {
       '  empty     (default) — fresh agent, no parent history',
       '  reference — fresh agent, but can read named context files written by previous agents',
       '',
-      'Example: spawn a security auditor reading dependency context:',
-      '  SpawnAgent({ task: "Audit for CVEs", task_id: "sec-audit",',
-      '               context_ids: ["dep-graph"], mode: "reference" })',
+      'Roles (auto-selects model):',
+      '  research       → uses quick/cheap model for broad exploration',
+      '  implementation → uses main/strong model for precise code changes',
+      '  verify         → uses quick model for test/lint validation',
+      '  auto           → uses main model (default)',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -156,10 +260,20 @@ export const spawnAgentTool: ToolRegistration = {
           enum: ['empty', 'reference'],
           description: 'empty (default): isolated agent. reference: injects context_ids files into the prompt.',
         },
+        role: {
+          type: 'string',
+          enum: ['research', 'implementation', 'verify', 'auto'],
+          description: 'Agent role — determines model selection. research/verify→quick model, implementation→main model.',
+        },
         context_ids: {
           type: 'array',
           items: { type: 'string' },
           description: 'IDs of previous agent outputs to inject as context (used in reference mode).',
+        },
+        scratchpad_keys: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Keys to read from shared scratchpad (.uagent/scratchpad/) and prepend as context.',
         },
         subagent_type: {
           type: 'string',
@@ -172,7 +286,7 @@ export const spawnAgentTool: ToolRegistration = {
         },
         model: {
           type: 'string',
-          description: 'Optional: override model for this spawned agent.',
+          description: 'Optional: override model for this spawned agent (overrides role-based selection).',
         },
         timeout_seconds: {
           type: 'number',
@@ -187,7 +301,9 @@ export const spawnAgentTool: ToolRegistration = {
       task,
       task_id,
       mode,
+      role,
       context_ids,
+      scratchpad_keys,
       subagent_type,
       domain,
       model,
@@ -196,7 +312,9 @@ export const spawnAgentTool: ToolRegistration = {
       task: string;
       task_id?: string;
       mode?: 'empty' | 'reference';
+      role?: AgentRole;
       context_ids?: string[];
+      scratchpad_keys?: string[];
       subagent_type?: string;
       domain?: string;
       model?: string;
@@ -211,7 +329,9 @@ export const spawnAgentTool: ToolRegistration = {
       const result = await spawnAndRun(task, {
         taskId: task_id,
         contextIds: context_ids,
+        scratchpadKeys: scratchpad_keys,
         mode,
+        role,
         parentModel: model,
         subagentType: subagent_type,
         domain,
@@ -238,10 +358,12 @@ export const spawnParallelTool: ToolRegistration = {
       'Each subtask runs concurrently — use for independent tasks with no mutual dependencies.',
       'All results are saved to .uagent/context/<task_id>.md for downstream agents to read.',
       '',
-      'Example — Phase 1 parallel scan:',
+      'Sub-agents cannot re-spawn other agents (recursive-bomb prevention).',
+      '',
+      'Example — Phase 1 parallel research:',
       '  SpawnParallel({ tasks: [',
-      '    { task: "Analyze project structure", task_id: "struct" },',
-      '    { task: "Build dependency graph", task_id: "deps" }',
+      '    { task: "Analyze project structure", task_id: "struct", role: "research" },',
+      '    { task: "Build dependency graph", task_id: "deps", role: "research" }',
       '  ]})',
     ].join('\n'),
     parameters: {
@@ -252,12 +374,12 @@ export const spawnParallelTool: ToolRegistration = {
           description: 'Array of tasks to run in parallel.',
           items: {
             type: 'object',
-            description: 'Each task: { task, task_id?, mode?, context_ids?, subagent_type?, domain? }',
+            description: 'Each task: { task, task_id?, mode?, role?, context_ids?, scratchpad_keys?, subagent_type?, domain? }',
           },
         },
         model: {
           type: 'string',
-          description: 'Optional: shared model override for all spawned agents.',
+          description: 'Optional: shared model override for all spawned agents (overrides role-based selection).',
         },
       },
       required: ['tasks'],
@@ -269,7 +391,9 @@ export const spawnParallelTool: ToolRegistration = {
         task: string;
         task_id?: string;
         mode?: 'empty' | 'reference';
+        role?: AgentRole;
         context_ids?: string[];
+        scratchpad_keys?: string[];
         subagent_type?: string;
         domain?: string;
       }>;
@@ -290,7 +414,9 @@ export const spawnParallelTool: ToolRegistration = {
           const out = await spawnAndRun(t.task, {
             taskId: t.task_id,
             contextIds: t.context_ids,
+            scratchpadKeys: t.scratchpad_keys,
             mode: t.mode,
+            role: t.role,
             parentModel: model,
             subagentType: t.subagent_type,
             domain: t.domain,

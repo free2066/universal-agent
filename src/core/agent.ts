@@ -9,6 +9,7 @@ import { webFetchTool, webSearchTool } from './tools/web-tools.js';
 import { codeInspectorTool } from './tools/code-inspector.js';
 import { selfHealTool } from './tools/self-heal.js';
 import { spawnAgentTool, spawnParallelTool } from './tools/spawn-agent.js';
+import { coordinatorRunTool } from './tools/coordinator-tool.js';
 import { MCPManager } from './mcp-manager.js';
 import { autoCompact } from './context-compressor.js';
 import { addToHistory } from './session-history.js';
@@ -121,6 +122,7 @@ export class AgentCore {
     this.registry.register(askExpertModelTool);
     this.registry.register(spawnAgentTool);
     this.registry.register(spawnParallelTool);
+    this.registry.register(coordinatorRunTool);
 
     // Domain-specific tools
     this.router.registerTools(this.registry, domain);
