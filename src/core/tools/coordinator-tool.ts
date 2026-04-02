@@ -55,6 +55,13 @@ export interface FlowConfig {
   max_parallel?: number;
   /** Stop implementation phase if any worker returns ERROR. Default: false */
   stop_on_impl_failure?: boolean;
+  /**
+   * Skip Phase 0 dead-code filter (kstack article #15347).
+   * When false (default), a quick LLM pass filters unreachable code paths
+   * from research tasks before workers see them — reduces hallucinations.
+   * Set to true for fast mode or when goal is not code-analysis-related.
+   */
+  skip_dead_code_filter?: boolean;
 }
 
 export interface CriticReview {
@@ -261,6 +268,192 @@ async function runWorkersParallel(
   );
 }
 
+// ── Phase 0: Dead Code Filter (kstack #15347) ─────────────────────────────
+//
+// Inspired by article "AI覆盖率在CNY的探索" (kstack #15347) Pitfall #1:
+// "AI会针对全量未覆盖代码做case推荐，其中也包含针对'未调用的代码'生成的用例"
+// Solution: "增加无用代码过滤Agent，在AI处理前先分析代码调用链，从源头杜绝无效用例"
+//
+// This pre-filter runs BEFORE Phase 1 workers. A cheap quick-model pass identifies
+// likely dead/unreachable code paths so research workers can skip them entirely,
+// reducing hallucinations and token waste.
+//
+// Non-blocking by design: any error falls through and research proceeds normally.
+
+async function runDeadCodeFilter(
+  goal: string,
+  researchTasks: string[],
+  projectRoot: string,
+  filterId: string,
+): Promise<string> {
+  try {
+    const model = modelManager.getCurrentModel('quick');
+    const { AgentCore } = await import('../agent.js');
+    const agent = new AgentCore({ domain: 'auto', model, stream: false, verbose: false });
+
+    const filterPrompt = [
+      `# Phase 0: Dead Code Filter (kstack #15347 Anti-Hallucination Pass)`,
+      ``,
+      `## Goal`,
+      goal,
+      ``,
+      `## Research Tasks Planned`,
+      researchTasks.map((t, i) => `${i + 1}. ${t}`).join('\n'),
+      ``,
+      `## Your Task`,
+      `You are a code analysis pre-filter. Based on the goal and research tasks above,`,
+      `identify any code paths, functions, or files that are LIKELY UNREACHABLE in production.`,
+      `These should be excluded from research to prevent hallucinations and wasted effort.`,
+      ``,
+      `Look for:`,
+      `- Dead code: functions/classes defined but never called from any entry point`,
+      `- Deprecated paths: code marked with @deprecated or TODO: remove`,
+      `- Test-only code that leaked into non-test areas`,
+      `- Feature-flagged code known to be disabled`,
+      `- Duplicate implementations where only one is used`,
+      ``,
+      `## Output Format`,
+      `Output a brief markdown report with:`,
+      `### Likely Unreachable Paths`,
+      `List each path with a one-line reason.`,
+      `### Research Guidance`,
+      `Short paragraph telling research workers what to SKIP and what to FOCUS ON.`,
+      ``,
+      `If no dead code is detected (or the goal is not code-related), output:`,
+      `### No Dead Code Detected`,
+      `All code paths appear reachable. Research workers may proceed without exclusions.`,
+    ].join('\n');
+
+    const report = await agent.run(filterPrompt);
+    scratchpadWrite(projectRoot, filterId, report);
+    return report;
+  } catch {
+    // Non-blocking: filter error → research proceeds normally without exclusions
+    const fallback = '### Dead Code Filter Skipped\nFilter encountered an error — research workers may proceed without exclusions.';
+    scratchpadWrite(projectRoot, filterId, fallback);
+    return fallback;
+  }
+}
+
+// ── PipelineMonitor — Full-pipeline event tracking (kstack #15347) ────────
+//
+// "全流程追踪子任务运行状态，自动记录中断、异常等问题，打印全流程日志，便于后续问题的排查定位"
+// (Track task runtime status across the full pipeline, auto-record interrupts and exceptions)
+//
+// Lightweight event recorder: no external dependencies, writes to scratchpad.
+// Only adds ~2ms overhead per event (simple array push + optional sync write).
+
+export interface PipelineEvent {
+  /** Phase name (e.g. 'research', 'synthesis', 'critic', 'implementation', 'verification') */
+  phase: string;
+  /** Task identifier (e.g. 'my-run-research-0') */
+  taskId: string;
+  /** Event type */
+  status: 'started' | 'completed' | 'failed' | 'timeout' | 'skipped';
+  /** Wall-clock time when event occurred */
+  ts: number;
+  /** Duration in ms (only for completed/failed/timeout) */
+  durationMs?: number;
+  /** Error message (only for failed/timeout) */
+  error?: string;
+}
+
+export class PipelineMonitor {
+  private events: PipelineEvent[] = [];
+  private startMs: number;
+  private readonly scratchpadId: string;
+  private readonly projectRoot: string;
+
+  constructor(scratchpadId: string, projectRoot: string) {
+    this.scratchpadId = scratchpadId;
+    this.projectRoot = projectRoot;
+    this.startMs = Date.now();
+  }
+
+  /** Record a pipeline event. Non-blocking — never throws. */
+  record(event: Omit<PipelineEvent, 'ts'>): void {
+    this.events.push({ ...event, ts: Date.now() });
+  }
+
+  /** Wrap an async fn with automatic start/completed/failed recording. */
+  async track<T>(
+    phase: string,
+    taskId: string,
+    fn: () => Promise<T>,
+    opts?: { timeoutMs?: number },
+  ): Promise<T> {
+    const start = Date.now();
+    this.record({ phase, taskId, status: 'started' });
+    try {
+      const result = await fn();
+      this.record({ phase, taskId, status: 'completed', durationMs: Date.now() - start });
+      return result;
+    } catch (err) {
+      const isTimeout = String(err).includes('timed out');
+      this.record({
+        phase, taskId,
+        status: isTimeout ? 'timeout' : 'failed',
+        durationMs: Date.now() - start,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  /** Returns all events as a structured summary. */
+  toMarkdown(): string {
+    if (this.events.length === 0) return '';
+
+    const totalMs = Date.now() - this.startMs;
+    const failed = this.events.filter((e) => e.status === 'failed' || e.status === 'timeout');
+    const byPhase: Record<string, PipelineEvent[]> = {};
+    for (const e of this.events) {
+      if (!byPhase[e.phase]) byPhase[e.phase] = [];
+      byPhase[e.phase].push(e);
+    }
+
+    const lines: string[] = [
+      `## Pipeline Monitoring Log (kstack #15347)`,
+      ``,
+      `> Total wall time: ${(totalMs / 1000).toFixed(1)}s | Events: ${this.events.length} | Failures: ${failed.length}`,
+      ``,
+    ];
+
+    for (const [phase, events] of Object.entries(byPhase)) {
+      const completed = events.filter((e) => e.status === 'completed').length;
+      const phaseFailed = events.filter((e) => e.status === 'failed' || e.status === 'timeout').length;
+      const skipped = events.filter((e) => e.status === 'skipped').length;
+      lines.push(`### ${phase.charAt(0).toUpperCase() + phase.slice(1)}`);
+      lines.push(`> ${completed} completed · ${phaseFailed} failed · ${skipped} skipped`);
+      lines.push('');
+      for (const e of events) {
+        const statusIcon = e.status === 'completed' ? '✅' : e.status === 'started' ? '▶️' : e.status === 'skipped' ? '⏭️' : '❌';
+        const dur = e.durationMs !== undefined ? ` (${(e.durationMs / 1000).toFixed(1)}s)` : '';
+        const errStr = e.error ? ` — ${e.error.slice(0, 80)}` : '';
+        lines.push(`${statusIcon} \`${e.taskId}\`${dur}${errStr}`);
+      }
+      lines.push('');
+    }
+
+    if (failed.length > 0) {
+      lines.push(`### ⚠️ Failed Tasks`);
+      for (const f of failed) {
+        lines.push(`- \`${f.taskId}\` [${f.phase}] ${f.status}: ${f.error ?? 'unknown error'}`);
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  }
+
+  /** Persist monitor log to scratchpad for post-run analysis. */
+  persist(): void {
+    try {
+      scratchpadWrite(this.projectRoot, `${this.scratchpadId}-monitor`, this.toMarkdown());
+    } catch { /* non-fatal */ }
+  }
+}
+
 // ── Main coordinator orchestration ────────────────────────────────────────
 
 /**
@@ -301,8 +494,25 @@ async function runCoordinator(
 ): Promise<CoordinatorResult> {
   const root = resolve(projectRoot);
 
+  // ── Phase 0: Dead Code Filter (kstack #15347) ───────────────────────────
+  // Inspired by Pitfall #1: "AI会针对全量未覆盖代码做case推荐，其中也包含针对'未调用的代码'生成的用例"
+  // "增加无用代码过滤Agent，在AI处理前先分析代码调用链，从源头杜绝无效用例"
+  // Non-blocking: failures fall through silently.
+  let deadCodeFilterReport = '';
+  const deadCodeFilterId = `${scratchpadId}-dead-code-filter`;
+  if (!flowConfig.skip_dead_code_filter) {
+    deadCodeFilterReport = await runDeadCodeFilter(goal, researchTasks, root, deadCodeFilterId);
+  }
+
+  // Inject dead code filter findings into research task prompts when dead code was detected
+  const filteredResearchTasks = deadCodeFilterReport && !deadCodeFilterReport.includes('No Dead Code Detected') && !deadCodeFilterReport.includes('Filter Skipped')
+    ? researchTasks.map((t) =>
+        `## Research Guidance (Phase 0 Dead Code Filter)\n${deadCodeFilterReport}\n\n---\n\n## Your Research Task\n${t}`,
+      )
+    : researchTasks;
+
   // ── Phase 1: Research (parallel, optionally limited) ────────────────────
-  const researchFns = researchTasks.map((task, idx) => async () => {
+  const researchFns = filteredResearchTasks.map((task, idx) => async () => {
     const taskId = `${scratchpadId}-research-${idx}`;
     try {
       const { spawnAgentTool } = await import('./spawn-agent.js');

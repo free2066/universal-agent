@@ -42,16 +42,94 @@ function loadContextFiles(projectRoot: string, ids: string[]): string {
   return parts.join('\n\n');
 }
 
-function writeContextFile(projectRoot: string, taskId: string, result: string) {
+/**
+ * ContextProtocol — Structured inter-agent communication format.
+ *
+ * Inspired by kstack article #15347 ("AI覆盖率在CNY的探索"):
+ * "3个流程通过共享context来实现上下文的传递，格式化独立context避免幻觉"
+ * "制定Agent间信息传输协议，明确各环节输出内容的格式和字段，实现不同Agent之间的信息无缝对接"
+ *
+ * Key insight: loose context files (raw agent output) cause downstream agents to
+ * hallucinate because they cannot reliably locate the information they need.
+ * Structured sections with clear field names eliminate this ambiguity.
+ *
+ * Usage:
+ *   writeContextFile(root, taskId, result, {
+ *     role: 'research',
+ *     summary: 'Found 3 auth endpoints, all missing rate limiting',
+ *     keyFindings: ['POST /api/login missing brute-force protection', ...],
+ *     actionItems: ['Add rate limiter middleware to auth routes'],
+ *     limitations: ['Did not check OAuth flow — out of scope'],
+ *   });
+ */
+export interface ContextProtocol {
+  /** Role of the agent that produced this context (e.g. 'research', 'implementation') */
+  role?: string;
+  /** One-paragraph summary of what was done and the most important result */
+  summary?: string;
+  /** Structured list of key findings (facts, discoveries, measurements) */
+  keyFindings?: string[];
+  /** Recommended next actions for downstream agents */
+  actionItems?: string[];
+  /** Known gaps, assumptions, or out-of-scope items */
+  limitations?: string[];
+}
+
+function writeContextFile(
+  projectRoot: string,
+  taskId: string,
+  result: string,
+  protocol?: ContextProtocol,
+) {
   const dir = contextDir(projectRoot);
   mkdirSync(dir, { recursive: true });
-  const content = [
-    `# Agent Context: ${taskId}`,
-    '',
-    `> Generated at: ${new Date().toISOString()}`,
-    '',
-    result,
-  ].join('\n');
+
+  let content: string;
+  if (protocol && Object.keys(protocol).length > 0) {
+    // Structured ContextProtocol format (kstack #15347: "格式化独立context避免幻觉")
+    const sections: string[] = [
+      `# Agent Context: ${taskId}`,
+      '',
+      `> Generated at: ${new Date().toISOString()}`,
+      ...(protocol.role ? [`> Role: ${protocol.role}`] : []),
+      '',
+    ];
+
+    if (protocol.summary) {
+      sections.push(`## Summary`, '', protocol.summary, '');
+    }
+
+    if (protocol.keyFindings && protocol.keyFindings.length > 0) {
+      sections.push(`## Key Findings`, '');
+      for (const f of protocol.keyFindings) sections.push(`- ${f}`);
+      sections.push('');
+    }
+
+    if (protocol.actionItems && protocol.actionItems.length > 0) {
+      sections.push(`## Action Items for Downstream Agents`, '');
+      for (const a of protocol.actionItems) sections.push(`- ${a}`);
+      sections.push('');
+    }
+
+    if (protocol.limitations && protocol.limitations.length > 0) {
+      sections.push(`## Limitations & Assumptions`, '');
+      for (const l of protocol.limitations) sections.push(`- ${l}`);
+      sections.push('');
+    }
+
+    sections.push(`## Raw Output`, '', result);
+    content = sections.join('\n');
+  } else {
+    // Legacy unstructured format (backwards compatible)
+    content = [
+      `# Agent Context: ${taskId}`,
+      '',
+      `> Generated at: ${new Date().toISOString()}`,
+      '',
+      result,
+    ].join('\n');
+  }
+
   writeFileSync(contextPath(projectRoot, taskId), content, 'utf-8');
 }
 
