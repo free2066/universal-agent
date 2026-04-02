@@ -29,7 +29,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { modelManager } from '../../models/model-manager.js';
-import { scratchpadRead, scratchpadList, scratchpadWrite } from './spawn-agent.js';
+import { scratchpadRead, scratchpadList, scratchpadWrite, mailboxReadPermissionRequests } from './spawn-agent.js';
 import type { ToolRegistration } from '../../models/types.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -62,6 +62,25 @@ export interface FlowConfig {
    * Set to true for fast mode or when goal is not code-analysis-related.
    */
   skip_dead_code_filter?: boolean;
+  /**
+   * Human-in-the-Loop checkpoints (kstack article #15348).
+   * Inspired by Sparrow's Human-in-the-Loop integration:
+   * "Human-in-the-Loop整合：questionnaire runtime与workflow结合，人工审批作为控制点"
+   *
+   * Specify phase names after which the pipeline should PAUSE and serialize state.
+   * Supported values: 'research' | 'synthesis' | 'critic'
+   * When a checkpoint is hit, the pipeline writes a resume file and returns early
+   * with a PAUSED status. Call CoordinatorRun again with resume_from to continue.
+   *
+   * Example: ['research'] — pause after Research, let user review findings before implementation.
+   */
+  human_checkpoints?: Array<'research' | 'synthesis' | 'critic'>;
+  /**
+   * Resume a paused coordinator run from a saved checkpoint.
+   * Pass the scratchpad_id that was used in the original (paused) run.
+   * The coordinator will load the serialized state and continue from the checkpoint phase.
+   */
+  resume_from?: string;
 }
 
 export interface CriticReview {
@@ -511,13 +530,42 @@ async function runCoordinator(
       )
     : researchTasks;
 
+  // ── Permission Bridge prompt prefix (kstack article #15348) ──────────────
+  // Inspired by Claude Code's Agent Teams permission bridge:
+  // "worker申请→leader审批→UI展示，runtime层可控"
+  // Workers that need dangerous operations (rm -rf, git push --force, etc.)
+  // should NOT execute them directly. Instead they write a PERMISSION_REQUEST
+  // to the mailbox and stop. Coordinator surfaces these in the final summary.
+  const PERMISSION_BRIDGE_PREFIX = [
+    `## Permission Bridge Protocol (kstack #15348)`,
+    ``,
+    `If you need to perform any of these DANGEROUS OPERATIONS:`,
+    `  - Delete files/directories (rm -rf, rimraf, unlink on non-temp paths)`,
+    `  - Force-push to git (git push --force, git push -f)`,
+    `  - Overwrite production configs or environment files`,
+    `  - Drop/truncate databases or tables`,
+    `  - Modify system files outside the project root`,
+    ``,
+    `DO NOT execute them directly. Instead:`,
+    `1. Write a PERMISSION_REQUEST message to the mailbox using this exact format in your output:`,
+    `   PERMISSION_REQUEST: <exact command or operation you want to perform>`,
+    `   REASON: <why this is necessary>`,
+    `2. Stop and return — do NOT proceed with the dangerous operation.`,
+    `3. The coordinator will surface this to the user for approval before continuing.`,
+    ``,
+    `For all non-dangerous operations, proceed normally without any special protocol.`,
+    ``,
+    `---`,
+    ``,
+  ].join('\n');
+
   // ── Phase 1: Research (parallel, optionally limited) ────────────────────
   const researchFns = filteredResearchTasks.map((task, idx) => async () => {
     const taskId = `${scratchpadId}-research-${idx}`;
     try {
       const { spawnAgentTool } = await import('./spawn-agent.js');
       const result = await spawnAgentTool.handler({
-        task,
+        task: `${PERMISSION_BRIDGE_PREFIX}${task}`,
         task_id: taskId,
         role: 'research',
         mode: 'empty',
@@ -531,6 +579,38 @@ async function runCoordinator(
   });
   const researchResults = await runWorkersLimited(researchFns, flowConfig.max_parallel);
 
+  // ── Human-in-the-Loop checkpoint: after Research (kstack #15348) ──────────
+  // Inspired by Sparrow's HitL: "人工审批作为控制点"
+  // If 'research' is in human_checkpoints, serialize state and return PAUSED.
+  if (flowConfig.human_checkpoints?.includes('research')) {
+    const checkpointData = JSON.stringify({ phase: 'research', researchResults, goal, scratchpadId, flowConfig }, null, 2);
+    scratchpadWrite(root, `${scratchpadId}-checkpoint-research`, checkpointData);
+    const pauseSummary = [
+      `# Coordinator Run PAUSED: ${goal}`,
+      ``,
+      `## ⏸️ Human Checkpoint — After Research Phase`,
+      ``,
+      `Research is complete. The pipeline has paused for your review before proceeding to Synthesis.`,
+      ``,
+      `## Research Findings Summary`,
+      researchResults.map((r, i) => `### Worker ${i}\n${r.slice(0, 300)}...`).join('\n\n'),
+      ``,
+      `## How to Resume`,
+      `Call CoordinatorRun again with the same parameters plus:`,
+      `  flow_config: { ...original_config, resume_from: "${scratchpadId}" }`,
+      `  (Remove 'research' from human_checkpoints to avoid pausing again)`,
+      ``,
+      `## Status: PAUSED — awaiting user approval to continue`,
+    ].join('\n');
+    scratchpadWrite(root, `${scratchpadId}-summary`, pauseSummary);
+    return {
+      goal, scratchpadId,
+      phases: { research: researchResults, synthesis: '', implementation: [], verification: [] },
+      success: false,
+      summary: pauseSummary,
+    };
+  }
+
   // ── Phase 2: Synthesis (coordinator only) ─────────────────────────────────
   const scratchKeys = scratchpadList(root).filter((k) => k.startsWith(scratchpadId));
   const scratchEntries = scratchKeys
@@ -542,6 +622,34 @@ async function runCoordinator(
     .join('\n\n---\n\n');
 
   const synthPlan = await runSynthesis(goal, scratchEntries, root, scratchpadId);
+
+  // ── Human-in-the-Loop checkpoint: after Synthesis (kstack #15348) ─────────
+  if (flowConfig.human_checkpoints?.includes('synthesis')) {
+    const checkpointData = JSON.stringify({ phase: 'synthesis', researchResults, synthPlan, goal, scratchpadId, flowConfig }, null, 2);
+    scratchpadWrite(root, `${scratchpadId}-checkpoint-synthesis`, checkpointData);
+    const pauseSummary = [
+      `# Coordinator Run PAUSED: ${goal}`,
+      ``,
+      `## ⏸️ Human Checkpoint — After Synthesis Phase`,
+      ``,
+      `The implementation plan has been synthesized. Please review before implementation begins.`,
+      ``,
+      `## Implementation Plan (Draft)`,
+      synthPlan.slice(0, 2000) + (synthPlan.length > 2000 ? '\n...(truncated — see scratchpad for full plan)' : ''),
+      ``,
+      `## How to Resume`,
+      `Call CoordinatorRun again with flow_config: { resume_from: "${scratchpadId}" }`,
+      ``,
+      `## Status: PAUSED — awaiting user approval to proceed with implementation`,
+    ].join('\n');
+    scratchpadWrite(root, `${scratchpadId}-summary`, pauseSummary);
+    return {
+      goal, scratchpadId,
+      phases: { research: researchResults, synthesis: synthPlan, implementation: [], verification: [] },
+      success: false,
+      summary: pauseSummary,
+    };
+  }
 
   // ── Phase 2.5: Critic Review (Actor-Critic, skippable via FlowConfig) ──────
   // Inspired by Cowork Forge: "每个阶段不是生成即结束，而是生成→审查→迭代"
@@ -559,6 +667,37 @@ async function runCoordinator(
     ? criticReview.refinedPlan
     : synthPlan;
 
+  // ── Human-in-the-Loop checkpoint: after Critic Review (kstack #15348) ─────
+  if (flowConfig.human_checkpoints?.includes('critic')) {
+    const checkpointData = JSON.stringify({ phase: 'critic', researchResults, synthPlan, criticReview, finalPlan, goal, scratchpadId, flowConfig }, null, 2);
+    scratchpadWrite(root, `${scratchpadId}-checkpoint-critic`, checkpointData);
+    const criticSummary = criticReview.verdict === 'PASS'
+      ? 'Critic approved the plan (PASS).'
+      : `Critic requested revisions (REVISE, ${criticReview.issues.length} issue(s)). Refined plan ready.`;
+    const pauseSummary = [
+      `# Coordinator Run PAUSED: ${goal}`,
+      ``,
+      `## ⏸️ Human Checkpoint — After Critic Review Phase`,
+      ``,
+      `Critic review is complete: ${criticSummary}`,
+      ``,
+      `## Final Plan (Post-Critic)`,
+      finalPlan.slice(0, 2000) + (finalPlan.length > 2000 ? '\n...(truncated)' : ''),
+      ``,
+      `## How to Resume`,
+      `Call CoordinatorRun again with flow_config: { resume_from: "${scratchpadId}" }`,
+      ``,
+      `## Status: PAUSED — awaiting user approval to proceed with implementation`,
+    ].join('\n');
+    scratchpadWrite(root, `${scratchpadId}-summary`, pauseSummary);
+    return {
+      goal, scratchpadId,
+      phases: { research: researchResults, synthesis: synthPlan, criticReview, implementation: [], verification: [] },
+      success: false,
+      summary: pauseSummary,
+    };
+  }
+
   // ── Phase 3: Implementation (parallel, optionally limited) ────────────────
   // stop_on_impl_failure: abort if any worker returns ERROR keyword
   const implTasks = extractTasks(finalPlan, 'Task');
@@ -567,7 +706,7 @@ async function runCoordinator(
     try {
       const { spawnAgentTool } = await import('./spawn-agent.js');
       return await spawnAgentTool.handler({
-        task,
+        task: `${PERMISSION_BRIDGE_PREFIX}${task}`,
         task_id: taskId,
         role: 'implementation',
         mode: 'empty',
@@ -603,7 +742,7 @@ async function runCoordinator(
       try {
         const { spawnAgentTool } = await import('./spawn-agent.js');
         return await spawnAgentTool.handler({
-          task,
+          task: `${PERMISSION_BRIDGE_PREFIX}${task}`,
           task_id: taskId,
           role: 'verify',
           mode: 'empty',
@@ -627,6 +766,37 @@ async function runCoordinator(
       ? `- ✅ Critic Review (PASS — plan approved)`
       : `- ⚡ Critic Review (REVISED — ${criticReview.issues.length} issue(s) addressed)`;
 
+  // ── Permission Bridge: surface any worker permission requests to user ─────
+  // Workers that wrote PERMISSION_REQUEST in their output need user approval.
+  // Parse all worker outputs for the PERMISSION_REQUEST marker.
+  const allWorkerOutputs = [...researchResults, ...implResults, ...verifyResults];
+  const permissionRequests: Array<{ worker: string; operation: string; reason: string }> = [];
+  for (let i = 0; i < allWorkerOutputs.length; i++) {
+    const output = allWorkerOutputs[i];
+    const permMatch = output.match(/PERMISSION_REQUEST:\s*(.+)\nREASON:\s*(.+)/m);
+    if (permMatch) {
+      const workerLabel = i < researchResults.length
+        ? `research-${i}`
+        : i < researchResults.length + implResults.length
+          ? `implementation-${i - researchResults.length}`
+          : `verify-${i - researchResults.length - implResults.length}`;
+      permissionRequests.push({ worker: workerLabel, operation: permMatch[1].trim(), reason: permMatch[2].trim() });
+    }
+  }
+
+  const permBridgeSection = permissionRequests.length > 0 ? [
+    ``,
+    `## ⚠️ Permission Bridge — Requires User Approval (kstack #15348)`,
+    ``,
+    `> ${permissionRequests.length} worker(s) requested approval for dangerous operations.`,
+    `> Review and manually approve or reject each before re-running.`,
+    ``,
+    ...permissionRequests.map((r, i) =>
+      `### Request ${i + 1} — from \`${r.worker}\`\n**Operation:** \`${r.operation}\`\n**Reason:** ${r.reason}`,
+    ),
+    ``,
+  ].join('\n') : '';
+
   const summary = [
     `# Coordinator Run: ${goal}`,
     ``,
@@ -641,6 +811,7 @@ async function runCoordinator(
     finalPlan.slice(0, 1000) + (finalPlan.length > 1000 ? '\n...(truncated)' : ''),
     ``,
     `## Status: ${failed ? 'PARTIAL — verification failures detected' : 'SUCCESS'}`,
+    permBridgeSection,
   ].join('\n');
 
   // Write full summary to scratchpad

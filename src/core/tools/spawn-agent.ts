@@ -15,7 +15,7 @@
  * Context files (.uagent/context/<id>.md) remain the cross-agent communication channel.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { modelManager } from '../../models/model-manager.js';
 import type { ToolRegistration } from '../../models/types.js';
@@ -131,6 +131,125 @@ function writeContextFile(
   }
 
   writeFileSync(contextPath(projectRoot, taskId), content, 'utf-8');
+}
+
+// ── Mailbox — Structured inter-agent messaging (kstack article #15348) ────
+//
+// Inspired by Claude Code's Agent Teams "mailbox model":
+// "显式通信：mailbox模型（点对点、广播、结构化协议），非共享上下文"
+//
+// Design:
+//   - Each message has: from / to / type / payload / timestamp
+//   - Supported types: finding | question | blocker | result | broadcast
+//   - Point-to-point: mailboxSend(root, 'worker-0', 'coordinator', ...)
+//   - Broadcast: mailboxBroadcast(root, sessionId, ...)
+//   - Messages are stored as JSON lines in .uagent/mailbox/<sessionId>.jsonl
+//   - Non-blocking: read/write errors are silently swallowed
+//
+// Compared to raw scratchpad writes, the Mailbox provides:
+//   1. Typed messages — downstream consumers know message semantics
+//   2. Routing — coordinator can filter messages by 'to' field
+//   3. Audit trail — every message is timestamped and addressed
+//   4. Broadcast support — coordinator can push guidance to all workers
+
+export type MailboxMessageType = 'finding' | 'question' | 'blocker' | 'result' | 'broadcast' | 'permission_request';
+
+export interface MailboxMessage {
+  /** Sender identifier (e.g. 'research-0', 'coordinator') */
+  from: string;
+  /** Recipient identifier or '*' for broadcast */
+  to: string;
+  /** Message semantic type */
+  type: MailboxMessageType;
+  /** Message content payload */
+  payload: string;
+  /** ISO timestamp */
+  ts: string;
+  /** Optional correlation ID (links question to answer) */
+  correlationId?: string;
+}
+
+function mailboxDir(projectRoot: string): string {
+  return join(projectRoot, '.uagent', 'mailbox');
+}
+
+function mailboxPath(projectRoot: string, sessionId: string): string {
+  return join(mailboxDir(projectRoot), `${sessionId}.jsonl`);
+}
+
+/**
+ * Send a point-to-point message in the mailbox.
+ * Appends a JSON line to the session's mailbox file. Non-blocking.
+ */
+export function mailboxSend(
+  projectRoot: string,
+  sessionId: string,
+  from: string,
+  to: string,
+  type: MailboxMessageType,
+  payload: string,
+  correlationId?: string,
+): void {
+  try {
+    const dir = mailboxDir(projectRoot);
+    mkdirSync(dir, { recursive: true });
+    const msg: MailboxMessage = { from, to, type, payload, ts: new Date().toISOString(), correlationId };
+    appendFileSync(mailboxPath(projectRoot, sessionId), JSON.stringify(msg) + '\n', 'utf-8');
+  } catch { /* non-blocking */ }
+}
+
+/**
+ * Broadcast a message to all workers in the session (to='*').
+ * Used by coordinator to push guidance (e.g. dead-code filter results) to all workers.
+ */
+export function mailboxBroadcast(
+  projectRoot: string,
+  sessionId: string,
+  from: string,
+  type: MailboxMessageType,
+  payload: string,
+): void {
+  mailboxSend(projectRoot, sessionId, from, '*', type, payload);
+}
+
+/**
+ * Read all messages in a session's mailbox, optionally filtered by recipient.
+ * Returns messages in chronological order.
+ */
+export function mailboxRead(
+  projectRoot: string,
+  sessionId: string,
+  filter?: { to?: string; type?: MailboxMessageType; from?: string },
+): MailboxMessage[] {
+  try {
+    const p = mailboxPath(projectRoot, sessionId);
+    if (!existsSync(p)) return [];
+    const lines = readFileSync(p, 'utf-8').trim().split('\n').filter(Boolean);
+    const msgs: MailboxMessage[] = lines.map((l) => {
+      try { return JSON.parse(l) as MailboxMessage; } catch { return null; }
+    }).filter((m): m is MailboxMessage => m !== null);
+
+    if (!filter) return msgs;
+    return msgs.filter((m) => {
+      if (filter.to && m.to !== filter.to && m.to !== '*') return false;
+      if (filter.type && m.type !== filter.type) return false;
+      if (filter.from && m.from !== filter.from) return false;
+      return true;
+    });
+  } catch { return []; }
+}
+
+/**
+ * Read all PERMISSION_REQUEST messages addressed to coordinator.
+ * These are written by workers when they need approval for dangerous operations.
+ * Returns list of { from, operation } pairs for coordinator to surface to user.
+ */
+export function mailboxReadPermissionRequests(
+  projectRoot: string,
+  sessionId: string,
+): Array<{ from: string; operation: string; ts: string }> {
+  const msgs = mailboxRead(projectRoot, sessionId, { type: 'permission_request', to: 'coordinator' });
+  return msgs.map((m) => ({ from: m.from, operation: m.payload, ts: m.ts }));
 }
 
 // ── Scratchpad helpers ─────────────────────────────────────────────────────
