@@ -18,9 +18,9 @@
  *   if (cleared > 0) onChunk(`\n✂️  Cleared ${cleared} old tool results\n`);
  */
 
-import type { Message } from '../models/types.js';
+import type { Message } from '../../models/types.js';
 import { estimateHistoryTokens, estimateMessageTokens } from './context-compressor.js';
-import { createLogger } from './logger.js';
+import { createLogger } from '../logger.js';
 
 const log = createLogger('ctx-editor');
 

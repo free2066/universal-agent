@@ -21,8 +21,8 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { modelManager } from '../../models/model-manager.js';
-import { loadProjectContext, loadRules } from '../context-loader.js';
+import { modelManager } from '../../../models/model-manager.js';
+import { loadProjectContext, loadRules } from '../../context/context-loader.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

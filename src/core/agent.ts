@@ -2,21 +2,21 @@ import type { LLMClient, Message } from '../models/types.js';
 import { modelManager } from '../models/model-manager.js';
 import { DomainRouter } from './domain-router.js';
 import { ToolRegistry } from './tool-registry.js';
-import { buildSystemPromptWithContext } from './context-loader.js';
+import { buildSystemPromptWithContext } from './context/context-loader.js';
 import { subagentSystem, createTaskTool, askExpertModelTool } from './subagent-system.js';
-import { readFileTool, writeFileTool, editFileTool, bashTool, listFilesTool, grepTool } from './tools/fs-tools.js';
-import { webFetchTool, webSearchTool } from './tools/web-tools.js';
-import { codeInspectorTool } from './tools/code-inspector.js';
-import { selfHealTool } from './tools/self-heal.js';
-import { spawnAgentTool, spawnParallelTool } from './tools/spawn-agent.js';
-import { coordinatorRunTool } from './tools/coordinator-tool.js';
-import { businessDefectDetectorTool } from './tools/business-defect-detector.js';
-import { reverseAnalyzeTool } from './tools/reverse-analyze.js';
-import { loadSkillTool, runSkillTool } from './tools/skill-tool.js';
+import { readFileTool, writeFileTool, editFileTool, bashTool, listFilesTool, grepTool } from './tools/fs/fs-tools.js';
+import { webFetchTool, webSearchTool } from './tools/web/web-tools.js';
+import { codeInspectorTool } from './tools/code/code-inspector.js';
+import { selfHealTool } from './tools/code/self-heal.js';
+import { spawnAgentTool, spawnParallelTool } from './tools/agents/spawn-agent.js';
+import { coordinatorRunTool } from './tools/agents/coordinator-tool.js';
+import { businessDefectDetectorTool } from './tools/code/business-defect-detector.js';
+import { reverseAnalyzeTool } from './tools/code/reverse-analyze.js';
+import { loadSkillTool, runSkillTool } from './tools/productivity/skill-tool.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
-import { backgroundRunTool, checkBackgroundTool } from './tools/background-tools.js';
+import { backgroundRunTool, checkBackgroundTool } from './tools/productivity/background-tools.js';
 import { backgroundManager } from './background-manager.js';
-import { todoWriteTool, todoManager } from './tools/todo-tool.js';
+import { todoWriteTool, todoManager } from './tools/productivity/todo-tool.js';
 import {
   spawnTeammateTool,
   listTeammatesTool,
@@ -37,16 +37,16 @@ import {
   worktreeKeepTool,
   worktreeEventsTool,
   taskBindWorktreeTool,
-} from './tools/worktree-tools.js';
+} from './tools/agents/worktree-tools.js';
 import { MCPManager } from './mcp-manager.js';
-import { autoCompact } from './context-compressor.js';
-import { addToHistory } from './session-history.js';
-import { getMemoryStore } from './memory-store.js';
+import { autoCompact } from './context/context-compressor.js';
+import { addToHistory } from './memory/session-history.js';
+import { getMemoryStore } from './memory/memory-store.js';
 import { createLogger } from './logger.js';
 import { triggerHook, createHookEvent } from './hooks.js';
 import { withToolRetry } from './tool-retry.js';
 import { ModelFallbackChain } from './model-fallback.js';
-import { editContextIfNeeded } from './context-editor.js';
+import { editContextIfNeeded } from './context/context-editor.js';
 import { selectTools } from './tool-selector.js';
 
 const log = createLogger('agent');

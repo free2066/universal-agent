@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'fs';
 import { resolve, join, dirname } from 'path';
 import { execSync } from 'child_process';
-import { getSkillLoader } from './skill-loader.js';
+import { getSkillLoader } from '../skills/skill-loader.js';
 
 export interface AgentsContext {
   instructions: string;

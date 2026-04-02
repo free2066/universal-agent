@@ -33,8 +33,8 @@
 import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
-import { modelManager } from '../../models/model-manager.js';
-import { loadProjectContext, loadRules } from '../context-loader.js';
+import { modelManager } from '../../../models/model-manager.js';
+import { loadProjectContext, loadRules } from '../../context/context-loader.js';
 import { inspectProject } from './code-inspector.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────

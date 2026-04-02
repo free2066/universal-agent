@@ -38,8 +38,8 @@
 import { execSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { modelManager } from '../../models/model-manager.js';
-import type { ToolRegistration } from '../../models/types.js';
+import { modelManager } from '../../../models/model-manager.js';
+import type { ToolRegistration } from '../../../models/types.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

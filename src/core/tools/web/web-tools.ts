@@ -1,5 +1,5 @@
-import type { ToolRegistration } from '../../models/types.js';
-import { mmrRerankSearchResults } from '../mmr.js';
+import type { ToolRegistration } from '../../../models/types.js';
+import { mmrRerankSearchResults } from '../../memory/mmr.js';
 
 /**
  * AbortSignal.timeout() polyfill for Node.js < 17.3.

@@ -17,8 +17,8 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { modelManager } from '../../models/model-manager.js';
-import type { ToolRegistration } from '../../models/types.js';
+import { modelManager } from '../../../models/model-manager.js';
+import type { ToolRegistration } from '../../../models/types.js';
 
 // ── Context file helpers ───────────────────────────────────────────────────
 
@@ -393,14 +393,14 @@ async function spawnAndRun(
 
   // ── Delegate to subagent system if a named type is requested ─────────────
   if (opts.subagentType) {
-    const { subagentSystem } = await import('../subagent-system.js');
+    const { subagentSystem } = await import('../../subagent-system.js');
     const result = await subagentSystem.runAgent(opts.subagentType, fullTask, model);
     writeContextFile(root, taskId, result);
     return result;
   }
 
   // ── Spawn a fully isolated AgentCore, injecting depth+1 ──────────────────
-  const { AgentCore } = await import('../agent.js');
+  const { AgentCore } = await import('../../agent.js');
   const agent = new AgentCore({
     domain: (opts.domain as 'auto' | 'data' | 'dev' | 'service') ?? 'auto',
     model,

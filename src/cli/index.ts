@@ -9,11 +9,11 @@ import { config } from 'dotenv';
 import { AgentCore } from '../core/agent.js';
 import { modelManager } from '../models/model-manager.js';
 import { subagentSystem } from '../core/subagent-system.js';
-import { initAgentsMd, loadRules } from '../core/context-loader.js';
+import { initAgentsMd, loadRules } from '../core/context/context-loader.js';
 import { MCPManager } from '../core/mcp-manager.js';
-import { codeInspectorTool } from '../core/tools/code-inspector.js';
-import { selfHealTool } from '../core/tools/self-heal.js';
-import { getRecentHistory } from '../core/session-history.js';
+import { codeInspectorTool } from '../core/tools/code/code-inspector.js';
+import { selfHealTool } from '../core/tools/code/self-heal.js';
+import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui.js';
 
 // Load env
@@ -384,7 +384,7 @@ specCmd.command('new <description>')
   .action(async (description) => {
     const spinner = ora('Generating technical spec...').start();
     try {
-      const { generateSpec } = await import('../core/tools/spec-generator.js');
+      const { generateSpec } = await import('../core/tools/code/spec-generator.js');
       const result = await generateSpec(description, process.cwd());
       spinner.succeed(`Spec saved to ${result.path}`);
       console.log('\n' + result.content);
@@ -410,7 +410,7 @@ specCmd.command('new <description>')
 specCmd.command('list')
   .description('List all specs for the current project')
   .action(async () => {
-    const { listSpecs } = await import('../core/tools/spec-generator.js');
+    const { listSpecs } = await import('../core/tools/code/spec-generator.js');
     const specs = listSpecs(process.cwd());
     if (!specs.length) {
       console.log(chalk.gray('\n  No specs found. Run: uagent spec new "<description>"\n'));
@@ -426,7 +426,7 @@ specCmd.command('list')
 specCmd.command('show [index]')
   .description('Show a spec (default: most recent)')
   .action(async (index) => {
-    const { readSpec } = await import('../core/tools/spec-generator.js');
+    const { readSpec } = await import('../core/tools/code/spec-generator.js');
     const n = index !== undefined ? parseInt(index, 10) : 0;
     const content = readSpec(isNaN(n) ? index : n, process.cwd());
     if (!content) {
@@ -446,7 +446,7 @@ program
   .action(async (reviewPath, options) => {
     const spinner = ora('Running code review...').start();
     try {
-      const { reviewCode, getGitDiff } = await import('../core/tools/ai-reviewer.js');
+      const { reviewCode, getGitDiff } = await import('../core/tools/code/ai-reviewer.js');
       const diff = options.diff ? (getGitDiff(process.cwd(), options.diff) ?? undefined) : undefined;
       const files = reviewPath ? [reviewPath] : undefined;
       const report = await reviewCode({
@@ -473,7 +473,7 @@ memCmd.command('list')
   .description('List all memories for the current project')
   .option('-t, --type <type>', 'Filter by type: pinned|insight|fact')
   .action(async (options) => {
-    const { getMemoryStore } = await import('../core/memory-store.js');
+    const { getMemoryStore } = await import('../core/memory/memory-store.js');
     const store = getMemoryStore(process.cwd());
     const types = options.type ? [options.type] : undefined;
     const items = store.list({ types });
@@ -497,7 +497,7 @@ memCmd.command('add <text>')
   .option('-t, --type <type>', 'Memory type: pinned|insight|fact', 'pinned')
   .option('--tags <tags>', 'Comma-separated tags')
   .action(async (text, options) => {
-    const { getMemoryStore } = await import('../core/memory-store.js');
+    const { getMemoryStore } = await import('../core/memory/memory-store.js');
     const store = getMemoryStore(process.cwd());
     const tags = options.tags ? options.tags.split(',').map((t: string) => t.trim()) : [];
     const id = store.add({ type: options.type, content: text, tags, source: 'user' });
@@ -507,7 +507,7 @@ memCmd.command('add <text>')
 memCmd.command('delete <id>')
   .description('Delete a memory by ID')
   .action(async (id) => {
-    const { getMemoryStore } = await import('../core/memory-store.js');
+    const { getMemoryStore } = await import('../core/memory/memory-store.js');
     const store = getMemoryStore(process.cwd());
     const ok = store.delete(id);
     console.log(ok ? chalk.green(`✓ Deleted ${id}`) : chalk.red(`✗ Memory not found: ${id}`));
@@ -517,7 +517,7 @@ memCmd.command('search <query>')
   .description('Search memories by relevance')
   .option('-n, --limit <n>', 'Max results', '5')
   .action(async (query, options) => {
-    const { getMemoryStore } = await import('../core/memory-store.js');
+    const { getMemoryStore } = await import('../core/memory/memory-store.js');
     const store = getMemoryStore(process.cwd());
     const limit = parseInt(options.limit || '5', 10);
     const results = store.recall(query, { limit });
@@ -536,8 +536,8 @@ memCmd.command('search <query>')
 memCmd.command('ingest')
   .description('Trigger Smart Ingest: extract memories from recent session history (requires API key)')
   .action(async () => {
-    const { getMemoryStore } = await import('../core/memory-store.js');
-    const { getProjectHistory } = await import('../core/session-history.js');
+    const { getMemoryStore } = await import('../core/memory/memory-store.js');
+    const { getProjectHistory } = await import('../core/memory/session-history.js');
     const store = getMemoryStore(process.cwd());
     const history = getProjectHistory(process.cwd());
     if (!history.length) {
@@ -561,7 +561,7 @@ memCmd.command('ingest')
 memCmd.command('gc')
   .description('Garbage collect expired fact memories')
   .action(async () => {
-    const { getMemoryStore } = await import('../core/memory-store.js');
+    const { getMemoryStore } = await import('../core/memory/memory-store.js');
     const store = getMemoryStore(process.cwd());
     const removed = store.gc();
     console.log(chalk.green(`✓ GC complete: removed ${removed} expired/excess memories`));
@@ -571,7 +571,7 @@ memCmd.command('clear')
   .description('Clear all memories for this project')
   .option('-t, --type <type>', 'Only clear specific type: pinned|insight|fact')
   .action(async (options) => {
-    const { getMemoryStore } = await import('../core/memory-store.js');
+    const { getMemoryStore } = await import('../core/memory/memory-store.js');
     const store = getMemoryStore(process.cwd());
     const types = options.type ? [options.type] : undefined;
     store.clear(types as never);
@@ -687,7 +687,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     // Giving users manual control lets them compact at the RIGHT moment (end of a phase,
     // before a large tool-heavy task) rather than waiting for the auto-threshold.
     if (input === '/compact' || input === '/tokens') {
-      const { estimateHistoryTokens, shouldCompact, autoCompact } = await import('../core/context-compressor.js');
+      const { estimateHistoryTokens, shouldCompact, autoCompact } = await import('../core/context/context-compressor.js');
       const history = agent.getHistory();
       const decision = shouldCompact(history);
       const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
@@ -710,7 +710,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       const spinnerC = ora(`Compacting ${history.length} turns (${pct}% context)...`).start();
       try {
         // Temporarily force shouldCompact to true by calling autoCompact directly
-        const { autoCompact: compact } = await import('../core/context-compressor.js');
+        const { autoCompact: compact } = await import('../core/context/context-compressor.js');
         // Patch: bypass the threshold check by calling the internal logic directly.
         // We reuse the public autoCompact but temporarily push a dummy message so
         // the threshold is always exceeded, then restore state on error.
@@ -725,7 +725,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
           try {
             // autoCompact reads the threshold from module-level const, so env override won't work.
             // Instead use the /memory ingest flow to build a summary, then clear:
-            const { getMemoryStore } = await import('../core/memory-store.js');
+            const { getMemoryStore } = await import('../core/memory/memory-store.js');
             const store = getMemoryStore(process.cwd());
             const ingestResult = await store.ingest(fullHistory);
             agent.clearHistory();
@@ -767,7 +767,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     if (input.startsWith('/memory')) {
       const parts = input.split(/\s+/);
       const sub = parts[1];
-      const { getMemoryStore } = await import('../core/memory-store.js');
+      const { getMemoryStore } = await import('../core/memory/memory-store.js');
       const store = getMemoryStore(process.cwd());
 
       if (!sub) {
@@ -824,7 +824,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     if (input.startsWith('/spec')) {
       const desc = input.replace('/spec', '').trim();
       if (!desc) {
-        const { listSpecs } = await import('../core/tools/spec-generator.js');
+        const { listSpecs } = await import('../core/tools/code/spec-generator.js');
         const specs = listSpecs(process.cwd());
         if (!specs.length) {
           console.log(chalk.gray('\n  No specs yet. Usage: /spec <requirement description>\n'));
@@ -839,7 +839,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       process.stdout.write('\n');
       const spinnerS = ora('Generating technical spec...').start();
       try {
-        const { generateSpec } = await import('../core/tools/spec-generator.js');
+        const { generateSpec } = await import('../core/tools/code/spec-generator.js');
         const result = await generateSpec(desc, process.cwd());
         spinnerS.succeed(`Spec saved → ${result.path}`);
         console.log('\n' + result.content);
@@ -869,7 +869,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       process.stdout.write('\n');
       const spinnerR = ora('Running AI Code Review...').start();
       try {
-        const { reviewCode } = await import('../core/tools/ai-reviewer.js');
+        const { reviewCode } = await import('../core/tools/code/ai-reviewer.js');
         const report = await reviewCode({ projectRoot: process.cwd() });
         spinnerR.stop();
         console.log('\n' + report.markdown);
@@ -972,7 +972,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     if (history.length >= 4) {
       (async () => {
         try {
-          const { getMemoryStore } = await import('../core/memory-store.js');
+          const { getMemoryStore } = await import('../core/memory/memory-store.js');
           const store = getMemoryStore(process.cwd());
           const result = await store.ingest(history);
           if (result.added > 0) {

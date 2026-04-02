@@ -13,8 +13,8 @@
  *   4. Replace the compacted turns with a single "summary" user message
  */
 
-import type { Message } from '../models/types.js';
-import { modelManager } from '../models/model-manager.js';
+import type { Message } from '../../models/types.js';
+import { modelManager } from '../../models/model-manager.js';
 
 /** Fraction of context window that triggers compaction */
 const COMPACT_THRESHOLD = 0.75;

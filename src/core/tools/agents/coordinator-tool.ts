@@ -28,9 +28,9 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { modelManager } from '../../models/model-manager.js';
+import { modelManager } from '../../../models/model-manager.js';
 import { scratchpadRead, scratchpadList, scratchpadWrite, mailboxReadPermissionRequests } from './spawn-agent.js';
-import type { ToolRegistration } from '../../models/types.js';
+import type { ToolRegistration } from '../../../models/types.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -119,7 +119,7 @@ async function runCriticReview(
   projectRoot: string,
   critId: string,
 ): Promise<CriticReview> {
-  const { AgentCore } = await import('../agent.js');
+  const { AgentCore } = await import('../../agent.js');
   const model = modelManager.getCurrentModel('quick'); // Critic uses quick model (fast)
 
   const agent = new AgentCore({
@@ -194,7 +194,7 @@ async function runSynthesis(
   projectRoot: string,
   synthId: string,
 ): Promise<string> {
-  const { AgentCore } = await import('../agent.js');
+  const { AgentCore } = await import('../../agent.js');
   const model = modelManager.getCurrentModel('main'); // synthesis always uses main model
 
   const agent = new AgentCore({
@@ -307,7 +307,7 @@ async function runDeadCodeFilter(
 ): Promise<string> {
   try {
     const model = modelManager.getCurrentModel('quick');
-    const { AgentCore } = await import('../agent.js');
+    const { AgentCore } = await import('../../agent.js');
     const agent = new AgentCore({ domain: 'auto', model, stream: false, verbose: false });
 
     const filterPrompt = [

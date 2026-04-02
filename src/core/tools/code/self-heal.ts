@@ -16,7 +16,7 @@
 import { readFileSync, writeFileSync, existsSync, statSync } from 'fs';
 import { resolve, join, dirname } from 'path';
 import { execSync } from 'child_process';
-import type { ToolRegistration } from '../../models/types.js';
+import type { ToolRegistration } from '../../../models/types.js';
 import {
   type Finding,
   type InspectionResult,

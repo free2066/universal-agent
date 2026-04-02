@@ -24,9 +24,9 @@ import {
 import { resolve, join } from 'path';
 import { createHash } from 'crypto';
 
-import { modelManager } from '../models/model-manager.js';
+import { modelManager } from '../../models/model-manager.js';
 import { rankMemories } from './memory-search.js';
-import type { Message, ToolRegistration } from '../models/types.js';
+import type { Message, ToolRegistration } from '../../models/types.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

@@ -68,7 +68,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
-import { modelManager } from '../models/model-manager.js';
+import { modelManager } from '../../models/model-manager.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

@@ -29,8 +29,8 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { basename, join, resolve } from 'path';
 import { execSync } from 'child_process';
-import { modelManager } from '../../models/model-manager.js';
-import type { ToolRegistration } from '../../models/types.js';
+import { modelManager } from '../../../models/model-manager.js';
+import type { ToolRegistration } from '../../../models/types.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

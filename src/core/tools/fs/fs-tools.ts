@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSy
 import { resolve, relative, join, dirname } from 'path';
 import { execSync } from 'child_process';
 import { createInterface } from 'readline';
-import type { ToolRegistration } from '../../models/types.js';
-import { mmrRerankGrepResults } from '../mmr.js';
+import type { ToolRegistration } from '../../../models/types.js';
+import { mmrRerankGrepResults } from '../../memory/mmr.js';
 
 // ─── Output truncation (inspired by opencode truncate.ts) ────────────────────
 /** Lines / bytes beyond which tool output is considered "large" */

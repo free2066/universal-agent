@@ -20,8 +20,8 @@
  * s05 motto: "Load knowledge when you need it, not upfront"
  */
 
-import type { ToolRegistration } from '../../models/types.js';
-import { getSkillLoader, ProgramSkillRunner, formatProgramSkillResult } from '../skill-loader.js';
+import type { ToolRegistration } from '../../../models/types.js';
+import { getSkillLoader, ProgramSkillRunner, formatProgramSkillResult } from '../../skills/skill-loader.js';
 
 // ─── Tool 1: load_skill (Prompt Paradigm) ────────────────────────────────────
 

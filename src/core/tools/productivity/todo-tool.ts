@@ -10,7 +10,7 @@
  * Key insight: "The agent can track its own progress — and I can see it."
  */
 
-import type { ToolRegistration } from '../../models/types.js';
+import type { ToolRegistration } from '../../../models/types.js';
 
 // ─── TodoItem ──────────────────────────────────────────────────────────────────
 

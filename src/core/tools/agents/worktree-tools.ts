@@ -22,8 +22,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync, spawnSync } from 'child_process';
-import type { ToolRegistration } from '../../models/types.js';
-import { createLogger } from '../logger.js';
+import type { ToolRegistration } from '../../../models/types.js';
+import { createLogger } from '../../logger.js';
 
 const log = createLogger('worktree');
 

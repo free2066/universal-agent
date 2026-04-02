@@ -10,8 +10,8 @@
  * s08 motto: "Fire and forget — the agent doesn't block while the command runs."
  */
 
-import type { ToolRegistration } from '../../models/types.js';
-import { backgroundManager } from '../background-manager.js';
+import type { ToolRegistration } from '../../../models/types.js';
+import { backgroundManager } from '../../background-manager.js';
 
 export const backgroundRunTool: ToolRegistration = {
   definition: {

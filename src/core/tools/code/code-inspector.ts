@@ -12,7 +12,7 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, join, relative, extname } from 'path';
-import type { ToolRegistration } from '../../models/types.js';
+import type { ToolRegistration } from '../../../models/types.js';
 
 // ─── Types ───────────────────────────────────────────────
 
