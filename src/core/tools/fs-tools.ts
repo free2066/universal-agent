@@ -1,20 +1,58 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, createReadStream } from 'fs';
 import { resolve, relative, join, dirname } from 'path';
 import { execSync } from 'child_process';
+import { createInterface } from 'readline';
 import type { ToolRegistration } from '../../models/types.js';
 import { mmrRerankGrepResults } from '../mmr.js';
+
+// ─── Output truncation (inspired by opencode truncate.ts) ────────────────────
+/** Lines / bytes beyond which tool output is considered "large" */
+const TRUNCATE_MAX_LINES = 2000;
+const TRUNCATE_MAX_BYTES = 50 * 1024; // 50 KB
+
+/**
+ * Truncate a string to at most TRUNCATE_MAX_LINES / TRUNCATE_MAX_BYTES.
+ * Returns the (possibly shortened) string and a truncated flag.
+ */
+function truncateOutput(
+  text: string,
+  maxLines = TRUNCATE_MAX_LINES,
+  maxBytes = TRUNCATE_MAX_BYTES,
+): { content: string; truncated: boolean; removedLines: number } {
+  const lines = text.split('\n');
+  if (lines.length <= maxLines && Buffer.byteLength(text, 'utf-8') <= maxBytes) {
+    return { content: text, truncated: false, removedLines: 0 };
+  }
+  // Trim by lines first
+  let kept = Math.min(lines.length, maxLines);
+  // Trim further if still over byte limit
+  let preview = lines.slice(0, kept).join('\n');
+  while (kept > 1 && Buffer.byteLength(preview, 'utf-8') > maxBytes) {
+    kept = Math.floor(kept * 0.9);
+    preview = lines.slice(0, kept).join('\n');
+  }
+  const removedLines = lines.length - kept;
+  const hint =
+    `\n\n(Output truncated: showing ${kept} of ${lines.length} lines. ` +
+    `Use Grep to search the full content, or Read with start_line/end_line to view specific sections.)`;
+  return { content: preview + hint, truncated: true, removedLines };
+}
 
 // ─── Read File ──────────────────────────────────────────
 export const readFileTool: ToolRegistration = {
   definition: {
     name: 'Read',
-    description: 'Read the contents of a file. Returns file content with line numbers.',
+    description:
+      'Read the contents of a file with optional pagination. Returns file content with line numbers. ' +
+      'Use offset+limit for large files to avoid context overflow.',
     parameters: {
       type: 'object',
       properties: {
         file_path: { type: 'string', description: 'Absolute or relative path to the file' },
-        start_line: { type: 'number', description: 'Start line number (1-indexed, optional)' },
-        end_line: { type: 'number', description: 'End line number (1-indexed, optional)' },
+        start_line: { type: 'number', description: 'Start line number (1-indexed, optional). Alias for offset.' },
+        end_line: { type: 'number', description: 'End line number (1-indexed, optional). If omitted reads to file end or limit.' },
+        offset: { type: 'number', description: 'First line to read (1-indexed). Takes priority over start_line if both provided.' },
+        limit: { type: 'number', description: `Max number of lines to return (default: ${TRUNCATE_MAX_LINES}). Use with offset for pagination.` },
       },
       required: ['file_path'],
     },
@@ -23,17 +61,51 @@ export const readFileTool: ToolRegistration = {
     const filePath = resolve(process.cwd(), args.file_path as string);
     if (!existsSync(filePath)) return `Error: File not found: ${filePath}`;
     try {
-      // Bug b6: detect directory and return friendly message (statSync already imported at top)
       const st = statSync(filePath);
       if (st.isDirectory()) {
         return `Error: Path is a directory, not a file: ${filePath}\nUse the LS tool to list directory contents.`;
       }
+
+      // Resolve offset / limit (new API) with fallback to start_line / end_line (legacy)
+      const offsetArg = (args.offset as number | undefined) ?? (args.start_line as number | undefined);
+      const offset = offsetArg !== undefined ? Math.max(1, offsetArg) : 1;
+      const limitArg = args.limit as number | undefined;
+      // end_line takes precedence over limit when offset is 1 (legacy callers)
+      const endLineArg = args.end_line as number | undefined;
+
       const content = readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n');
-      const start = Math.max(0, ((args.start_line as number) || 1) - 1);
-      const end = Math.min(lines.length, (args.end_line as number) || lines.length);
-      const slice = lines.slice(start, end);
-      return slice.map((line, i) => `${String(start + i + 1).padStart(6)}│ ${line}`).join('\n');
+      const allLines = content.split('\n');
+      const totalLines = allLines.length;
+
+      const start = offset - 1; // 0-indexed
+      let end: number;
+      if (endLineArg !== undefined) {
+        end = Math.min(totalLines, endLineArg);
+      } else if (limitArg !== undefined) {
+        end = Math.min(totalLines, start + limitArg);
+      } else {
+        end = Math.min(totalLines, start + TRUNCATE_MAX_LINES);
+      }
+
+      const slice = allLines.slice(start, end);
+      const result = slice.map((line, i) => `${String(start + i + 1).padStart(6)}│ ${line}`).join('\n');
+
+      const hasMore = end < totalLines;
+      if (hasMore) {
+        const nextOffset = end + 1;
+        return (
+          result +
+          `\n\n(Showing lines ${offset}-${end} of ${totalLines}. ` +
+          `Use offset=${nextOffset} to continue reading.)`
+        );
+      }
+
+      // Also apply byte-level truncation for very wide lines
+      const { content: final, truncated, removedLines } = truncateOutput(result);
+      if (truncated) {
+        return final + `\n(${removedLines} additional lines hidden — use offset/limit to paginate)`;
+      }
+      return result + `\n\n(End of file — ${totalLines} lines total)`;
     } catch (err) {
       return `Error reading file: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -59,9 +131,19 @@ export const writeFileTool: ToolRegistration = {
     try {
       mkdirSync(dirname(filePath), { recursive: true });
       const content = args.content as string;
+      // Compute diff summary if file already exists
+      let diffSummary = '';
+      if (existsSync(filePath)) {
+        try {
+          const oldContent = readFileSync(filePath, 'utf-8');
+          const oldLines = oldContent.split('\n').length;
+          const newLines = content.split('\n').length;
+          diffSummary = ` (${oldLines}→${newLines} lines)`;
+        } catch { /* ignore diff errors */ }
+      }
       writeFileSync(filePath, content, 'utf-8');
       const lines = content.split('\n').length;
-      return `✓ Written ${lines} lines to ${filePath}`;
+      return `✓ Written ${lines} lines to ${filePath}${diffSummary}`;
     } catch (err) {
       return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -194,6 +276,7 @@ export const bashTool: ToolRegistration = {
     // Validate cwd exists
     if (!existsSync(cwd)) return `Error: Working directory not found: ${cwd}`;
 
+    const startMs = Date.now();
     try {
       const output = execSync(command, {
         cwd,
@@ -202,15 +285,28 @@ export const bashTool: ToolRegistration = {
         maxBuffer: 10 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      return output.trim() || '(no output)';
+      const elapsed = Date.now() - startMs;
+      const raw = output.trim() || '(no output)';
+      // Truncate large bash output to avoid context bloat
+      const { content, truncated } = truncateOutput(raw);
+      const timingNote = elapsed > 5000 ? `\n(Completed in ${(elapsed / 1000).toFixed(1)}s)` : '';
+      return content + (truncated ? timingNote : timingNote);
     } catch (err: unknown) {
-      const e = err as { stdout?: string; stderr?: string; message?: string };
+      const elapsed = Date.now() - startMs;
+      const e = err as { stdout?: string; stderr?: string; message?: string; signal?: string };
       const parts: string[] = [];
       if (e.stdout?.trim()) parts.push(e.stdout.trim());
       if (e.stderr?.trim()) parts.push(e.stderr.trim());
       // Avoid double-printing the message if it's already in stderr
       if (!e.stderr && e.message) parts.push(`Exit error: ${e.message}`);
-      return parts.join('\n') || `Command failed`;
+      // Distinguish timeout from other failures
+      if (e.signal === 'SIGTERM' || (e.message?.includes('ETIMEDOUT') ?? false)) {
+        parts.push(`(Command timed out after ${timeout}ms — use a higher timeout parameter or split into smaller steps)`);
+      }
+      const rawErr = parts.join('\n') || 'Command failed';
+      const { content } = truncateOutput(rawErr);
+      const timingNote = elapsed > 5000 ? `\n(Failed after ${(elapsed / 1000).toFixed(1)}s)` : '';
+      return content + timingNote;
     }
   },
 };
@@ -312,7 +408,7 @@ export const grepTool: ToolRegistration = {
         '--exclude-dir=node_modules', '--exclude-dir=.git',
         '-E', `'${escapedPattern}'`,
         `'${escapedSearchPath}'`,
-        '2>/dev/null', '| head -50',
+        '2>/dev/null', '| head -200',
       ].filter(Boolean).join(' ');
 
       const output = execSync(cmd, { encoding: 'utf-8', maxBuffer: 1024 * 1024 }).trim();
