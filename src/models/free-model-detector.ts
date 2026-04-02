@@ -8,96 +8,17 @@
  *   4. Pick the best-scoring model and set it as the main model pointer
  *
  * Key handling:
- *   - OPENROUTER_API_KEY in env → use it (higher rate limits, no throttle)
- *   - No key → prompt user to get a free key via browser; wait for input; write to .env
- *   - User can skip key prompt → falls back to anonymous OpenRouter + other providers
+ *   - OPENROUTER_API_KEY in env → use it (higher rate limits)
+ *   - No key → OpenRouter ANONYMOUS mode works out-of-the-box (rate-limited but usable)
+ *     No prompts, no interruptions. A one-line tip is shown suggesting users add a key.
  *
- * Fallback chain (if OpenRouter fails or is skipped):
+ * Fallback chain (if OpenRouter unreachable):
  *   - Gemini  (GEMINI_API_KEY)     → free 1500 req/day
  *   - Groq    (GROQ_API_KEY)       → free 14400 req/day
  *   - Ollama  (local)              → no limits
- *
- * OpenRouter free model API:
- *   GET https://openrouter.ai/api/v1/models
- *   Filter: pricing.prompt === "0" && pricing.completion === "0"
- *   Sort: tool-support first, then quality score, then context length
  */
 
-import { createInterface } from 'readline';
-import { existsSync, readFileSync, appendFileSync } from 'fs';
-import { resolve } from 'path';
 import type { ModelPointers } from './model-manager.js';
-
-// ── Key bootstrap helpers ─────────────────────────────────────────────────────
-
-/**
- * Persist a key=value pair to the nearest .env file.
- * Tries cwd/.env first, then ~/.uagent/.env as fallback.
- */
-function persistKeyToEnv(key: string, value: string): void {
-  const candidates = [
-    resolve(process.cwd(), '.env'),
-    resolve(process.env.HOME ?? '~', '.uagent', '.env'),
-  ];
-  const target = candidates.find(existsSync) ?? candidates[0];
-  // If the key already exists in the file, don't append a duplicate
-  try {
-    const existing = readFileSync(target, 'utf-8');
-    if (existing.includes(`${key}=`)) return; // already set
-  } catch { /* file may not exist yet */ }
-  appendFileSync(target, `\n${key}=${value}\n`);
-}
-
-/**
- * Open a URL in the default browser (cross-platform).
- * Silently ignores errors (e.g. headless environment).
- */
-async function openBrowser(url: string): Promise<void> {
-  const { spawn } = await import('child_process');
-  const cmd = process.platform === 'darwin' ? 'open'
-    : process.platform === 'win32' ? 'start'
-    : 'xdg-open';
-  spawn(cmd, [url], { detached: true, stdio: 'ignore' }).unref();
-}
-
-/**
- * Interactively prompt the user to get an OpenRouter API key.
- * Opens the key page in their browser, then waits for them to paste the key.
- * Pressing Enter without a value = skip.
- *
- * Returns the key if provided, or null if skipped.
- */
-async function promptForOpenRouterKey(): Promise<string | null> {
-  const KEY_URL = 'https://openrouter.ai/keys';
-
-  console.log('\n┌─────────────────────────────────────────────────────────────┐');
-  console.log('│  🔑  OpenRouter API Key Setup (one-time, takes 30 seconds)  │');
-  console.log('├─────────────────────────────────────────────────────────────┤');
-  console.log('│  OpenRouter gives you FREE access to 100+ open-source LLMs. │');
-  console.log('│  No credit card required.                                    │');
-  console.log('│                                                              │');
-  console.log(`│  1. Opening: ${KEY_URL}`);
-  console.log('│  2. Sign in with GitHub / Google                             │');
-  console.log('│  3. Click "Create Key" → copy the key                        │');
-  console.log('│  4. Paste it below and press Enter                           │');
-  console.log('│                                                              │');
-  console.log('│  (Press Enter without typing to skip and use anonymous mode) │');
-  console.log('└─────────────────────────────────────────────────────────────┘\n');
-
-  // Try to open browser (non-blocking)
-  await openBrowser(KEY_URL).catch(() => {});
-
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('  Paste your OpenRouter API key: ', (answer) => {
-      rl.close();
-      const key = answer.trim();
-      resolve(key || null);
-    });
-    // Timeout after 2 minutes — auto-skip if user doesn't respond
-    setTimeout(() => { rl.close(); resolve(null); }, 120_000);
-  });
-}
 
 // ── OpenRouter API types ──────────────────────────────────────────────────────
 
@@ -332,37 +253,21 @@ async function tryOpenRouter(apiKey?: string, silent = false): Promise<RankedFre
 /**
  * Main entry: detect best available free model.
  *
- * Flow:
- *   1. If OPENROUTER_API_KEY is set → use it directly
- *   2. If not set AND not silent → prompt user to get a free key (opens browser)
- *      - User pastes key → save to .env → retry OpenRouter with that key
- *      - User skips (Enter) → try anonymous OpenRouter (rate-limited)
- *   3. If OpenRouter fails/skipped → fallback to Gemini / Groq / Ollama
+ * Flow (zero friction for new users):
+ *   1. Try OpenRouter with key if available, otherwise anonymous (no key needed)
+ *   2. Anonymous OpenRouter works out-of-the-box — rate limited but usable
+ *   3. If OpenRouter fails → fallback to Gemini / Groq / Ollama (if keys set)
  *
- * @param silent - suppress all prompts and progress output (used in non-interactive contexts)
+ * No interactive prompts are shown during detection.
+ * After a successful anonymous session, a one-line tip is shown once.
+ *
+ * @param silent - suppress all output (for non-interactive / CI contexts)
  */
 export async function detectFreeModes(silent = false): Promise<DetectionResult> {
-  let apiKey = process.env.OPENROUTER_API_KEY;
-
-  // ── Step 1: Auto-prompt for key if not set (interactive mode only) ────────
-  if (!apiKey && !silent) {
-    process.stdout.write('\n');
-    const newKey = await promptForOpenRouterKey();
-    if (newKey) {
-      // Persist to .env so future runs don't need to prompt again
-      persistKeyToEnv('OPENROUTER_API_KEY', newKey);
-      // Also set in current process so the rest of the session can use it
-      process.env.OPENROUTER_API_KEY = newKey;
-      apiKey = newKey;
-      console.log('\n✅ Key saved! It will be used automatically from now on.\n');
-    } else {
-      console.log('\n⏩ Skipped. Using anonymous OpenRouter access (rate-limited).\n');
-    }
-  }
-
+  const apiKey = process.env.OPENROUTER_API_KEY;
   const anonymous = !apiKey;
 
-  // ── Step 2: Try OpenRouter (primary) ──────────────────────────────────────
+  // ── Step 1: Try OpenRouter (works anonymously, no key required) ───────────
   if (!silent) process.stdout.write('🔍 Fetching latest free models from OpenRouter...');
   const orModels = await tryOpenRouter(apiKey, silent);
 
@@ -385,8 +290,8 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
     };
   }
 
-  // ── Step 3: Fallback chain (Gemini / Groq / Ollama) ───────────────────────
-  if (!silent) process.stdout.write('🔍 OpenRouter unavailable, trying fallback providers...');
+  // ── Step 2: Fallback chain (Gemini / Groq / Ollama) ───────────────────────
+  if (!silent) process.stdout.write('\n🔍 OpenRouter unavailable, trying fallback providers...');
   const [gemini, groq, ollama] = await Promise.all([tryGemini(), tryGroq(), tryOllama()]);
   const fallbacks = [gemini, groq, ollama].filter(Boolean) as RankedFreeModel[];
   fallbacks.sort((a, b) => b.score - a.score);
@@ -404,7 +309,7 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
     };
   }
 
-  if (!silent) process.stdout.write(' ❌ No free models found\n');
+  if (!silent) process.stdout.write(' ❌ No free models available\n');
   return {
     found: false, best: null, bestQuick: null, available: [],
     source: 'none', anonymous, totalFreeModels: 0,
@@ -442,27 +347,19 @@ export function formatDetectionSummary(result: DetectionResult): string {
   const lines: string[] = [];
 
   if (result.found && result.best) {
-    const modelLabel = result.best.name;
-    lines.push(`✅ Auto-selected free model: **${modelLabel}**`);
-    if (result.source === 'openrouter') {
-      lines.push(`   Source: OpenRouter (${result.totalFreeModels} free models available${result.anonymous ? ', anonymous mode' : ''})`);
-      if (result.bestQuick && result.bestQuick.id !== result.best.id) {
-        lines.push(`⚡ Quick/compact model: **${result.bestQuick.name}**`);
-      }
-    }
+    const src = result.source === 'openrouter'
+      ? `OpenRouter${result.anonymous ? ' (anonymous)' : ''}`
+      : result.source;
+    lines.push(`✅ Using free model: ${result.best.name}  [${src}]`);
+    // One-line tip for anonymous mode — non-intrusive
     if (result.anonymous) {
-      lines.push('');
-      lines.push('💡 You are using OpenRouter in anonymous mode (rate-limited).');
-      lines.push('   For higher limits, add your key to .env:');
-      lines.push('   OPENROUTER_API_KEY=<your-key>   # Get free at: https://openrouter.ai/keys');
+      lines.push(`   💡 Tip: set OPENROUTER_API_KEY in .env for higher rate limits → https://openrouter.ai/keys`);
     }
   } else {
-    lines.push('❌ No free models detected.');
-    lines.push('');
-    lines.push('Options:');
-    lines.push('  1. Add to .env:  OPENROUTER_API_KEY=<key>   → https://openrouter.ai/keys (free)');
-    lines.push('  2. Add to .env:  GEMINI_API_KEY=<key>       → https://aistudio.google.com/apikey (free)');
-    lines.push('  3. Install Ollama locally                   → https://ollama.com → ollama pull qwen3');
+    lines.push('⚠️  No free models available. Add a key to .env to get started:');
+    lines.push('   OPENROUTER_API_KEY=<key>   → https://openrouter.ai/keys (free, no credit card)');
+    lines.push('   Or: GEMINI_API_KEY=<key>   → https://aistudio.google.com/apikey');
+    lines.push('   Run: uagent config — for interactive setup');
   }
 
   return lines.join('\n');

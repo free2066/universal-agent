@@ -576,17 +576,20 @@ class SiliconFlowClient extends OpenAIClient {
 // ──────────────────────────────────────────
 class OpenRouterClient extends OpenAIClient {
   constructor(model: string) {
+    // OpenRouter supports anonymous access — when no key is set we use the
+    // string 'anonymous' as a placeholder so the OpenAI SDK still sends the
+    // Authorization header (OpenRouter ignores it for anonymous requests).
+    // The required HTTP-Referer + X-Title headers identify our app.
+    const apiKey = process.env.OPENROUTER_API_KEY || 'anonymous';
     const client = new OpenAI({
-      apiKey: process.env.OPENROUTER_API_KEY ?? '',
+      apiKey,
       baseURL: 'https://openrouter.ai/api/v1',
       defaultHeaders: {
         'HTTP-Referer': 'https://github.com/free2066/universal-agent',
         'X-Title': 'universal-agent',
       },
     });
-    // Use OpenAIClient's internal client slot via super, then override
-    super(model, process.env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1');
-    // Override the client with one that includes required OpenRouter headers
+    super(model, apiKey, 'https://openrouter.ai/api/v1');
     (this as unknown as { client: OpenAI }).client = client;
   }
 }
