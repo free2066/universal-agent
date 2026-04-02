@@ -266,6 +266,14 @@ export class ModelManager {
     this.saveToDisk();
   }
 
+  removeProfile(name: string): boolean {
+    if (!this.profiles.has(name)) return false;
+    this.profiles.delete(name);
+    this.clientCache.clear();
+    this.saveToDisk();
+    return true;
+  }
+
   listProfiles(): ModelProfile[] {
     return Array.from(this.profiles.values()).filter(p => p.isActive);
   }
