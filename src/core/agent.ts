@@ -12,7 +12,7 @@ import { spawnAgentTool, spawnParallelTool } from './tools/spawn-agent.js';
 import { coordinatorRunTool } from './tools/coordinator-tool.js';
 import { businessDefectDetectorTool } from './tools/business-defect-detector.js';
 import { reverseAnalyzeTool } from './tools/reverse-analyze.js';
-import { loadSkillTool } from './tools/skill-tool.js';
+import { loadSkillTool, runSkillTool } from './tools/skill-tool.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
 import { backgroundRunTool, checkBackgroundTool } from './tools/background-tools.js';
 import { backgroundManager } from './background-manager.js';
@@ -163,8 +163,9 @@ export class AgentCore {
     // s03 — in-session todo tracking with nag reminder
     this.registry.register(todoWriteTool);
 
-    // s05 — on-demand skill loading
+    // s05 — on-demand skill loading (Prompt + Program paradigm, kstack #15366)
     this.registry.register(loadSkillTool);
+    this.registry.register(runSkillTool);
 
     // s07 — persistent task board (+ s11 claim)
     this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
