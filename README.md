@@ -1,482 +1,296 @@
-# 🤖 Universal Agent CLI
+# universal-agent
+
+> 🤖 A universal multi-domain AI Agent CLI — supports data analysis, programming, customer service, and advanced multi-agent orchestration.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org)
 
-A **universal multi-domain AI Agent CLI** — not just for programming, but for **data analysis**, **customer service**, **code review**, **self-healing**, and any domain you add as a plugin. Supports 20+ frontier models across OpenAI, Anthropic, Google, Mistral, Qwen, DeepSeek, Grok, and local Ollama.
+---
+
+## Features
+
+### Core Agent Engine
+- **Multi-domain routing** — auto-detects task type (data / dev / service) and activates domain-specific tools
+- **Streaming responses** — real-time token streaming for long-running tasks
+- **Safe mode** — `--safe` flag prevents destructive file/shell operations
+- **Model fallback chain** — automatically retries with backup models on failure
+- **Context compressor** — auto-compacts long conversations to stay within token limits
+- **Schema-validated tools** — all tool calls are validated against JSON Schema before execution
+
+### Multi-Agent Orchestration
+- **`SpawnAgent`** — spawn isolated sub-agents with scratchpad context handoff; prevents recursive spawning via `SPAWN_DEPTH` env guard
+- **`SpawnParallel`** — run multiple worker agents concurrently, collect and merge results
+- **`CoordinatorRun`** — full 5-phase pipeline: Research → Synthesis → Critic Review → Implementation → Verification
+  - Actor-Critic pattern: independent Critic agent audits synthesis plans before implementation
+  - Human-in-the-Loop checkpoints: pause pipeline after any phase, serialize state, resume with `resume_from`
+  - Permission Bridge: workers declare dangerous operations (`PERMISSION_REQUEST:`) instead of executing them; coordinator surfaces requests for user approval
+  - Mailbox messaging: structured point-to-point and broadcast messaging between agents via `.uagent/mailbox/`
+- **`BusinessDefectDetect`** — 5-stage serial pipeline for business logic defect detection (inspired by kstack #15360):
+  - Stage 1: Architecture analysis → module map
+  - Stage 2: PRD/TRD requirements extraction → structured business rules
+  - Stage 3: Business rule → code entity mapping (traceability chain)
+  - Stage 4: Function-level git diff analysis with risk notes
+  - Stage 5: Multi-source evidence reasoning → P0/P1/P2/P3 defect report
+
+### Code Quality Tools
+- **`AIReview`** — P1/P2/P3 graded code review with Four-Dimension quality framework (business / coverage / scenario / executability)
+- **`CodeInspect`** — static analysis: dead code, complexity, security patterns, dependency issues
+- **`SelfHeal`** — auto-detects and fixes TypeScript/lint errors in a retry loop
+- **`SpecGenerate`** — generates test specs and implementation specs from code
+- **`ReverseAnalyze`** — reverse-engineers architecture from codebase, produces AGENTS.md
+
+### Skill System (Dual Paradigm — kstack #15366)
+- **`load_skill`** — Prompt Paradigm: loads SKILL.md body into context, model interprets and executes freely
+- **`run_skill`** — Program Paradigm: system-controlled step execution with per-step completion gates, prevents model drift and early exits
+- Skills declared with `mode: program` + `steps[]` + `completion_gate` in YAML frontmatter
+- `degrees_of_freedom: high|medium|low` guides paradigm selection
+
+### Collaboration & Productivity
+- **Teammate system** — spawn persistent teammate agents, send/receive inbox messages, broadcast to all teammates
+- **Worktree tools** — create git worktrees for parallel feature development, bind tasks to worktrees
+- **Task board** — persistent task tracking across sessions with claim/assign/complete workflow
+- **Background tasks** — run long shell commands in background, check status asynchronously
+- **Todo tracking** — in-session todo management with progress reminders
+
+### Infrastructure
+- **Memory store** — semantic memory with MMR (Maximal Marginal Relevance) deduplication
+- **MCP integration** — Model Context Protocol support for external tool servers
+- **Domain plugins** — data / dev / service domain plugins with specialized tools and system prompts
+- **Skill loader** — `.uagent/skills/<name>/SKILL.md` on-demand knowledge injection (Layer 1: descriptions in system prompt, Layer 2: full body on demand)
+
+---
+
+## Project Structure
 
 ```
-╔═══════════════════════════════════════════╗
-║   🤖  Universal Agent CLI  v0.1.0         ║
-║   Multi-domain AI powered assistant       ║
-╚═══════════════════════════════════════════╝
-  Domains: data | dev | service | auto
+src/
+├── cli/                        # CLI entry layer
+│   ├── index.ts                # Main CLI & REPL
+│   └── ui-enhanced.ts          # Terminal UI components
+│
+├── core/                       # Core agent engine
+│   ├── agent.ts                # AgentCore — main loop, tool dispatch, streaming
+│   ├── tool-registry.ts        # Schema-validated tool registry
+│   ├── domain-router.ts        # Domain auto-detection
+│   ├── subagent-system.ts      # Sub-agent lifecycle management
+│   ├── teammate-manager.ts     # Persistent teammate agents
+│   ├── task-board.ts           # Cross-session task tracking
+│   ├── model-fallback.ts       # Fallback chain
+│   ├── tool-selector.ts        # Semantic tool selection
+│   ├── tool-retry.ts           # Retry decorator
+│   ├── hooks.ts                # Lifecycle hooks
+│   ├── logger.ts               # Structured logger
+│   │
+│   ├── context/                # Context management
+│   │   ├── context-loader.ts   # AGENTS.md / rules / skill descriptions
+│   │   ├── context-compressor.ts # Auto-compact long conversations
+│   │   └── context-editor.ts   # Selective context editing
+│   │
+│   ├── memory/                 # Semantic memory
+│   │   ├── memory-store.ts     # Embedding-based memory store
+│   │   ├── memory-search.ts    # MMR-based search
+│   │   ├── mmr.ts              # Maximal Marginal Relevance
+│   │   └── session-history.ts  # Session history persistence
+│   │
+│   ├── skills/                 # Skill system
+│   │   └── skill-loader.ts     # SKILL.md parser + ProgramSkillRunner
+│   │
+│   └── tools/                  # Tool implementations
+│       ├── fs/                 # File system tools
+│       │   └── fs-tools.ts     # read/write/edit/bash/list/grep
+│       ├── web/                # Network tools
+│       │   └── web-tools.ts    # fetch/search
+│       ├── code/               # Code quality tools
+│       │   ├── ai-reviewer.ts          # P1/P2/P3 review + Four-Dimension
+│       │   ├── code-inspector.ts       # Static analysis
+│       │   ├── self-heal.ts            # Auto-fix errors
+│       │   ├── spec-generator.ts       # Test/impl spec generation
+│       │   ├── reverse-analyze.ts      # Architecture reverse-engineering
+│       │   └── business-defect-detector.ts  # 5-stage business defect pipeline
+│       ├── agents/             # Multi-agent tools
+│       │   ├── spawn-agent.ts          # SpawnAgent + Mailbox system
+│       │   ├── coordinator-tool.ts     # CoordinatorRun 5-phase pipeline
+│       │   └── worktree-tools.ts       # Git worktree management
+│       └── productivity/       # Productivity tools
+│           ├── todo-tool.ts            # In-session todo tracking
+│           ├── background-tools.ts     # Background command execution
+│           └── skill-tool.ts           # load_skill + run_skill
+│
+├── models/                     # LLM abstraction layer
+│   ├── types.ts                # Core type definitions
+│   ├── model-manager.ts        # Model registry (main/quick/embedding)
+│   └── llm-client.ts           # OpenAI / Anthropic / compatible clients
+│
+└── domains/                    # Domain plugins
+    ├── data/                   # Data analysis (SQL, CSV, EDA, schema)
+    ├── dev/                    # Development (code review, git, execute)
+    └── service/                # Customer service (FAQ, sentiment, tickets)
 ```
 
-## ✨ Features
+---
 
-| Domain | Capabilities |
-|--------|-------------|
-| 📊 **data** | CSV/JSON analysis, EDA reports, SQL generation/optimization, data quality checks |
-| 💻 **dev** | Code review, bug detection, code execution, git summaries, refactoring |
-| 🎧 **service** | Ticket classification, sentiment analysis, FAQ search, response generation |
-| 🔄 **auto** | Automatically detects the best domain for your request |
+## Quick Start
 
-### 🌟 Advanced Features
-
-- **🔌 MCP Support** — Connect any Model Context Protocol server (filesystem, GitHub, databases, etc.)
-- **👥 Subagent System** — Delegate tasks to specialized sub-agents via `@run-agent-<name>` mentions; supports **parallel fan-out** with `parallel_tasks[]` for concurrent execution
-- **🧹 Zombie Agent Detection** — `/agents clean [days]` lists stale subagents that haven't been used in N days; usage stats tracked in `~/.uagent/agent-usage.json`
-- **🗜️ Auto-Compact** — Automatically compresses conversation history when approaching context limits (75% threshold)
-- **✂️ Context Editing** — Selectively clears old tool-result messages to free context before compaction kicks in
-- **🔁 Tool Retry** — Automatic exponential-backoff retry on transient tool failures (configurable)
-- **🛡️ Model Fallback** — Automatically fails over to backup models on LLM errors (`AGENT_FALLBACK_MODELS=model1,model2`)
-- **🔭 Tool Selector** — Filters relevant tools per query when many are registered, preventing LLM confusion
-- **🔓 Conditional Tool Loading** — Tools can be unlocked dynamically based on execution results (no scope creep)
-- **⚠️ Harness Constraints** — Hard behavioral rules injected into every system prompt: CLI-first execution, no fallback scripting, schema adherence enforced
-- **📐 Schema Validation** — Tool inputs validated against `ToolDefinition.parameters` before execution; violations surface as clear errors
-- **🔍 Code Inspection** — Static analysis for bugs, security issues, and performance problems
-- **🩺 Self-Healing** — Automatically detect and fix code issues, verify build, commit fixes
-- **🌐 Web Tools** — `WebFetch` (fetch and extract any URL) + `WebSearch` (DuckDuckGo, no API key required), both with MMR re-ranking
-- **📜 Session History** — Persists prompts to `~/.uagent/history.jsonl`, scoped per-project
-- **📝 Project Context** — Reads `AGENTS.md` / `CLAUDE.md` for project-specific instructions
-- **🌿 Git Status** — Injects current `git status` snapshot into system prompt at session start
-- **💰 Cost Tracking** — Real-time token usage and API cost monitoring per model
-
-## 🚀 Quick Start
-
-### Install from source
+### Installation
 
 ```bash
-git clone https://github.com/free2066/universal-agent.git
-cd universal-agent
 npm install
 npm run build
-
-# Configure API keys
-npm run dev -- config
-
-# Start interactive chat
-npm run dev -- chat
+npm link   # makes `uagent` available globally
 ```
 
-### Install globally
+### Configuration
+
+Create a `.env` file in your project root:
+
+```env
+# Required: at least one LLM provider
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional: custom base URL (for compatible APIs)
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+# Optional: model selection
+UAGENT_MODEL=claude-3-5-sonnet-20241022
+UAGENT_QUICK_MODEL=claude-3-haiku-20240307
+```
+
+### Usage
 
 ```bash
-npm install -g universal-agent
-uagent config    # set API keys
-uagent chat      # start chatting
+# Interactive REPL
+uagent
+
+# Single command
+uagent "Analyze the performance of the checkout flow"
+
+# Specify domain explicitly
+uagent --domain data "Query sales by region for last month"
+uagent --domain dev  "Review the auth module for security issues"
+
+# Code review
+uagent review           # review git diff
+uagent review src/      # review a directory
+
+# Safe mode (no destructive operations)
+uagent --safe "Refactor the user service"
+
+# Verbose mode
+uagent --verbose "Debug the payment integration"
 ```
 
-## 📖 Usage
-
-### Interactive Mode
-
-```bash
-uagent chat                            # auto-detect domain
-uagent chat --domain data              # lock to data domain
-uagent chat --domain dev               # lock to dev domain
-uagent chat --model gpt-4.1            # use GPT-4.1
-uagent chat --model claude-opus-4-5    # use Claude Opus 4.5
-uagent chat --model ollama:llama3      # use local Ollama
-uagent chat --safe                     # enable safe mode (blocks dangerous commands)
-uagent chat --verbose                  # show tool call details
-```
-
-### Single Command Mode
-
-```bash
-uagent run "Analyze this CSV file" --file data.csv
-uagent run "Optimize this SQL query: SELECT * FROM orders WHERE date > '2024-01-01'"
-uagent run "Review this Python function for bugs" --domain dev
-```
-
-### CLI Subcommands
-
-```bash
-uagent inspect [path]           # Static code inspection
-uagent purify [path]            # Auto-fix code issues (self-healing)
-uagent init                     # Initialize AGENTS.md for this project
-uagent config                   # Configure API keys and settings
-uagent domains                  # List available domains
-uagent agents                   # List available subagents
-uagent models list              # List configured model profiles
-uagent models set main gpt-4.1  # Set active model pointer
-uagent models export            # Export model config as YAML
-uagent mcp list                 # List MCP servers
-uagent mcp init                 # Initialize .mcp.json
-```
-
-### In-session Commands
+### REPL Commands
 
 | Command | Description |
 |---------|-------------|
-| `/domain data` | Switch to data analysis mode |
-| `/domain dev` | Switch to programming mode |
-| `/domain service` | Switch to customer service mode |
-| `/model [name]` | Switch or cycle active model |
-| `/cost` | Show token usage and cost |
-| `/history [n]` | Show last n prompts (default 10) |
+| `/review [path\|--diff]` | Run AI code review |
 | `/inspect [path]` | Static code inspection |
-| `/purify [--dry-run] [--commit]` | Auto-fix code issues |
-| `/agents` | List available subagents |
-| `/agents clean [days]` | Show zombie/stale subagents (default: 30 days) |
-| `/models` | List model profiles |
-| `/clear` | Clear conversation history |
-| `/help` | Show help |
-| `/exit` | Exit |
+| `/heal [path]` | Auto-fix TypeScript/lint errors |
+| `/spec [path]` | Generate test specifications |
+| `/memory search <query>` | Search semantic memory |
+| `/skill list` | List available skills |
+| `/task list` | Show task board |
+| `/compact` | Compress conversation history |
+| `/clear` | Clear conversation |
+| `/exit` | Exit REPL |
 
-## 💬 Example Prompts
-
-### Data Domain
-```
-[data] ❯ Analyze the user retention in sales.csv
-[data] ❯ Generate an EDA report for dataset.csv
-[data] ❯ Optimize this SQL: SELECT * FROM orders JOIN customers ON...
-[data] ❯ Check data quality issues in my CSV file
-[data] ❯ Generate a MySQL query to find top 10 customers by revenue this month
-```
-
-### Dev Domain
-```
-[dev] ❯ Review this Python function for security issues
-[dev] ❯ What's the git history of my project?
-[dev] ❯ Run this Python snippet: print([x**2 for x in range(10)])
-[dev] ❯ Write unit tests for my authentication module
-[dev] ❯ Fetch and summarize https://example.com/api-docs
-```
-
-### Service Domain
-```
-[service] ❯ Classify this ticket: "I can't login and my payment was charged twice!"
-[service] ❯ What's the sentiment: "This is the worst service I've ever experienced!!!"
-[service] ❯ Search FAQ for: how to reset password
-[service] ❯ Draft a response to an angry customer about a delayed order
-```
-
-### Subagent Delegation
-```
-# Single agent
-[auto] ❯ @run-agent-reviewer please review src/api.ts
-
-# Parallel fan-out (concurrent execution)
-[auto] ❯ Review auth module for both code quality and security
-  → Task({ parallel_tasks: [
-      { subagent_type: "reviewer", task: "Review auth module" },
-      { subagent_type: "security-auditor", task: "Audit auth module" }
-    ]})
-
-# Ask a specific model
-[auto] ❯ @ask-claude-opus-4-5 what's the best approach for this architecture?
-```
-
-## ⚙️ Configuration
-
-```bash
-uagent config
-```
-
-Or create `~/.uagent/.env`:
-```env
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_API_KEY=AIza...
-GEMINI_API_KEY=AIza...          # or GOOGLE_API_KEY
-MISTRAL_API_KEY=...
-DEEPSEEK_API_KEY=...
-MOONSHOT_API_KEY=...
-DASHSCOPE_API_KEY=...           # for Qwen
-OPENAI_BASE_URL=https://api.openai.com/v1   # optional, for proxy
-OLLAMA_BASE_URL=http://localhost:11434       # optional, for local models
-```
-
-You can also put a `.env` file in your current working directory.
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `AGENT_FALLBACK_MODELS` | Comma-separated fallback models, e.g. `gpt-4o-mini,claude-3-5-haiku` |
-| `AGENT_SCHEMA_VALIDATE` | Set to `0` to disable tool input schema validation |
-| `AGENT_TOOL_SELECT_THRESHOLD` | Tool count threshold before filtering (default: `12`) |
-| `AGENT_TOOL_SELECT_MAX` | Max tools sent to LLM per call (default: `10`) |
-| `AGENT_TOOL_SELECT_ALWAYS` | Comma-separated tools always included (default: `Bash,Write,Edit,Read,LS,Grep`) |
-| `AGENT_TOOL_SELECTION_LLM` | Set to `1` to use LLM for tool selection (slower, more accurate) |
-| `AGENT_LOG_LEVEL` | Log level: `trace/debug/info/warn/error` (default: `info`) |
-| `AGENT_VERBOSE` | Set to `1` for debug output |
-| `AGENT_SAFE_MODE` | Set to `1` to block dangerous shell commands |
-| `AGENT_PROJECT_DOC_MAX_BYTES` | Max bytes for AGENTS.md context (default: 32768) |
-
-## 🤖 Supported Models
-
-### OpenAI
-| Model | Description |
-|-------|-------------|
-| `gpt-4.1` | Latest GPT-4.1 (1M context) |
-| `gpt-4.1-mini` | Fast & cost-effective GPT-4.1 |
-| `gpt-4.1-nano` | Ultra-fast, minimal cost |
-| `gpt-4o` | Multimodal flagship |
-| `gpt-4o-mini` | Affordable multimodal |
-| `o3` | Advanced reasoning |
-| `o4-mini` | Efficient reasoning |
-
-### Anthropic
-| Model | Description |
-|-------|-------------|
-| `claude-opus-4-5` | Most capable Claude (2025) |
-| `claude-sonnet-4-5` | Balanced performance (2025) |
-| `claude-haiku-4-5` | Fast & affordable (2025) |
-| `claude-3-5-sonnet-20241022` | Previous generation |
-
-### Google
-| Model | Description |
-|-------|-------------|
-| `gemini-2.5-pro` | Best Gemini reasoning (1M ctx) |
-| `gemini-2.5-flash` | Fastest Gemini |
-| `gemini-2.0-flash` | Efficient multimodal |
-
-### Mistral
-| Model | Description |
-|-------|-------------|
-| `mistral-large-2503` | Most capable Mistral |
-| `mistral-small-2503` | Cost-effective |
-
-### Qwen (Alibaba)
-| Model | Description |
-|-------|-------------|
-| `qwen3-235b-a22b` | Qwen3 235B MoE (Apr 2025) |
-| `qwen3-32b` | Qwen3 32B dense |
-| `qwen-max-2025-01-21` | Qwen Max |
-
-### DeepSeek
-| Model | Description |
-|-------|-------------|
-| `deepseek-v3-0324` | DeepSeek V3 (Mar 2025) |
-| `deepseek-r1` | Reasoning model |
-
-### Grok (xAI)
-| Model | Description |
-|-------|-------------|
-| `grok-3` | Latest Grok 3 |
-| `grok-3-mini` | Efficient Grok |
-
-### Local
-| Model | Description |
-|-------|-------------|
-| Any Ollama model | `--model ollama:llama3` |
-
-## 🔌 MCP (Model Context Protocol)
-
-Connect external tools and data sources via MCP servers.
-
-Initialize with:
-```bash
-uagent mcp init
-```
-
-Edit `.mcp.json`:
-```json
-{
-  "servers": [
-    {
-      "name": "filesystem",
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
-      "enabled": true
-    },
-    {
-      "name": "github",
-      "type": "sse",
-      "url": "https://your-mcp-server/sse",
-      "enabled": true
-    }
-  ]
-}
-```
-
-## 🔍 Code Inspection & Self-Healing
-
-```bash
-# Static inspection
-uagent inspect ./src --severity warning
-uagent inspect ./src --category security --json   # JSON output
-
-# Auto-fix issues
-uagent purify ./src --dry-run         # preview only
-uagent purify ./src --commit          # fix and commit
-uagent purify ./src --severity error  # only critical fixes
-```
-
-Or in REPL:
-```
-[dev] ❯ /inspect src/api.ts
-[dev] ❯ /purify --dry-run
-[dev] ❯ /purify --commit
-```
-
-Inspection rules cover:
-- **Security**: hardcoded secrets, SQL injection risks
-- **Bugs**: unhandled promises, empty catch blocks, non-null assertions
-- **Performance**: sync I/O in async context, array push in loops
-- **Style**: `any` types, TODO/FIXME comments, magic numbers, long functions
-
-## 🌐 Web Tools
-
-Both tools are available in all domains without any configuration:
-
-```
-[auto] ❯ Search for the latest Node.js release notes
-[auto] ❯ Fetch and summarize https://docs.example.com/api
-[auto] ❯ What are the top results for "TypeScript 5.5 features"?
-```
-
-- **WebSearch** uses DuckDuckGo — no API key required, results MMR re-ranked
-- **WebFetch** strips HTML, returns clean readable text; supports `text | links | both` extraction modes
-
-## 📝 Project Context (AGENTS.md)
-
-Create an `AGENTS.md` (or `CLAUDE.md`) at your project root to give the agent project-specific context:
-
-```bash
-uagent init   # creates AGENTS.md template
-```
-
-The agent automatically loads context from `AGENTS.md` at every session start. The file is truncated to 32KB by default (configurable via `AGENT_PROJECT_DOC_MAX_BYTES`).
-
-## 🔄 Auto-Compact & Context Editing
-
-Two layers of context management prevent hitting token limits:
-
-1. **Context Editing** (lightweight, first): Selectively replaces old tool-result messages with `[cleared]` placeholders when history exceeds 80k tokens. Preserves the 3 most recent tool results intact.
-
-2. **Auto-Compact** (heavy, second): When history exceeds 75% of the model's context window, summarizes older turns using a fast/cheap model and replaces them with a dense summary message.
-
-Together they allow arbitrarily long sessions without hitting context limits.
-
-## 👥 Subagent System
-
-Built-in subagents available out of the box:
-
-| Agent | Description |
-|-------|-------------|
-| `reviewer` | Code review specialist |
-| `architect` | System design and architecture advisor |
-| `test-writer` | Unit and integration test writer |
-| `data-analyst` | Data analysis and visualization expert |
-| `security-auditor` | Security vulnerability analysis |
-| `doc-writer` | Documentation and README writer |
-
-**Add custom agents** by creating `~/.uagent/agents/<name>.md` or `./.uagent/agents/<name>.md` with frontmatter:
-
-```markdown
 ---
-name: my-agent
-description: What this agent specializes in
-model: gpt-4o-mini
----
-You are an expert in ...
-```
 
-**Parallel fan-out** runs multiple agents concurrently:
+## Advanced Features
+
+### Multi-Agent Coordination
+
 ```
-Task({
-  parallel_tasks: [
-    { subagent_type: "reviewer", task: "Review auth module" },
-    { subagent_type: "security-auditor", task: "Audit auth module" }
-  ]
+# In the REPL or as a prompt:
+CoordinatorRun({
+  goal: "Refactor the auth module to use JWT",
+  scratchpad_id: "auth-refactor",
+  flow_config: {
+    human_checkpoints: ["research"],   # pause after research phase
+    skip_critic: false,                # keep Actor-Critic review
+    max_parallel: 3
+  }
 })
 ```
 
-**Zombie detection** finds unused agents:
-```
-[auto] ❯ /agents clean 30    # list agents unused for 30+ days
-```
-
-## 🔌 Adding Custom Domains
-
-Create a new domain plugin in `src/domains/`:
-
-```typescript
-// src/domains/finance/index.ts
-import type { DomainPlugin } from '../../models/types.js';
-
-export const financeDomain: DomainPlugin = {
-  name: 'finance',
-  description: 'Financial analysis, budgeting, investment calculations',
-  keywords: ['stock', 'portfolio', 'budget', 'revenue', 'profit'],
-  systemPrompt: 'You are an expert financial analyst...',
-  tools: [/* your tool registrations */],
-};
-```
-
-Then register it in `src/core/domain-router.ts`.
-
-## 📁 Project Structure
+### Business Defect Detection
 
 ```
-universal-agent/
-├── src/
-│   ├── cli/
-│   │   ├── index.ts              # CLI entry + REPL (slash commands)
-│   │   ├── ui.ts                 # Banner and help UI
-│   │   └── configure.ts          # API key configuration wizard
-│   ├── core/
-│   │   ├── agent.ts              # Core agent loop (tool calls + streaming)
-│   │   ├── context-compressor.ts # Auto-compact long conversations
-│   │   ├── context-editor.ts     # Selective tool-result clearing
-│   │   ├── context-loader.ts     # AGENTS.md + Harness constraints injection
-│   │   ├── domain-router.ts      # Domain detection and routing
-│   │   ├── hooks.ts              # Internal event hooks (tool timing, logging)
-│   │   ├── logger.ts             # Structured per-subsystem logger
-│   │   ├── mcp-manager.ts        # MCP server connections
-│   │   ├── mmr.ts                # MMR re-ranking for search deduplication
-│   │   ├── model-fallback.ts     # Automatic model fallback chain
-│   │   ├── session-history.ts    # Prompt persistence (~/.uagent/history.jsonl)
-│   │   ├── subagent-system.ts    # Subagent delegation + parallel fan-out
-│   │   ├── tool-registry.ts      # Tool registration, schema validation, conditional loading
-│   │   ├── tool-retry.ts         # Exponential-backoff retry for tool calls
-│   │   ├── tool-selector.ts      # Query-relevant tool filtering
-│   │   └── tools/
-│   │       ├── fs-tools.ts       # File system tools (Read/Write/Edit/Bash/LS/Grep)
-│   │       ├── web-tools.ts      # WebFetch and WebSearch (DuckDuckGo)
-│   │       ├── code-inspector.ts # Static code analysis (bugs/security/perf/style)
-│   │       └── self-heal.ts      # Auto code-fix and build verification
-│   ├── models/
-│   │   ├── types.ts              # Shared TypeScript interfaces
-│   │   ├── model-manager.ts      # Multi-provider model management + cost tracking
-│   │   └── llm-client.ts         # OpenAI/Anthropic/Gemini/Mistral/Qwen/DeepSeek/Ollama clients
-│   └── domains/
-│       ├── data/                 # Data analysis domain
-│       │   └── tools/            # CSV, SQL, EDA, cleaning tools
-│       ├── dev/                  # Programming domain
-│       │   └── tools/            # Code review, execution, git tools
-│       └── service/              # Customer service domain
-│           └── tools/            # Ticket, FAQ, sentiment tools
-├── package.json
-└── tsconfig.json
+BusinessDefectDetect({
+  prd_text: "Users must be notified within 30 minutes of order status change...",
+  staged_only: true    # only check staged git changes
+})
 ```
 
-## 🛠️ Development
+### Program-Mode Skills
+
+Create `.uagent/skills/page-explorer/SKILL.md`:
+
+```yaml
+---
+name: page-explorer
+description: Explore and verify a web page in strict sequence
+mode: program
+degrees_of_freedom: low
+steps:
+  - id: open
+    prompt: "Open the target URL and take a screenshot"
+    required_output: "screenshot"
+  - id: verify
+    prompt: "Verify the page loaded correctly by checking title and key elements"
+    required_output: "verification"
+  - id: explore
+    prompt: "Explore interactive elements and document all findings"
+    required_output: "findings"
+completion_gate: "All steps completed and all required_outputs present"
+---
+Global context for all steps...
+```
+
+Then call: `run_skill({ name: "page-explorer", context: "URL: https://..." })`
+
+---
+
+## Engineering Patterns
+
+This project implements several advanced multi-agent patterns sourced from engineering research:
+
+| Pattern | Source | Implementation |
+|---------|--------|----------------|
+| Actor-Critic review loop | kstack #15345 | `coordinator-tool.ts` — Critic phase before implementation |
+| Dead code filter | kstack #15347 | `coordinator-tool.ts` — Phase 0 LLM-based task filtering |
+| Four-Dimension quality framework | kstack #15347 | `ai-reviewer.ts` — business/coverage/scenario/executability |
+| Mailbox message routing | kstack #15348 | `spawn-agent.ts` — typed point-to-point + broadcast |
+| Permission Bridge | kstack #15348 | `coordinator-tool.ts` — worker permission request protocol |
+| Human-in-the-Loop checkpoints | kstack #15348 | `coordinator-tool.ts` — pause/resume with state serialization |
+| Business defect detection | kstack #15360 | `business-defect-detector.ts` — 5-stage evidence chain pipeline |
+| Skill as Program paradigm | kstack #15366 | `skill-loader.ts` + `skill-tool.ts` — ProgramSkillRunner with completion gates |
+
+---
+
+## Development
 
 ```bash
-npm install          # Install dependencies
-npm run dev          # Run in development mode (tsx)
-npm run build        # Build TypeScript
-npm test             # Run tests
-npm run lint         # Lint source
+# Development mode (no build required)
+npm run dev
+
+# Build
+npm run build
+
+# Type check only
+npx tsc --noEmit
+
+# Lint
+npm run lint
+
+# Test
+npm test
 ```
 
-## 🤝 Contributing
+---
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/new-domain`
-3. Add your domain plugin in `src/domains/`
-4. Update `src/core/domain-router.ts` to register it
-5. Add tests in `tests/`
-6. Submit a Pull Request
+## License
 
-## 📄 License
-
-MIT
+MIT — see [LICENSE](LICENSE) for details.
