@@ -365,8 +365,11 @@ export const spawnAgentTool: ToolRegistration = {
         projectRoot: process.cwd(),
         timeoutMs: timeout_seconds ? timeout_seconds * 1000 : undefined,
       });
-      const saved = task_id ? ` (saved to .uagent/context/${task_id}.md)` : '';
-      return `[SpawnAgent result${saved}]\n\n${result}`;
+      // Prepend task_id hint (inspired by opencode task.ts) so callers can resume
+      const header = task_id
+        ? `task_id: ${task_id} (pass this to resume the same sub-agent context)\n\n`
+        : '';
+      return `${header}[SpawnAgent result]\n\n${result}`;
     } catch (err) {
       return `SpawnAgent error: ${err instanceof Error ? err.message : String(err)}`;
     }
