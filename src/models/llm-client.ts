@@ -32,6 +32,15 @@ export function createLLMClient(model: string): LLMClient {
   // Mistral
   if (model.startsWith('mistral') || model.startsWith('mixtral')) return new MistralClient(model);
 
+  // Groq (free tier — llama3/deepseek-r1/qwen, ultra-fast)
+  if (model.startsWith('groq:')) return new GroqClient(model.replace('groq:', ''));
+
+  // SiliconFlow (free open-source models)
+  if (model.startsWith('siliconflow:')) return new SiliconFlowClient(model.replace('siliconflow:', ''));
+
+  // OpenRouter (many free models via :free suffix)
+  if (model.startsWith('openrouter:')) return new OpenRouterClient(model.replace('openrouter:', ''));
+
   // Generic OpenAI-compatible (any model name, custom baseURL via env)
   if (model.startsWith('openai-compat:')) {
     return new OpenAICompatClient(model.replace('openai-compat:', ''));
@@ -527,6 +536,61 @@ class OllamaClient implements LLMClient {
 // ──────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────
+// ──────────────────────────────────────────
+// Groq  (llama3/deepseek-r1/qwen, free tier)
+// OpenAI-compatible at api.groq.com/openai/v1
+// Free: 14,400 req/day, ultra-fast inference
+// Get key: https://console.groq.com
+// ──────────────────────────────────────────
+class GroqClient extends OpenAIClient {
+  constructor(model: string) {
+    super(
+      model,
+      process.env.GROQ_API_KEY,
+      'https://api.groq.com/openai/v1',
+    );
+  }
+}
+
+// ──────────────────────────────────────────
+// SiliconFlow  (many open-source models)
+// OpenAI-compatible at api.siliconflow.cn/v1
+// Free: 14M tokens/month on free tier
+// Get key: https://siliconflow.cn
+// ──────────────────────────────────────────
+class SiliconFlowClient extends OpenAIClient {
+  constructor(model: string) {
+    super(
+      model,
+      process.env.SILICONFLOW_API_KEY,
+      'https://api.siliconflow.cn/v1',
+    );
+  }
+}
+
+// ──────────────────────────────────────────
+// OpenRouter  (aggregates many free models)
+// OpenAI-compatible at openrouter.ai/api/v1
+// Many models with :free suffix are entirely free
+// Get key: https://openrouter.ai
+// ──────────────────────────────────────────
+class OpenRouterClient extends OpenAIClient {
+  constructor(model: string) {
+    const client = new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY ?? '',
+      baseURL: 'https://openrouter.ai/api/v1',
+      defaultHeaders: {
+        'HTTP-Referer': 'https://github.com/free2066/universal-agent',
+        'X-Title': 'universal-agent',
+      },
+    });
+    // Use OpenAIClient's internal client slot via super, then override
+    super(model, process.env.OPENROUTER_API_KEY, 'https://openrouter.ai/api/v1');
+    // Override the client with one that includes required OpenRouter headers
+    (this as unknown as { client: OpenAI }).client = client;
+  }
+}
+
 function safeParseJSON(raw: string, toolName: string): Record<string, unknown> {
   try {
     return JSON.parse(raw || '{}');

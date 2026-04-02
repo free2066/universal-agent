@@ -37,16 +37,28 @@ program
   .command('chat', { isDefault: true })
   .description('Start interactive agent session')
   .option('-d, --domain <domain>', 'Domain (data|dev|service|auto)', 'auto')
-  .option('-m, --model <model>', 'Model to use', 'gpt-4.1')
+  .option('-m, --model <model>', 'Model to use', '')
   .option('--safe', 'Enable safe mode (blocks dangerous commands)', false)
   .option('-v, --verbose', 'Show tool call details')
   .action(async (options) => {
     validateDomain(options.domain);
-    validateModel(options.model);
     printBanner();
+
+    // Auto-detect free models if no explicit model specified
+    let resolvedModel = options.model;
+    if (!resolvedModel) {
+      const summary = await modelManager.autoSelectFreeModel(false);
+      resolvedModel = modelManager.getCurrentModel('main');
+      // Print summary (only first line — the selected model)
+      const firstLine = summary.split('\n')[0];
+      console.log(chalk.cyan(`\n${firstLine}\n`));
+    } else {
+      validateModel(resolvedModel);
+    }
+
     const agent = new AgentCore({
       domain: options.domain,
-      model: options.model,
+      model: resolvedModel,
       stream: true,
       verbose: options.verbose,
       safeMode: options.safe,
@@ -69,7 +81,7 @@ function validateDomain(domain: string): void {
 
 function validateModel(model: string): void {
   // Allow any model that looks plausible: known prefixes or ollama:xxx format
-  const knownPrefixes = ['gpt-', 'o1', 'o3', 'o4', 'claude-', 'gemini-', 'deepseek', 'moonshot', 'kimi', 'qwen', 'qwq', 'mistral', 'mixtral', 'ollama:'];
+  const knownPrefixes = ['gpt-', 'o1', 'o3', 'o4', 'claude-', 'gemini-', 'deepseek', 'moonshot', 'kimi', 'qwen', 'qwq', 'mistral', 'mixtral', 'ollama:', 'groq:', 'siliconflow:', 'openrouter:'];
   const isKnown = knownPrefixes.some((p) => model.startsWith(p));
   if (!isKnown) {
     // Also allow models registered in the manager

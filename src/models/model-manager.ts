@@ -2,11 +2,12 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
 import { stringify as yamlStringify } from 'yaml';
 import { createLLMClient } from './llm-client.js';
+import { detectFreeModes, buildPointersFromDetection, formatDetectionSummary } from './free-model-detector.js';
 import type { LLMClient } from './types.js';
 
 export interface ModelProfile {
   name: string;
-  provider: 'openai' | 'anthropic' | 'ollama' | 'gemini' | 'deepseek' | 'moonshot' | 'qwen' | 'mistral' | 'custom';
+  provider: 'openai' | 'anthropic' | 'ollama' | 'gemini' | 'deepseek' | 'moonshot' | 'qwen' | 'mistral' | 'groq' | 'siliconflow' | 'openrouter' | 'custom';
   modelName: string;
   apiKey?: string;
   baseURL?: string;
@@ -48,16 +49,24 @@ function inferProviderFromModelName(modelName: string): ModelProfile['provider']
       || modelName.startsWith('tongyi'))                                        return 'qwen';
   if (modelName.startsWith('mistral') || modelName.startsWith('mixtral'))      return 'mistral';
   if (modelName.startsWith('ollama:'))                                          return 'ollama';
+  if (modelName.startsWith('groq:'))                                             return 'groq';
+  if (modelName.startsWith('siliconflow:'))                                      return 'siliconflow';
+  if (modelName.startsWith('openrouter:'))                                       return 'openrouter';
   return 'openai';
 }
 
 export class ModelManager {
   private profiles: Map<string, ModelProfile> = new Map();
   private pointers: ModelPointers = {
-    main: 'gpt-4o',
-    task: 'gpt-4o-mini',
-    compact: 'gpt-4o-mini',
-    quick: 'gpt-4o-mini',
+    // Default to free-tier models. Override via `uagent models set main <model>` or env vars.
+    // Free options (no credit card needed):
+    //   gemini-2.5-flash  — 1500 req/day free (Google AI Studio, GEMINI_API_KEY)
+    //   gemini-2.0-flash  — same free tier, slightly lighter
+    //   deepseek-chat     — free credits on signup (DEEPSEEK_API_KEY)
+    main:    process.env.UAGENT_MODEL         ?? 'gemini-2.5-flash',
+    task:    process.env.UAGENT_TASK_MODEL    ?? 'gemini-2.5-flash',
+    compact: process.env.UAGENT_COMPACT_MODEL ?? 'gemini-2.5-flash',
+    quick:   process.env.UAGENT_QUICK_MODEL   ?? 'gemini-2.5-flash',
   };
   private usageHistory: TokenUsage[] = [];
   private sessionCost = 0;
@@ -140,7 +149,7 @@ export class ModelManager {
     try {
       const data = JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));
       if (data.profiles) {
-        const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'custom']);
+        const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'groq', 'siliconflow', 'openrouter', 'custom']);
         for (const p of data.profiles) {
           // Validate each profile before loading: must have a known provider and non-empty modelName.
           // This prevents test-injected garbage (e.g. 'non-existent-model-12345') from
@@ -308,6 +317,34 @@ export class ModelManager {
       })),
       pointers: this.pointers,
     });
+  }
+
+  /**
+   * Auto-detect the best available free model and update all pointers.
+   * Called at startup when no explicit model is configured.
+   * Returns a human-readable summary string.
+   */
+  async autoSelectFreeModel(silent = false): Promise<string> {
+    const result = await detectFreeModes(silent);
+    const summary = formatDetectionSummary(result);
+
+    if (result.found) {
+      const pointers = buildPointersFromDetection(result);
+      if (pointers) {
+        // Only update pointers that aren't already explicitly set via env vars
+        if (!process.env.UAGENT_MODEL && pointers.main) {
+          this.pointers.main = pointers.main;
+          this.pointers.task = pointers.task ?? pointers.main;
+        }
+        if (!process.env.UAGENT_QUICK_MODEL && pointers.quick) {
+          this.pointers.quick = pointers.quick;
+          this.pointers.compact = pointers.compact ?? pointers.quick;
+        }
+        this.clientCache.clear(); // invalidate cache
+      }
+    }
+
+    return summary;
   }
 
   cycleMainModel(): string {
