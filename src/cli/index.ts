@@ -216,6 +216,17 @@ program
     await configureAgent();
   });
 
+// ── debug ────────────────────────────────────────────────
+program
+  .command('debug')
+  .description('Run diagnostic health check (keys, connectivity, models, config files)')
+  .option('--ping', 'Also run live connectivity tests to each configured provider')
+  .option('--json', 'Output report as JSON (for bug reports / CI)')
+  .action(async (options) => {
+    const { runDebugCheck } = await import('./debug-check.js');
+    await runDebugCheck({ ping: options.ping, json: options.json });
+  });
+
 // ── domains ──────────────────────────────────────────────
 program
   .command('domains')
