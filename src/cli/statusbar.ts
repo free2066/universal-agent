@@ -22,33 +22,7 @@ let _state: StatusBarState = {
 };
 
 let _enabled  = false;
-let _isTTY    = false;
 let _onUpdate: (() => void) | null = null;
-
-function _rows() { return process.stdout.rows    ?? 24; }
-function _cols() { return process.stdout.columns ?? 80; }
-
-function _setScroll(top: number, bottom: number) {
-  process.stdout.write(`\x1b[${top};${bottom}r`);
-}
-
-function _drawBar() {
-  if (!_isTTY) return;
-  const row  = _rows();
-  const info = _statusLine();
-  process.stdout.write(
-    '\x1b[?25l'       +
-    '\x1b[s'          +
-    `\x1b[${row};1H`  +
-    '\x1b[2K' + info  +
-    '\x1b[u'          +
-    '\x1b[?25h',
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Public API
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function initStatusBar(
   initialState: Partial<StatusBarState>,
@@ -56,66 +30,39 @@ export function initStatusBar(
 ): void {
   _state = { ..._state, ...initialState };
   if (onUpdate !== undefined) _onUpdate = onUpdate;
-  _isTTY = Boolean(process.stdout.isTTY);
-
-  if (_enabled) {
-    _drawBar();
-    return;
-  }
-
   _enabled = true;
-
-  if (_isTTY) {
-    const scrollBottom = _rows() - 1;
-    _setScroll(1, scrollBottom);
-    process.stdout.write(`\x1b[${scrollBottom};1H`);
-    _drawBar();
-    process.stdout.on('resize', () => {
-      const nb = _rows() - 1;
-      _setScroll(1, nb);
-      process.stdout.write(`\x1b[${nb};1H`);
-      _drawBar();
-    });
-  }
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   _state = { ..._state, ...patch };
-  if (!_enabled) return;
-  _drawBar();
-  if (_onUpdate) {
-    const onlyThinking = Object.keys(patch).length === 1 && 'isThinking' in patch;
-    if (!onlyThinking) _onUpdate();
-  }
+  if (!_enabled || !_onUpdate) return;
+  const onlyThinking = Object.keys(patch).length === 1 && 'isThinking' in patch;
+  if (!onlyThinking) _onUpdate();
 }
 
 export function clearStatusBar(): void {
-  if (_isTTY && _enabled) {
-    const row = _rows();
-    process.stdout.write(
-      '\x1b[s'          +
-      `\x1b[${row};1H`  + '\x1b[2K' +
-      '\x1b[u'          +
-      `\x1b[1;${row}r`,
-    );
-  }
   _enabled = false;
 }
 
 export function printStatusBar(): void {}
 
+/**
+ * Prompt = ❯ line + \n + status bar line.
+ * readline keeps cursor at end of first line (the ❯),
+ * so the status bar appears below the input without interfering.
+ */
 export function buildStatusPrompt(domain: string, _model?: string): string {
   const chevron = `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
-  if (!_enabled || _isTTY) return chevron;
-  return _statusLine() + '\n' + chevron;
+  if (!_enabled) return chevron;
+  const bar = _statusLine();
+  // Prompt = "❯ \n<statusbar>\x1b[1A\r[domain] ❯ "
+  // The \x1b[1A\r moves cursor back up to the ❯ line after readline prints the prompt.
+  // But since ANSI cursor moves don't work here, we instead print status ABOVE the ❯.
+  return bar + '\n' + chevron;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal
-// ─────────────────────────────────────────────────────────────────────────────
-
 function _statusLine(): string {
-  const cols = _cols();
+  const cols = process.stdout.columns ?? process.stderr.columns ?? 80;
   const pct  = _state.contextLength > 0
     ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
     : 0;
