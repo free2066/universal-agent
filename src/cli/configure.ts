@@ -53,10 +53,17 @@ interface ProviderInfo {
 
 const PROVIDERS: ProviderInfo[] = [
   {
+    label: '万擎 (Kuaishou internal)',
+    envKey: 'WQ_API_KEY',
+    freeUrl: 'https://wanqing.corp.kuaishou.com → 系统管理 → 安全认证 → 新建 API Key',
+    hint: '快手内网/办公网 OpenAI 兼容 API，配合 OPENAI_BASE_URL 使用',
+    isFree: true,
+  },
+  {
     label: 'OpenRouter',
     envKey: 'OPENROUTER_API_KEY',
     freeUrl: 'https://openrouter.ai/keys',
-    hint: '100+ free open-source models, no credit card needed',
+    hint: '100+ free open-source models (requires key, free tier available)',
     isFree: true,
   },
   {
@@ -169,6 +176,29 @@ export async function configureAgent(triggerReason?: string, focusKey?: string) 
       process.env[p.envKey] = ans;
     }
     // else: keep existing, no update needed
+    console.log();
+  }
+
+  // ── 万擎 Base URL (配合 WQ_API_KEY) ──────────────────────────────────────
+  if (updates['WQ_API_KEY'] || existing['WQ_API_KEY']) {
+    console.log(chalk.gray('  万擎 Base URL (内网或办公网):'));
+    console.log(chalk.gray('    内网: http://wanqing.internal/api/gateway/v1/endpoints'));
+    console.log(chalk.gray('    办公网: https://wanqing-api.corp.kuaishou.com/api/gateway/v1/endpoints'));
+    const wqBaseAns = await question(
+      chalk.white('  OPENAI_BASE_URL') +
+      chalk.gray(` [${existing.OPENAI_BASE_URL || 'http://wanqing.internal/api/gateway/v1/endpoints'}]`) +
+      ': ',
+    );
+    if (wqBaseAns) updates['OPENAI_BASE_URL'] = wqBaseAns;
+
+    // Also prompt for the endpoint ID (model name in 万擎)
+    console.log(chalk.gray('  万擎推理点 ID (格式: ep-xxxxxx-xxxxxx，从万擎控制台复制):'));
+    const wqModelAns = await question(
+      chalk.white('  UAGENT_MODEL') +
+      chalk.gray(` [${existing.UAGENT_MODEL || 'ep-xxxxxx-xxxxxx'}]`) +
+      ': ',
+    );
+    if (wqModelAns) updates['UAGENT_MODEL'] = wqModelAns;
     console.log();
   }
 

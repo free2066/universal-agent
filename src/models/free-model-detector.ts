@@ -265,33 +265,37 @@ async function tryOpenRouter(apiKey?: string, silent = false): Promise<RankedFre
  */
 export async function detectFreeModes(silent = false): Promise<DetectionResult> {
   const apiKey = process.env.OPENROUTER_API_KEY;
+  // NOTE: OpenRouter no longer supports anonymous access (HTTP 401 without a key).
+  // Only attempt OpenRouter when a valid key is configured.
   const anonymous = !apiKey;
 
-  // ── Step 1: Try OpenRouter (works anonymously, no key required) ───────────
-  if (!silent) process.stdout.write('🔍 Fetching latest free models from OpenRouter...');
-  const orModels = await tryOpenRouter(apiKey, silent);
+  // ── Step 1: Try OpenRouter (only when API key is present) ─────────────────
+  if (apiKey) {
+    if (!silent) process.stdout.write('🔍 Fetching latest free models from OpenRouter...');
+    const orModels = await tryOpenRouter(apiKey, silent);
 
-  if (orModels) {
-    if (!silent) process.stdout.write(` ✅ Found ${orModels.length} free model(s)\n`);
-    const best = orModels[0];
-    const bestQuick =
-      orModels.find((m) => m.contextLength <= 32768 && m.supportsTools) ??
-      orModels.find((m) => m.supportsTools) ??
-      orModels[0];
+    if (orModels) {
+      if (!silent) process.stdout.write(` ✅ Found ${orModels.length} free model(s)\n`);
+      const best = orModels[0];
+      const bestQuick =
+        orModels.find((m) => m.contextLength <= 32768 && m.supportsTools) ??
+        orModels.find((m) => m.supportsTools) ??
+        orModels[0];
 
-    return {
-      found: true,
-      best,
-      bestQuick,
-      available: orModels.slice(0, 10),
-      source: 'openrouter',
-      anonymous,
-      totalFreeModels: orModels.length,
-    };
+      return {
+        found: true,
+        best,
+        bestQuick,
+        available: orModels.slice(0, 10),
+        source: 'openrouter',
+        anonymous,
+        totalFreeModels: orModels.length,
+      };
+    }
   }
 
   // ── Step 2: Fallback chain (Gemini / Groq / Ollama) ───────────────────────
-  if (!silent) process.stdout.write('\n🔍 OpenRouter unavailable, trying fallback providers...');
+  if (!silent) process.stdout.write('🔍 Checking available free providers (Gemini / Groq / Ollama)...');
   const [gemini, groq, ollama] = await Promise.all([tryGemini(), tryGroq(), tryOllama()]);
   const fallbacks = [gemini, groq, ollama].filter(Boolean) as RankedFreeModel[];
   fallbacks.sort((a, b) => b.score - a.score);
