@@ -25,6 +25,9 @@ import {
   proxyStartTool, proxyStopTool, proxyStatusTool,
   proxyCapturesTool, proxyMockTool, proxyMockListTool, proxyMockClearTool, proxyClearTool,
 } from './tools/productivity/proxy-tools.js';
+import { curlExecuteTool } from './tools/productivity/curl-tool.js';
+import { redisProbeTool } from './tools/productivity/redis-probe.js';
+import { databaseQueryTool } from './tools/productivity/database-query.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
 import { backgroundRunTool, checkBackgroundTool } from './tools/productivity/background-tools.js';
 import { backgroundManager } from './background-manager.js';
@@ -202,6 +205,11 @@ export class AgentCore {
       proxyStartTool, proxyStopTool, proxyStatusTool,
       proxyCapturesTool, proxyMockTool, proxyMockListTool, proxyMockClearTool, proxyClearTool,
     ]);
+
+    // 邪修 TDD tools — CurlExecute / RedisProbe / DatabaseQuery (kstack #15372)
+    this.registry.register(curlExecuteTool);
+    this.registry.register(redisProbeTool);
+    this.registry.register(databaseQueryTool);
 
     // s07 — persistent task board (+ s11 claim)
     this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
