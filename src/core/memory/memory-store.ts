@@ -327,6 +327,9 @@ export class MemoryStore {
       .map((m) => `[${m.role.toUpperCase()}]: ${m.content.slice(0, 500)}`)
       .join('\n');
 
+    // ── 6 categories that should NOT be saved (Claude Code memory system, kstack #15375) ──
+    // These are explicitly excluded to prevent memory pollution and avoid redundancy with
+    // information already available in code, git history, or AGENTS.md.
     const prompt = `Analyze this conversation and extract information worth remembering long-term.
 Focus on:
 1. Project architecture decisions and conventions
@@ -339,9 +342,15 @@ Return a JSON array (ONLY the array, no explanation):
 
 Rules:
 - Max 10 items total
-- Skip small talk, temporary debugging steps, and one-off commands
 - Each content should be self-contained (readable without the conversation)
 - Tags should be 1-3 lowercase keywords
+- DO NOT save any of these 6 categories (they pollute memory or duplicate existing info):
+  1. Code patterns — code is already in the repo; don't duplicate it as text
+  2. Git history — use git log instead
+  3. Debugging steps — one-off steps have no lasting value
+  4. AGENTS.md content — already loaded separately into every system prompt
+  5. Temporary task details — ephemeral work not worth remembering
+  6. Small talk, greetings, and meta-commentary about the AI assistant itself
 
 Conversation:
 ${convText}`;

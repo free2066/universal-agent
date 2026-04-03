@@ -387,9 +387,22 @@ export class AgentCore {
         const others = memories.filter((m) => m.type !== 'iteration');
 
         if (others.length > 0) {
+          // Format timestamps as relative time (kstack #15375: relative time is more natural for LLMs
+          // than ISO strings — "3 days ago" beats "2026-03-31T08:12:44Z" for context understanding)
+          const relativeTime = (ms: number): string => {
+            const diffSec = Math.floor((Date.now() - ms) / 1000);
+            if (diffSec < 60) return `${diffSec}s ago`;
+            if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+            if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+            const days = Math.floor(diffSec / 86400);
+            if (days === 1) return 'yesterday';
+            if (days < 30) return `${days} days ago`;
+            if (days < 365) return `${Math.floor(days / 30)} months ago`;
+            return `${Math.floor(days / 365)} years ago`;
+          };
           const memLines = others.map((m) => {
             const tag = m.type === 'pinned' ? '📌' : m.type === 'insight' ? '💡' : '📝';
-            return `${tag} ${m.content}`;
+            return `${tag} [${relativeTime(m.createdAt)}] ${m.content}`;
           }).join('\n');
           systemPrompt += `\n\n## Relevant Memories (from previous sessions)\n${memLines}`;
         }

@@ -34,6 +34,10 @@ const NON_FALLBACK_PATTERNS = [
  * Errors that indicate we should fallback immediately to the next model,
  * because the primary model can't serve this request at all.
  * Includes quota exhaustion and rate limits (retrying same model wastes time).
+ *
+ * Also includes HTTP 529 "Overloaded" — per kstack article #15375, Claude Code
+ * observed real production data showing the 529 pattern warrants immediate fallback
+ * rather than retrying the same overloaded endpoint.
  */
 const IMMEDIATE_FALLBACK_PATTERNS = [
   'rate_limit_exceeded',
@@ -44,7 +48,40 @@ const IMMEDIATE_FALLBACK_PATTERNS = [
   'exceeded your current quota',
   'model is currently overloaded',
   'overloaded',
+  // HTTP 529 — non-standard "Overloaded" status used by Anthropic API
+  '529',
+  'status 529',
+  'statuscode: 529',
+  'http 529',
 ];
+
+/**
+ * Circuit breaker for 529 overload errors (kstack article #15375).
+ *
+ * When the primary model returns 529 repeatedly, a circuit breaker prevents
+ * hammering an endpoint that is clearly overwhelmed.  After MAX_529_FAILURES
+ * consecutive 529 responses, the primary model is considered "circuit open"
+ * for the rest of the session, and all calls go directly to the fallback chain.
+ *
+ * Claude Code production data: without this, overloaded endpoints received
+ * thousands of retries per minute, making the overload worse.
+ *
+ * Session-level state (not shared across instances).
+ */
+const MAX_529_FAILURES = 3;
+let consecutive529Failures = 0;
+let primaryCircuitOpen = false;
+
+/** Reset the 529 circuit breaker (e.g. on model change or new session) */
+export function reset529CircuitBreaker(): void {
+  consecutive529Failures = 0;
+  primaryCircuitOpen = false;
+}
+
+function is529Error(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return msg.includes('529') || msg.includes('overloaded') || msg.includes('status code: 529');
+}
 
 function isFallbackUseless(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
@@ -86,15 +123,43 @@ export class ModelFallbackChain {
    *       the `stream: true` path.
    */
   async call(primary: LLMClient, options: ChatOptions): Promise<ChatResponse> {
+    // ── 529 circuit breaker (kstack article #15375) ──────────────────────────
+    // If the primary endpoint has returned 529 (Overloaded) MAX_529_FAILURES
+    // consecutive times, skip calling it entirely and go straight to fallbacks.
+    // This prevents hammering an already-overloaded endpoint and making it worse.
+    if (primaryCircuitOpen) {
+      log.warn(`Primary model circuit open (529 overload) — routing directly to fallbacks`);
+      return this._tryFallbacks(options, new Error('Primary circuit open: 529 overload'));
+    }
+
     try {
-      return await primary.chat(options);
+      const response = await primary.chat(options);
+      // Success: reset the 529 counter
+      if (consecutive529Failures > 0) {
+        log.info(`Primary model recovered after ${consecutive529Failures} 529 failures`);
+        consecutive529Failures = 0;
+      }
+      return response;
     } catch (err) {
       if (isFallbackUseless(err)) {
         log.warn(`Primary model error is non-fallbackable: ${err instanceof Error ? err.message : String(err)}`);
         throw err;
       }
 
-      if (isImmediateFallback(err)) {
+      if (is529Error(err)) {
+        consecutive529Failures++;
+        if (consecutive529Failures >= MAX_529_FAILURES) {
+          primaryCircuitOpen = true;
+          log.warn(
+            `Primary model circuit breaker OPENED after ${consecutive529Failures} consecutive 529 errors. ` +
+            `All calls will use fallback models for the rest of this session.`,
+          );
+        } else {
+          log.warn(
+            `Primary model 529 overload (${consecutive529Failures}/${MAX_529_FAILURES} before circuit opens) — trying fallbacks`,
+          );
+        }
+      } else if (isImmediateFallback(err)) {
         log.warn(`Primary model rate-limited or quota exceeded — skipping retry, going straight to fallback`);
       } else {
         log.warn(`Primary model failed: ${err instanceof Error ? err.message : String(err)} — trying fallbacks`);

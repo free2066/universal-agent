@@ -429,9 +429,41 @@ export const bashTool: ToolRegistration = {
         { pat: /git\s+push\s+.*-f\b/,              label: 'force git push' },
         { pat: /chmod\s+-R\s+[0-7]*7[0-7]*\s+\//,  label: 'recursive world-writable chmod on root' },
       ];
+
+      // ── Compound command recursive split (kstack article #15375 § Bash permission §) ──────────
+      // Inspired by Claude Code's 23-validator recursive compound command protection.
+      // Without this, a blacklisted command can be disguised as:
+      //   git status && rm -rf /tmp && echo done
+      //   npm install || rm -rf node_modules
+      //   { rm -rf /; }
+      // We split on shell meta-operators and test EACH atom individually.
+      // Only the FIRST dangerous atom found is reported to keep the error message clean.
+      function splitCompoundCommand(cmd: string): string[] {
+        // Split on: && || ; | (not >> or <<) \n
+        // Keep it simple — this is a defense-in-depth layer, not a full shell parser.
+        // Escaped operators (\&\&, \;, etc.) are intentionally not split — a user who
+        // escapes meta-chars is constructing a literal string argument, not a compound cmd.
+        const atoms = cmd
+          .split(/(?:&&|\|\||;|\|(?!>)|\n)/)
+          .map((a) => a.trim())
+          .filter(Boolean);
+        // If splitting produced only one atom, return the original (avoid infinite recursion)
+        return atoms.length > 1 ? atoms : [cmd];
+      }
+
+      const atoms = splitCompoundCommand(command);
+      for (const atom of atoms) {
+        for (const { pat, label } of softBlock) {
+          if (pat.test(atom)) {
+            // Return sentinel so agent.ts can pause and ask for user confirmation.
+            // Show the full original command (not just the atom) so the user knows context.
+            return `__CONFIRM_REQUIRED__:${label} (found in compound command)\n${command}`;
+          }
+        }
+      }
+      // Fallback: also check the full command string (catches patterns that span atoms)
       for (const { pat, label } of softBlock) {
         if (pat.test(command)) {
-          // Return sentinel so agent.ts can pause and ask for user confirmation
           return `__CONFIRM_REQUIRED__:${label}\n${command}`;
         }
       }

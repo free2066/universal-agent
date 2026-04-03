@@ -29,11 +29,18 @@ export interface ToolRetryConfig {
   retryOn?: (err: unknown) => boolean;
 }
 
+/**
+ * Default retry configuration.
+ *
+ * maxDelayMs aligned to 32s per Claude Code production data (kstack #15375):
+ * "指数退避+加性抖动，最大退避32s" — 32s cap prevents excessive wait
+ * while still giving overloaded backends time to recover.
+ */
 export const DEFAULT_TOOL_RETRY_CONFIG: ToolRetryConfig = {
   maxRetries: 2,
   initialDelayMs: 500,
   backoffFactor: 2.0,
-  maxDelayMs: 10_000,
+  maxDelayMs: 32_000,  // 32s cap (aligned to Claude Code's observed optimal, kstack #15375)
   jitter: true,
   // By default, skip retry for HTTP 4xx errors (client errors are permanent)
   retryOn: isRetryableError,
