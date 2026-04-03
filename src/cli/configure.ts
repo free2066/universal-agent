@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { createInterface } from 'readline';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { resolve } from 'path';
