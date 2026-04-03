@@ -60,7 +60,8 @@ class OpenAIClient implements LLMClient {
   constructor(model: string, apiKey?: string, baseURL?: string) {
     this.model = model;
     this.client = new OpenAI({
-      apiKey: apiKey ?? process.env.OPENAI_API_KEY,
+      // Key priority: explicit arg → WQ_API_KEY (万擎) → OPENAI_API_KEY
+      apiKey: apiKey ?? process.env.WQ_API_KEY ?? process.env.OPENAI_API_KEY,
       baseURL: baseURL ?? process.env.OPENAI_BASE_URL ?? undefined,
     });
   }
