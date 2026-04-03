@@ -1,32 +1,106 @@
 import chalk from 'chalk';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 
-export function printBanner() {
-  console.log(chalk.cyan(`
-╔═══════════════════════════════════════════╗
-║   🤖  Universal Agent CLI  v0.1.0         ║
-║   Multi-domain AI powered assistant       ║
-╚═══════════════════════════════════════════╝`));
-  console.log(chalk.gray('  Domains: data | dev | service | auto\n'));
+function getVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'));
+    return pkg.version ?? '0.1.0';
+  } catch {
+    return '0.1.0';
+  }
 }
 
-export function printHelp() {
-  console.log(chalk.yellow('\n📚 Available Commands:'));
-  console.log(chalk.white('  /help          ') + chalk.gray('Show this help message'));
-  console.log(chalk.white('  /domain <name> ') + chalk.gray('Switch domain (data|dev|service|auto)'));
-  console.log(chalk.white('  /model [name]  ') + chalk.gray('Switch or cycle model'));
-  console.log(chalk.white('  /cost          ') + chalk.gray('Show token usage and cost'));
-  console.log(chalk.white('  /history [n]   ') + chalk.gray('Show last n prompts (default 10)'));
-  console.log(chalk.white('  /inspect [path]') + chalk.gray('Static code inspection'));
-  console.log(chalk.white('  /purify [path] ') + chalk.gray('Auto-fix code issues'));
-  console.log(chalk.white('  /clear         ') + chalk.gray('Clear conversation history'));
-  console.log(chalk.white('  /exit          ') + chalk.gray('Exit the agent\n'));
+/** CodeFlicker-style clean banner — no box border */
+export function printBanner() {
+  const ver = getVersion();
+  process.stdout.write('\n');
+  process.stdout.write(
+    chalk.bold.white('  Universal Agent') +
+    chalk.gray(` v${ver}`) +
+    '\n',
+  );
+  process.stdout.write(
+    chalk.gray('  Multi-domain AI assistant') +
+    '  ' +
+    chalk.dim('auto · dev · data · service') +
+    '\n\n',
+  );
+}
 
-  console.log(chalk.yellow('💡 Example Prompts:'));
-  console.log(chalk.gray('  [data]    ') + '"Analyze this CSV file for user retention"');
-  console.log(chalk.gray('  [data]    ') + '"Generate EDA report for sales.csv"');
-  console.log(chalk.gray('  [data]    ') + '"Optimize this SQL query: SELECT * FROM..."');
-  console.log(chalk.gray('  [dev]     ') + '"Review this Python function for bugs"');
-  console.log(chalk.gray('  [dev]     ') + '"Write unit tests for my code"');
-  console.log(chalk.gray('  [service] ') + '"Classify this customer complaint"');
-  console.log(chalk.gray('  [auto]    ') + '"Help me with anything"\n');
+/** Grouped slash-command help, CodeFlicker-style */
+export function printHelp() {
+  const col1 = 20;
+
+  const group = (title: string, items: [string, string][]) => {
+    process.stdout.write('\n' + chalk.bold.white('  ' + title) + '\n');
+    for (const [cmd, desc] of items) {
+      process.stdout.write(
+        '    ' +
+        chalk.cyan(cmd.padEnd(col1)) +
+        chalk.gray(desc) +
+        '\n',
+      );
+    }
+  };
+
+  group('Session', [
+    ['/help',           'Show this help'],
+    ['/clear',          'Clear screen & conversation history'],
+    ['/exit',           'Exit (saves session snapshot)'],
+    ['/resume',         'Restore last session'],
+    ['/compact',        'Compress conversation to save tokens'],
+    ['/tokens',         'Show context token usage'],
+    ['/cost',           'Show token cost this session'],
+  ]);
+
+  group('Models & Domains', [
+    ['/model',          'Interactive model picker (↑↓ navigate, Enter select)'],
+    ['/model <id>',     'Switch model directly'],
+    ['/models',         'List all registered models'],
+    ['/domain <name>',  'Switch domain: auto | dev | data | service'],
+  ]);
+
+  group('Code', [
+    ['/review',         'AI code review on current changes'],
+    ['/inspect [path]', 'Static code inspection'],
+    ['/purify [path]',  'Auto-fix code issues'],
+    ['/spec <desc>',    'Generate technical specification'],
+  ]);
+
+  group('Agents & Tasks', [
+    ['/agents',         'List subagents & their status'],
+    ['/team',           'List AI teammates'],
+    ['/tasks',          'Task board'],
+    ['/inbox',          'Lead inbox'],
+  ]);
+
+  group('Utilities', [
+    ['/image <path>',   'Attach image to next message'],
+    ['/history [n]',    'Show last n prompts'],
+    ['/hooks',          'Lifecycle hooks'],
+    ['/insights [days]','Usage analytics'],
+    ['/init',           'Create AGENTS.md for this project'],
+    ['/rules',          'Show loaded rule files'],
+    ['/memory',         'Memory stats & search'],
+  ]);
+
+  process.stdout.write('\n' + chalk.bold.white('  Tips') + '\n');
+  process.stdout.write(
+    '    ' + chalk.gray('Reference files with ') +
+    chalk.cyan('@path/to/file') +
+    chalk.gray(' in your message') + '\n',
+  );
+  process.stdout.write(
+    '    ' + chalk.gray('Example: ') +
+    chalk.white('explain this project') + '\n',
+  );
+  process.stdout.write(
+    '    ' + chalk.gray('Example: ') +
+    chalk.white('review @src/cli/index.ts for security issues') + '\n',
+  );
+  process.stdout.write(
+    '    ' + chalk.gray('Example: ') +
+    chalk.white('write tests for the model-picker') + '\n\n',
+  );
 }

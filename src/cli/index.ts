@@ -998,10 +998,13 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
   // Unique session ID for this run (used for snapshot file name)
   const SESSION_ID = `session-${Date.now()}`;
 
-  const makePrompt = (domain: string, model?: string) =>
-    chalk.bgCyan.black(` ${domain} `) +
-    (model ? chalk.gray(` ${model.split('/').pop()?.slice(0, 20) ?? model} `) : ' ') +
-    chalk.bold.green('›') + ' ';
+  // CodeFlicker-style prompt: dim domain tag + bold ❯
+  const makePrompt = (domain: string, model?: string) => {
+    const domainTag = chalk.dim(`[${domain}]`);
+    const modelTag = model
+      ? chalk.dim(` ${model.split('/').pop()?.slice(0, 22) ?? model}`) : '';
+    return `${domainTag}${modelTag} ${chalk.bold.green('❯')} `;
+  };
 
   const rl = createInterface({
     input: process.stdin,
@@ -1010,21 +1013,29 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     prompt: makePrompt(options.domain),
   });
 
-  // ── Session resume hint ──────────────────────────────────────────────────
+  // ── Welcome line (CodeFlicker style: short, with examples) ─────────────
   const lastSnap = loadLastSnapshot();
   if (lastSnap && lastSnap.messages.length >= 2) {
     process.stdout.write(
-      chalk.cyan(`  💾 上次会话 (${formatAge(lastSnap.savedAt)}, ${lastSnap.messages.length} 条消息)`) +
-      chalk.gray(` — 输入 /resume 恢复\n\n`),
+      chalk.dim(`  Session from ${formatAge(lastSnap.savedAt)} available`) +
+      chalk.dim(` · /resume to restore`) + '\n',
     );
   }
+  process.stdout.write(
+    chalk.dim('  Type ') +
+    chalk.white('/help') +
+    chalk.dim(' for commands · ') +
+    chalk.white('@file') +
+    chalk.dim(' to reference files · ') +
+    chalk.white('Ctrl+C') +
+    chalk.dim(' to exit') +
+    '\n\n',
+  );
 
-  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /resume, /agents, /team, /inbox, /tasks, /inspect, /purify, /image <path>, /hooks, /insights, /exit\n'));
-
-  // Show custom hook slash commands in the welcome line if any
+  // Show custom hook slash commands if any
   const customCmds = hookRunner.listSlashCommands();
   if (customCmds.length > 0) {
-    console.log(chalk.gray(`  Hook commands: ${customCmds.map((c) => c.command).join(', ')}\n`));
+    process.stdout.write(chalk.dim(`  Custom: ${customCmds.map((c) => c.command).join('  ')}\n\n`));
   }
 
   rl.prompt();
@@ -1035,7 +1046,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
 
     // ── slash commands ──
     if (input === '/exit' || input === '/quit') {
-      console.log(chalk.yellow('\nGoodbye! 👋'));
+      process.stdout.write('\n' + chalk.dim('  Bye!') + '\n');
       // Fire on_session_end hooks
       await hookRunner.run({ event: 'on_session_end', cwd: process.cwd() }).catch(() => {});
       const h = agent.getHistory();
@@ -1121,31 +1132,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       rl.prompt(); return;
     }
     if (input === '/help' || input === '/help ') {
-      console.log(chalk.yellow('\n📖 Available commands:'));
-      console.log(chalk.gray('  /help             — show this message'));
-      console.log(chalk.gray('  /cost             — show session token cost'));
-      console.log(chalk.gray('  /model [name]     — cycle or switch model'));
-      console.log(chalk.gray('  /models           — list all models'));
-      console.log(chalk.gray('  /domain <name>    — switch domain (auto|dev|data|service)'));
-      console.log(chalk.gray('  /agents           — list subagents'));
-      console.log(chalk.gray('  /team             — list teammates'));
-      console.log(chalk.gray('  /inbox            — show lead inbox'));
-      console.log(chalk.gray('  /tasks            — list task board'));
-      console.log(chalk.gray('  /memory           — memory stats & search'));
-      console.log(chalk.gray('  /inspect [path]   — code inspection'));
-      console.log(chalk.gray('  /purify           — auto-fix code issues'));
-      console.log(chalk.gray('  /review           — AI code review'));
-      console.log(chalk.gray('  /spec <desc>      — generate technical spec'));
-      console.log(chalk.gray('  /compact          — compress conversation history'));
-      console.log(chalk.gray('  /tokens           — show context usage'));
-      console.log(chalk.gray('  /history [n]      — show recent prompts'));
-      console.log(chalk.gray('  /image <path>     — attach image to next message'));
-      console.log(chalk.gray('  /hooks            — list lifecycle hooks'));
-      console.log(chalk.gray('  /insights [days]  — usage analytics'));
-      console.log(chalk.gray('  /clear            — clear screen & history'));
-      console.log(chalk.gray('  /init             — create AGENTS.md'));
-      console.log(chalk.gray('  /rules            — show loaded rule files'));
-      console.log(chalk.gray('  /exit             — exit agent\n'));
+      printHelp();
       rl.prompt(); return;
     }
     // Check hook-defined custom slash commands BEFORE sending to LLM
@@ -1192,9 +1179,9 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       const snap = loadLastSnapshot();
       if (snap && snap.messages.length >= 2) {
         agent.setHistory(snap.messages);
-        console.log(chalk.green(`✓ 已恢复上次会话 (${snap.messages.length} 条消息, ${formatAge(snap.savedAt)})\n`));
+        process.stdout.write(chalk.green(`  ✓ Restored session from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n');
       } else {
-        console.log(chalk.gray('  没有可恢复的会话快照\n'));
+        process.stdout.write(chalk.dim('  No saved session found.') + '\n\n');
       }
       rl.prompt(); return;
     }
@@ -1242,14 +1229,14 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
         if (selected) {
           agent.setModel(selected);
           rl.setPrompt(makePrompt(options.domain, selected));
-          process.stdout.write(chalk.green(`✓ Model → ${selected}\n\n`));
+          process.stdout.write(chalk.green(`  ✓ Model → ${selected}`) + '\n\n');
         }
         rl.resume();
       } else {
         const m = parts[1];
         agent.setModel(m);
         rl.setPrompt(makePrompt(options.domain, m));
-        console.log(chalk.green(`✓ Model → ${m}`));
+        process.stdout.write(chalk.green(`  ✓ Model → ${m}`) + '\n\n');
       }
       rl.prompt(); return;
     }
@@ -1258,7 +1245,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       agent.setDomain(domain);
       options.domain = domain;
       rl.setPrompt(makePrompt(domain));
-      console.log(chalk.green(`✓ Domain → ${domain}`));
+      process.stdout.write(chalk.green(`  ✓ Domain → ${domain}`) + '\n\n');
       rl.prompt(); return;
     }
     if (input.startsWith('/agents')) {
@@ -1653,7 +1640,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
         process.stdout.write(chunk);
       });
       clearInterval(spinTimer);
-      process.stdout.write('\n' + chalk.gray('─'.repeat(56)) + '\n\n');
+      process.stdout.write('\n\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isAuthError =
