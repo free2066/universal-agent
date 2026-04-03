@@ -463,8 +463,9 @@ export const githubListPRsTool: ToolRegistration = {
 
     const prs = data as GitHubPR[];
     if (prs.length === 0) {
+      const stateLabel = state === 'all' ? '' : ` ${state}`;
       const branchSuffix = branch ? ` for branch: ${branch}` : '';
-      return `No ${state} PRs found${branchSuffix}\nRepo: ${repoInfo.owner}/${repoInfo.repo}`;
+      return `No${stateLabel} PRs found${branchSuffix}\nRepo: ${repoInfo.owner}/${repoInfo.repo}`;
     }
 
     const lines = prs.map((pr) =>
