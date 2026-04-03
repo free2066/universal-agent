@@ -22,7 +22,7 @@ import { MCPManager } from '../core/mcp-manager.js';
 import { codeInspectorTool } from '../core/tools/code/code-inspector.js';
 import { selfHealTool } from '../core/tools/code/self-heal.js';
 import { getRecentHistory } from '../core/memory/session-history.js';
-import { printBanner, printHelp } from './ui.js';
+import { printBanner, printHelp } from './ui-enhanced.js';
 import { initStatusBar, updateStatusBar, clearStatusBar, buildStatusPrompt, type ThinkingLevel } from './statusbar.js';
 import { HookRunner } from '../core/hooks.js';
 
@@ -1204,16 +1204,88 @@ async function runREPL(
   const makePrompt = (domain: string, model?: string) =>
     buildStatusPrompt(domain, model ?? getModelDisplayName(currentModel));
 
+  const SLASH_COMPLETIONS = [
+    '/help', '/clear', '/exit', '/resume', '/compact', '/tokens', '/cost',
+    '/model', '/models', '/domain',
+    '/review', '/inspect', '/purify', '/spec',
+    '/agents', '/team', '/tasks', '/inbox',
+    '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
+  ];
+
+  function completer(line: string): [string[], string] {
+    if (line.startsWith('/')) {
+      const hits = SLASH_COMPLETIONS.filter((c) => c.startsWith(line));
+      return [hits.length ? hits : SLASH_COMPLETIONS, line];
+    }
+    if (line.startsWith('@')) {
+      const agents = subagentSystem.listAgents().map((a) => `@run-agent-${a.name}`);
+      const hits = agents.filter((a) => a.startsWith(line));
+      return [hits.length ? hits : [], line];
+    }
+    return [[], line];
+  }
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
     prompt: makePrompt(options.domain),
+    completer,
   });
 
   // Whenever status changes, refresh the prompt (takes effect on next rl.prompt())
   initStatusBar({}, () => {
     rl.setPrompt(makePrompt(options.domain));
+  });
+
+  // ── Ctrl+R: reverse history search ──────────────────────────────────────
+  const _inputHistory: string[] = [];
+  let _historySearch = false;
+  let _historyQuery = '';
+  let _historyMatchIdx = -1;
+
+  const { emitKeypressEvents } = await import('readline');
+  emitKeypressEvents(process.stdin);
+  if (process.stdin.isTTY) process.stdin.setRawMode(false);
+
+  process.stdin.on('keypress', (_ch: unknown, key: { name?: string; ctrl?: boolean; sequence?: string } | undefined) => {
+    if (!key) return;
+    if (key.ctrl && key.name === 'r') {
+      _historySearch = true;
+      _historyQuery = '';
+      _historyMatchIdx = -1;
+      process.stdout.write('\r\x1b[2K' + chalk.dim('(reverse-search) ') + chalk.cyan('_'));
+      return;
+    }
+    if (!_historySearch) return;
+    if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+      _historySearch = false;
+      _historyQuery = '';
+      rl.prompt();
+      return;
+    }
+    if (key.name === 'return' || key.name === 'enter') {
+      _historySearch = false;
+      const match = _inputHistory.slice().reverse().find((h) => h.includes(_historyQuery));
+      _historyQuery = '';
+      if (match) {
+        (rl as unknown as { line: string }).line = match;
+        process.stdout.write('\r\x1b[2K');
+        rl.prompt();
+        process.stdout.write(match);
+      } else {
+        rl.prompt();
+      }
+      return;
+    }
+    if (key.name === 'backspace') {
+      _historyQuery = _historyQuery.slice(0, -1);
+    } else if (key.sequence && key.sequence.length === 1 && !key.ctrl) {
+      _historyQuery += key.sequence;
+    }
+    const match = _inputHistory.slice().reverse().find((h) => h.includes(_historyQuery));
+    const display = match ? chalk.white(match) : chalk.dim('no match');
+    process.stdout.write(`\r\x1b[2K${chalk.dim('(reverse-search)')} ${chalk.cyan(_historyQuery)}: ${display}`);
   });
 
   // ── Welcome line (CodeFlicker style: short, with examples) ─────────────
@@ -1259,6 +1331,12 @@ async function runREPL(
   rl.on('line', async (line) => {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }
+
+    if (_historySearch) { _historySearch = false; _historyQuery = ''; }
+    if (input && (_inputHistory.length === 0 || _inputHistory[_inputHistory.length - 1] !== input)) {
+      _inputHistory.push(input);
+      if (_inputHistory.length > 500) _inputHistory.shift();
+    }
 
     // ── slash commands ──
     if (input === '/exit' || input === '/quit') {
@@ -1844,27 +1922,34 @@ async function runREPL(
         console.log(chalk.gray('  (Image context attached to this request)'));
       }
 
-      // Thinking spinner + status bar 'thinking' indicator
-      const spinnerFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+      const SPIN_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+      const SPIN_DOTS   = ['   ','·  ','·· ','···'];
       let spinIdx = 0;
+      let dotIdx  = 0;
       let firstChunk = true;
+      let charCount = 0;
       updateStatusBar({ isThinking: 'low' });
       rl.setPrompt(makePrompt(options.domain));
       const spinTimer = setInterval(() => {
-        process.stdout.write(`\r${chalk.cyan(spinnerFrames[spinIdx++ % spinnerFrames.length])} ${chalk.dim('Thinking...')}`);
-      }, 120);
+        const frame = chalk.hex('#a78bfa')(SPIN_FRAMES[spinIdx++ % SPIN_FRAMES.length]);
+        const dots  = chalk.dim(SPIN_DOTS[dotIdx++ % SPIN_DOTS.length]);
+        process.stdout.write(`\r${frame} ${chalk.dim('Thinking')}${dots}   `);
+      }, 100);
 
       process.stdout.write('\n');
       await agent.runStream(finalInput, (chunk) => {
         if (firstChunk) {
           clearInterval(spinTimer);
-          process.stdout.write('\r' + ' '.repeat(20) + '\r');
+          process.stdout.write('\r\x1b[2K');
           firstChunk = false;
         }
         process.stdout.write(chunk);
+        charCount += chunk.length;
       });
       clearInterval(spinTimer);
-      // Update status bar with fresh token estimate
+      if (!firstChunk && charCount > 0) {
+        process.stdout.write('\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))));
+      }
       try {
         const h = agent.getHistory();
         const est = typeof estimateHistoryTokens === 'function' ? (estimateHistoryTokens as (h: unknown[]) => number)(h) : 0;
