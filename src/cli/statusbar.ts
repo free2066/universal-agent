@@ -1,23 +1,3 @@
-/**
- * statusbar.ts — Fixed bottom status bar via ANSI scroll region (TTY only)
- *
- * When running in a real TTY (isTTY = true):
- *   - Reserve the last 2 rows by setting scroll region to [1 .. rows-2]
- *   - Draw separator + status on the last 2 rows
- *   - All readline output stays inside the scroll region → never touches the bar
- *   - On resize, redraw the bar
- *   - On exit, restore full scroll region and clear the bar
- *
- *   Visual result (status bar is ALWAYS at the bottom, unaffected by typing):
- *
- *     [auto] ❯ your input here
- *     ──────────────────────────────────────────────────────────
- *      MiMo-V2-Pro │ project │ 34 │ 0% │  ID  a1b2c3d4
- *
- * Non-TTY fallback (pipes / CI):
- *   Status line is embedded as the first line of the prompt string.
- */
-
 import chalk from 'chalk';
 import { basename } from 'path';
 
@@ -41,31 +21,27 @@ let _state: StatusBarState = {
   isThinking: false,
 };
 
-let _enabled = false;
-let _isTTY   = false;
+let _enabled  = false;
+let _isTTY    = false;
 let _onUpdate: (() => void) | null = null;
 
-function _rows() { return process.stdout.rows  ?? 24; }
+function _rows() { return process.stdout.rows    ?? 24; }
 function _cols() { return process.stdout.columns ?? 80; }
 
-// ─── ANSI helpers ─────────────────────────────────────────────────────────────
-
-/** Set terminal scroll region to rows [top..bottom] (1-indexed). */
 function _setScroll(top: number, bottom: number) {
   process.stdout.write(`\x1b[${top};${bottom}r`);
 }
 
-/** Draw status bar on the last row only. */
 function _drawBar() {
-  const rows = _rows();
+  if (!_isTTY) return;
+  const row  = _rows();
   const info = _statusLine();
-
   process.stdout.write(
-    '\x1b[?25l'        +
-    '\x1b[s'           +
-    `\x1b[${rows};1H`  +
-    '\x1b[2K' + info   +
-    '\x1b[u'           +
+    '\x1b[?25l'       +
+    '\x1b[s'          +
+    `\x1b[${row};1H`  +
+    '\x1b[2K' + info  +
+    '\x1b[u'          +
     '\x1b[?25h',
   );
 }
@@ -80,21 +56,24 @@ export function initStatusBar(
 ): void {
   _state = { ..._state, ...initialState };
   if (onUpdate !== undefined) _onUpdate = onUpdate;
+  _isTTY = Boolean(process.stdout.isTTY);
 
-  if (_enabled) { _drawBar(); return; }
+  if (_enabled) {
+    _drawBar();
+    return;
+  }
 
-  _isTTY   = Boolean(process.stdout.isTTY);
   _enabled = true;
 
   if (_isTTY) {
-    const bottom = _rows() - 1;
-    _setScroll(1, bottom);
-    process.stdout.write(`\x1b[${bottom};1H`);
+    const scrollBottom = _rows() - 1;
+    _setScroll(1, scrollBottom);
+    process.stdout.write(`\x1b[${scrollBottom};1H`);
     _drawBar();
     process.stdout.on('resize', () => {
-      const newBottom = _rows() - 1;
-      _setScroll(1, newBottom);
-      process.stdout.write(`\x1b[${newBottom};1H`);
+      const nb = _rows() - 1;
+      _setScroll(1, nb);
+      process.stdout.write(`\x1b[${nb};1H`);
       _drawBar();
     });
   }
@@ -103,7 +82,7 @@ export function initStatusBar(
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   _state = { ..._state, ...patch };
   if (!_enabled) return;
-  if (_isTTY) _drawBar();
+  _drawBar();
   if (_onUpdate) {
     const onlyThinking = Object.keys(patch).length === 1 && 'isThinking' in patch;
     if (!onlyThinking) _onUpdate();
@@ -112,29 +91,23 @@ export function updateStatusBar(patch: Partial<StatusBarState>): void {
 
 export function clearStatusBar(): void {
   if (_isTTY && _enabled) {
-    const rows = _rows();
+    const row = _rows();
     process.stdout.write(
-      '\x1b[s'           +
-      `\x1b[${rows};1H`  + '\x1b[2K' +
-      '\x1b[u'           +
-      `\x1b[1;${rows}r`,
+      '\x1b[s'          +
+      `\x1b[${row};1H`  + '\x1b[2K' +
+      '\x1b[u'          +
+      `\x1b[1;${row}r`,
     );
   }
   _enabled = false;
 }
 
-/** No-op in TTY mode (bar drawn independently). In non-TTY, also no-op since
- *  status is embedded in the prompt string via buildStatusPrompt. */
 export function printStatusBar(): void {}
 
-/**
- * In TTY mode   → plain ❯ prompt (status bar drawn on reserved bottom rows).
- * In non-TTY    → status line \n ❯ prompt (embedded fallback).
- */
 export function buildStatusPrompt(domain: string, _model?: string): string {
-  const inputLine = `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
-  if (_isTTY || !_enabled) return inputLine;
-  return _statusLine() + '\n' + inputLine;
+  const chevron = `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
+  if (!_enabled || _isTTY) return chevron;
+  return _statusLine() + '\n' + chevron;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,8 +115,8 @@ export function buildStatusPrompt(domain: string, _model?: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _statusLine(): string {
-  const cols = process.stdout.columns ?? 80;
-  const pct = _state.contextLength > 0
+  const cols = _cols();
+  const pct  = _state.contextLength > 0
     ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
     : 0;
   const pctCapped   = Math.min(pct, 100);
@@ -152,9 +125,10 @@ function _statusLine(): string {
   const tokensPart  = _fmtTokens(_state.estimatedTokens);
   const idPart      = _state.sessionId.slice(0, 8);
 
-  const bg = chalk.bgHex('#1e1b4b');
+  const bg  = chalk.bgHex('#1e1b4b');
   const sep = bg.dim(' │ ');
   const thinking = _thinkingPart(_state.isThinking);
+
   const parts: string[] = [
     bg.white(modelShort),
     ...(thinking ? [thinking] : []),
@@ -163,10 +137,10 @@ function _statusLine(): string {
     bg(_ctxColor(pctCapped)(`${pctCapped}%`)),
     chalk.bgHex('#7c3aed').white(' ID ') + bg.dim(` ${idPart}`),
   ];
+
   const content = bg(' ') + parts.join(sep);
-  const visLen = content.replace(/\x1b\[[0-9;]*m/g, '').length;
-  const pad = Math.max(0, cols - visLen);
-  return content + bg(' '.repeat(pad));
+  const visLen  = content.replace(/\x1b\[[0-9;]*m/g, '').length;
+  return content + bg(' '.repeat(Math.max(0, cols - visLen)));
 }
 
 function _thinkingPart(t: ThinkingLevel): string | null {
