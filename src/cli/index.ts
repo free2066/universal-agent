@@ -167,20 +167,42 @@ function inferProviderEnvKey(errMsg: string): string | undefined {
 }
 
 program
-  .command('run <prompt>')
-  .description('Execute a single agent task')
-  .option('-d, --domain <domain>', 'Domain', 'auto')
-  .option('-m, --model <model>', 'Model', 'gpt-4.1')
-  .option('-f, --file <file>', 'Input file path')
-  .option('--safe', 'Safe mode')
-  .option('--context <ids>', 'Comma-separated context IDs to inject from .uagent/context/ (e.g. proj-struct,dep-graph)')
-  .option('--save-context <id>', 'Save this run\'s output to .uagent/context/<id>.md for downstream tasks')
-  .action(async (prompt, options) => {
-    validateDomain(options.domain);
-    validateModel(options.model);
+  .command('run [prompt]')
+  .description('Convert natural language to a shell command and execute it (aligns with flickcli run)')
+  .option('-m, --model <model>', 'Model to use')
+  .option('-y, --yes', 'Auto-execute without confirmation')
+  .option('--copy', 'Copy generated command to clipboard instead of executing')
+  .option('--explain', 'Show explanation alongside the command')
+  .option('--safe', 'Refuse destructive commands (rm -rf, dd, etc.)')
+  .option('--task', 'Run as an agent task instead of NL→Shell (legacy mode)')
+  .option('-d, --domain <domain>', 'Agent domain for --task mode', 'auto')
+  .option('-f, --file <file>', 'Input file path (--task mode only)')
+  .option('--context <ids>', 'Context IDs for --task mode')
+  .option('--save-context <id>', 'Save output to context file (--task mode only)')
+  .action(async (prompt: string | undefined, options) => {
+    // ── NL→Shell mode (default, aligns with flickcli run) ──
+    if (!options.task) {
+      const { runShell } = await import('./shell.js');
+      await runShell({
+        prompt,
+        model: options.model,
+        yes: options.yes,
+        copy: options.copy,
+        explain: options.explain,
+        safe: options.safe,
+      });
+      return;
+    }
 
-    // Build prompt with injected context files (優化点4: context file chaining)
-    let fullPrompt = options.file ? `${prompt}\n\n[File: ${options.file}]` : prompt;
+    // ── Legacy agent task mode (--task flag) ──
+    if (!prompt) {
+      console.error(chalk.red('\n✗ --task mode requires a prompt argument'));
+      process.exit(1);
+    }
+    validateDomain(options.domain);
+
+    // Build prompt with injected context files (context file chaining)
+    let fullPrompt: string = options.file ? `${prompt}\n\n[File: ${options.file}]` : prompt;
     if (options.context) {
       const { existsSync, readFileSync, mkdirSync } = await import('fs');
       const { join } = await import('path');
@@ -588,6 +610,65 @@ mcpCmd.command('disable <name>').description('Disable an MCP server (keeps confi
   } else {
     console.error(chalk.red(`Server "${name}" not found.`));
   }
+});
+
+mcpCmd.command('get <name>').description('Show detailed config for a specific MCP server').action((name) => {
+  const mgr = new MCPManager();
+  const servers = mgr.listServers();
+  const s = servers.find((sv) => sv.name === name);
+  if (!s) {
+    console.error(chalk.red(`\n✗ Server "${name}" not found.`));
+    console.log(chalk.gray('  Run: uagent mcp list  — to see configured servers'));
+    process.exit(1);
+  }
+  console.log(chalk.yellow(`\n🔌 MCP Server: ${s.name}\n`));
+  console.log(`  Status:  ${s.enabled ? chalk.green('enabled') : chalk.red('disabled')}`);
+  console.log(`  Type:    ${chalk.cyan(s.type)}`);
+  if (s.command) console.log(`  Command: ${chalk.white(s.command)}`);
+  if (s.args?.length) console.log(`  Args:    ${s.args.join(' ')}`);
+  if (s.url) console.log(`  URL:     ${chalk.white(s.url)}`);
+  if (s.description) console.log(`  Desc:    ${chalk.gray(s.description)}`);
+  if (s.env && Object.keys(s.env).length > 0) {
+    console.log(`  Env:`);
+    for (const [k, v] of Object.entries(s.env)) {
+      // Mask values that look like keys/tokens
+      const masked = /key|token|secret|pass/i.test(k) ? v.slice(0, 4) + '****' : v;
+      console.log(`    ${chalk.gray(k + '=')}${masked}`);
+    }
+  }
+  console.log();
+  console.log(chalk.gray('  uagent mcp test ' + name + '  — test connection'));
+  console.log(chalk.gray('  uagent mcp enable ' + name + ' / disable ' + name + '  — toggle'));
+  console.log();
+});
+
+mcpCmd.command('get <name>').description('Show detailed config for a specific MCP server').action((name) => {
+  const mgr = new MCPManager();
+  const servers = mgr.listServers();
+  const s = servers.find((sv) => sv.name === name);
+  if (!s) {
+    console.error(chalk.red(`\n✗ Server "${name}" not found.`));
+    console.log(chalk.gray('  Run: uagent mcp list  — to see configured servers'));
+    process.exit(1);
+  }
+  console.log(chalk.yellow(`\n🔌 MCP Server: ${s.name}\n`));
+  console.log(`  Status:  ${s.enabled ? chalk.green('enabled') : chalk.red('disabled')}`);
+  console.log(`  Type:    ${chalk.cyan(s.type)}`);
+  if (s.command) console.log(`  Command: ${chalk.white(s.command)}`);
+  if (s.args?.length) console.log(`  Args:    ${s.args.join(' ')}`);
+  if (s.url) console.log(`  URL:     ${chalk.white(s.url)}`);
+  if (s.description) console.log(`  Desc:    ${chalk.gray(s.description)}`);
+  if (s.env && Object.keys(s.env).length > 0) {
+    console.log(`  Env:`);
+    for (const [k, v] of Object.entries(s.env)) {
+      const masked = /key|token|secret|pass/i.test(k) ? v.slice(0, 4) + '****' : v;
+      console.log(`    ${chalk.gray(k + '=')}${masked}`);
+    }
+  }
+  console.log();
+  console.log(chalk.gray('  uagent mcp test ' + name + '  — test connection'));
+  console.log(chalk.gray('  uagent mcp enable ' + name + ' / disable ' + name + '  — toggle'));
+  console.log();
 });
 
 mcpCmd.command('test [name]')
@@ -1011,6 +1092,40 @@ program
     } catch (err) {
       spinner.fail('Insights failed: ' + (err instanceof Error ? err.message : String(err)));
       process.exit(1);
+    }
+  });
+
+// ── update ───────────────────────────────────────────────
+program
+  .command('update')
+  .description('Check for updates and apply them (git pull + rebuild)')
+  .option('--check', 'Only check, do not apply')
+  .action(async (opts) => {
+    const { checkAndUpdate } = await import('./auto-update.js');
+    if (opts.check) {
+      // Check-only: just report status
+      const { execFileSync } = await import('child_process');
+      try {
+        execFileSync('git', ['fetch', '--quiet'], { timeout: 8000 });
+        const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD']).toString().trim();
+        const local = execFileSync('git', ['rev-parse', 'HEAD']).toString().trim();
+        const remote = execFileSync('git', ['rev-parse', `origin/${branch}`]).toString().trim().replace(/\n.*$/s, '');
+        if (local === remote) {
+          console.log(chalk.green('  ✓ Already up to date.'));
+        } else {
+          const behind = execFileSync('git', ['rev-list', '--count', `HEAD..origin/${branch}`]).toString().trim();
+          console.log(chalk.yellow(`  ↓ ${behind} commit(s) behind origin/${branch} — run: uagent update`));
+        }
+      } catch {
+        console.log(chalk.gray('  (could not check — no git or offline)'));
+      }
+      return;
+    }
+    const updated = await checkAndUpdate().catch(() => false);
+    if (updated) {
+      console.log(chalk.bold.green('\n  ✓ Updated! Please restart uagent.\n'));
+    } else {
+      console.log(chalk.green('  ✓ Already up to date.'));
     }
   });
 
