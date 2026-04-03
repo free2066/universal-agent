@@ -1,13 +1,23 @@
 /**
- * statusbar.ts — Status line embedded as the first line of the readline prompt.
+ * statusbar.ts
  *
- * Layout (readline prompt = two lines joined by \n):
+ * TTY mode  (real terminal, isTTY=true):
+ *   prompt  = plain ❯ line
+ *   After rl.prompt(), printStatusBar() writes the separator + info line,
+ *   then moves cursor back up one row (\x1b[1A\r) so readline input stays
+ *   on the ❯ line.
  *
- *   GLM-5 │ project │ 1.2K │ 76% │  ID  a1b2c3d4
- *   [auto] GLM-5 ❯ _
+ *   Visual result:
+ *     [auto] GLM-5 ❯ _          ← cursor here
+ *     ──────────────────────────
+ *      GLM-5 │ project │ 0 │ 0% │  ID  a1b2c3d4
  *
- * This is the only approach that works reliably across all terminal emulators,
- * including environments where ANSI cursor-positioning is stripped.
+ * Non-TTY fallback (pipes, codeflicker sandbox, etc.):
+ *   Status line is embedded as the first line of the prompt string so it
+ *   still shows up without any cursor tricks.
+ *
+ *     GLM-5 │ project │ 0 │ 0% │  ID  a1b2c3d4
+ *     [auto] GLM-5 ❯ _
  */
 
 import chalk from 'chalk';
@@ -34,6 +44,7 @@ let _state: StatusBarState = {
 };
 
 let _enabled = false;
+let _isTTY   = false;
 let _onUpdate: (() => void) | null = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,9 +55,10 @@ export function initStatusBar(
   initialState: Partial<StatusBarState>,
   onUpdate?: () => void,
 ): void {
-  _state = { ..._state, ...initialState };
-  if (onUpdate !== undefined) _onUpdate = onUpdate;
+  _state   = { ..._state, ...initialState };
+  _isTTY   = Boolean(process.stdout.isTTY);
   _enabled = true;
+  if (onUpdate !== undefined) _onUpdate = onUpdate;
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
@@ -61,21 +73,34 @@ export function clearStatusBar(): void {
   _enabled = false;
 }
 
-/** No-op — kept so index.ts call sites compile without changes */
-export function printStatusBar(): void {}
-
 /**
- * Build the two-line readline prompt:
- *   line 1 — status info
- *   line 2 — [domain] model ❯
+ * In TTY mode  → plain ❯ line (status is printed by printStatusBar below).
+ * In non-TTY   → status line \n ❯ line (embedded, no cursor tricks needed).
  */
 export function buildStatusPrompt(domain: string, model?: string): string {
-  if (!_enabled) return _inputLine(domain, model);
+  if (!_enabled)  return _inputLine(domain, model);
+  if (_isTTY)     return _inputLine(domain, model);
   return _statusLine() + '\n' + _inputLine(domain, model);
 }
 
+/**
+ * Call this immediately after every rl.prompt() call.
+ *
+ * In TTY mode: writes separator + status below the ❯ line, then moves
+ * the cursor back up so readline input stays on ❯.
+ * In non-TTY: no-op (status already embedded in the prompt string).
+ */
+export function printStatusBar(): void {
+  if (!_enabled || !_isTTY) return;
+  const cols = process.stdout.columns ?? 80;
+  const sep  = chalk.dim('─'.repeat(cols));
+  const info = _statusLine();
+  // Write two lines below current cursor, then jump back up two lines.
+  process.stdout.write(`\n${sep}\n${info}\x1b[2A\r`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Internal
+// Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _inputLine(domain: string, model?: string): string {
