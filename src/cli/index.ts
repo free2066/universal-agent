@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// Suppress Node.js DeprecationWarnings from third-party deps (e.g. punycode in openai SDK)
+process.removeAllListeners('warning');
+process.on('warning', (w) => { if (w.name !== 'DeprecationWarning') process.stderr.write(String(w) + '\n'); });
 
 // Auto-update: pull + rebuild if a new version is available, then prompt restart.
 import { checkAndUpdate, printUpdateBanner } from './auto-update.js';
