@@ -22,47 +22,97 @@ let _state: StatusBarState = {
 };
 
 let _enabled  = false;
+let _isTTY    = false;
 let _onUpdate: (() => void) | null = null;
+
+function _rows() { return process.stdout.rows    ?? process.stderr.rows    ?? 24; }
+function _cols() { return process.stdout.columns ?? process.stderr.columns ?? 80; }
+
+function _drawBar() {
+  const row  = _rows();
+  const info = _statusLine();
+  process.stdout.write(
+    '\x1b[?25l'       +
+    '\x1b[s'          +
+    `\x1b[${row};1H`  +
+    '\x1b[2K' + info  +
+    '\x1b[u'          +
+    '\x1b[?25h',
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function initStatusBar(
   initialState: Partial<StatusBarState>,
   onUpdate?: () => void,
 ): void {
-  _state = { ..._state, ...initialState };
+  _state  = { ..._state, ...initialState };
+  _isTTY  = Boolean(process.stdout.isTTY) || Boolean((process.stdout as NodeJS.WriteStream & { fd?: number }).fd === 1 && process.env.TERM && process.env.TERM !== 'dumb');
   if (onUpdate !== undefined) _onUpdate = onUpdate;
+
+  if (_enabled) {
+    if (_isTTY) _drawBar();
+    return;
+  }
+
   _enabled = true;
+
+  if (_isTTY) {
+    const scrollBottom = _rows() - 1;
+    // Set scroll region so last row is reserved for status bar
+    process.stdout.write(`\x1b[1;${scrollBottom}r`);
+    // Move cursor to bottom of scroll region
+    process.stdout.write(`\x1b[${scrollBottom};1H`);
+    _drawBar();
+    process.stdout.on('resize', () => {
+      const nb = _rows() - 1;
+      process.stdout.write(`\x1b[1;${nb}r`);
+      _drawBar();
+    });
+  }
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   _state = { ..._state, ...patch };
-  if (!_enabled || !_onUpdate) return;
-  const onlyThinking = Object.keys(patch).length === 1 && 'isThinking' in patch;
-  if (!onlyThinking) _onUpdate();
+  if (!_enabled) return;
+  if (_isTTY) _drawBar();
+  if (_onUpdate) {
+    const onlyThinking = Object.keys(patch).length === 1 && 'isThinking' in patch;
+    if (!onlyThinking) _onUpdate();
+  }
 }
 
 export function clearStatusBar(): void {
+  if (_isTTY && _enabled) {
+    const rows = _rows();
+    process.stdout.write(
+      '\x1b[s'         +
+      `\x1b[${rows};1H` + '\x1b[2K' +
+      '\x1b[u'          +
+      `\x1b[1;${rows}r`,
+    );
+  }
   _enabled = false;
 }
 
 export function printStatusBar(): void {}
 
-/**
- * Prompt = ❯ line + \n + status bar line.
- * readline keeps cursor at end of first line (the ❯),
- * so the status bar appears below the input without interfering.
- */
 export function buildStatusPrompt(domain: string, _model?: string): string {
   const chevron = `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
-  if (!_enabled) return chevron;
-  const bar = _statusLine();
-  // Prompt = "❯ \n<statusbar>\x1b[1A\r[domain] ❯ "
-  // The \x1b[1A\r moves cursor back up to the ❯ line after readline prints the prompt.
-  // But since ANSI cursor moves don't work here, we instead print status ABOVE the ❯.
-  return bar + '\n' + chevron;
+  if (_isTTY || !_enabled) return chevron;
+  // Non-TTY fallback: embed status above ❯
+  return _statusLine() + '\n' + chevron;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal
+// ─────────────────────────────────────────────────────────────────────────────
+
 function _statusLine(): string {
-  const cols = process.stdout.columns ?? process.stderr.columns ?? 80;
+  const cols = _cols();
   const pct  = _state.contextLength > 0
     ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
     : 0;
