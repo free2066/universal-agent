@@ -23,7 +23,7 @@ import { codeInspectorTool } from '../core/tools/code/code-inspector.js';
 import { selfHealTool } from '../core/tools/code/self-heal.js';
 import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui-enhanced.js';
-import { initStatusBar, updateStatusBar, clearStatusBar, buildStatusPrompt, type ThinkingLevel } from './statusbar.js';
+import { initStatusBar, updateStatusBar, clearStatusBar, buildStatusPrompt, printStatusBar, type ThinkingLevel } from './statusbar.js';
 import { HookRunner } from '../core/hooks.js';
 
 // Load env — ~/.uagent/.env is the primary config store (override: true so it
@@ -1256,7 +1256,7 @@ async function runREPL(
     if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
       _historySearch = false;
       _historyQuery = '';
-      rl.prompt();
+      rl.prompt(); printStatusBar();
       return;
     }
     if (key.name === 'return' || key.name === 'enter') {
@@ -1266,10 +1266,10 @@ async function runREPL(
       if (match) {
         (rl as unknown as { line: string }).line = match;
         process.stdout.write('\r\x1b[2K');
-        rl.prompt();
+        rl.prompt(); printStatusBar();
         process.stdout.write(match);
       } else {
-        rl.prompt();
+        rl.prompt(); printStatusBar();
       }
       return;
     }
@@ -1321,11 +1321,11 @@ async function runREPL(
     setTimeout(() => rl.emit('line', extra.initialPrompt!), 100);
   }
 
-  rl.prompt();
+  rl.prompt(); printStatusBar();
 
   rl.on('line', async (line) => {
     const input = line.trim();
-    if (!input) { rl.prompt(); return; }
+    if (!input) { rl.prompt(); printStatusBar(); return; }
 
     if (_historySearch) { _historySearch = false; _historyQuery = ''; }
     if (input && (_inputHistory.length === 0 || _inputHistory[_inputHistory.length - 1] !== input)) {
@@ -1349,7 +1349,7 @@ async function runREPL(
       const absPath = resolve(imagePath);
       if (!fsExistsSync(absPath)) {
         console.log(chalk.red(`  ✗ Image file not found: ${absPath}`));
-        rl.prompt(); return;
+        rl.prompt(); printStatusBar(); return;
       }
       // Read image and encode as base64
       try {
@@ -1370,7 +1370,7 @@ async function runREPL(
       } catch (imgErr) {
         console.log(chalk.red(`  ✗ Failed to read image: ${imgErr instanceof Error ? imgErr.message : String(imgErr)}`));
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // /hooks — manage lifecycle hooks
     if (input === '/hooks' || input === '/hooks list') {
@@ -1386,18 +1386,18 @@ async function runREPL(
         }
         console.log();
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input === '/hooks init') {
       const result = HookRunner.init(process.cwd());
       console.log(chalk.green('  ' + result));
       hookRunner.reload();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input === '/hooks reload') {
       hookRunner.reload();
       console.log(chalk.green(`  ✓ Reloaded ${hookRunner.listHooks().length} hook(s)`));
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // /insights — usage analytics
     if (input.startsWith('/insights')) {
@@ -1419,11 +1419,11 @@ async function runREPL(
         spinnerI.fail('Insights failed: ' + (eI instanceof Error ? eI.message : String(eI)));
       }
       rl.resume();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input === '/help' || input === '/help ') {
       printHelp();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // Check hook-defined custom slash commands BEFORE sending to LLM
     if (input.startsWith('/') && !input.startsWith('/exit') && !input.startsWith('/help') && !input.startsWith('/cost')) {
@@ -1441,7 +1441,7 @@ async function runREPL(
           }
           rl.resume();
         }
-        rl.prompt(); return;
+        rl.prompt(); printStatusBar(); return;
       }
     }
     if (input === '/exit' || input === '/quit') { /* already handled above */ }
@@ -1463,7 +1463,7 @@ async function runREPL(
       }
       console.log(chalk.gray('\n  Tip: uagent usage --days 7  — full history'));
       console.log(chalk.gray('       uagent limits            — view/set limits\n'));
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input === '/resume') {
       const snap = loadLastSnapshot();
@@ -1473,7 +1473,7 @@ async function runREPL(
       } else {
         process.stdout.write(chalk.dim('  No saved session found.') + '\n\n');
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input.startsWith('/model')) {
       const parts = input.split(/\s+/);
@@ -1532,7 +1532,7 @@ async function runREPL(
         rl.setPrompt(makePrompt(options.domain, m));
         process.stdout.write(chalk.green(`  ✓ Model → ${m}`) + '\n\n');
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input.startsWith('/domain ')) {
       const domain = input.replace('/domain ', '').trim();
@@ -1541,7 +1541,7 @@ async function runREPL(
       options.domain = domain;
       rl.setPrompt(makePrompt(domain));
       process.stdout.write(chalk.green(`  ✓ Domain → ${domain}`) + '\n\n');
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input.startsWith('/agents')) {
       // /agents clean [days] — entropy reduction: list zombie (stale) subagents
@@ -1567,7 +1567,7 @@ async function runREPL(
         }
         console.log(chalk.gray('  Tip: /agents clean [days] — show stale subagents\n'));
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input.startsWith('/models')) {
       const modelParts = input.split(/\s+/);
@@ -1605,13 +1605,13 @@ async function runREPL(
         console.log(chalk.gray('  uagent models add       — add custom model'));
         console.log(chalk.gray('  uagent models set <ptr> <model>  — set pointer\n'));
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input === '/clear') {
       agent.clearHistory();
       console.clear();
       printBanner();
-      rl.prompt();
+      rl.prompt(); printStatusBar();
       return;
     }
     // /compact — manually compress conversation history (kstack article #15343 insight 3)
@@ -1630,12 +1630,12 @@ async function runREPL(
         console.log(`  Usage            : ${chalk.white(pct + '%')}  (threshold: ${(decision.threshold / decision.contextLength * 100).toFixed(0)}%)`);
         console.log(`  Turns in history : ${chalk.white(String(history.length))}`);
         console.log(chalk.gray('\n  Run /compact to manually compress now.\n'));
-        rl.prompt(); return;
+        rl.prompt(); printStatusBar(); return;
       }
       // /compact — force compact even if below auto-threshold
       if (history.length <= 2) {
         console.log(chalk.gray('\n  History too short to compact (≤2 turns).\n'));
-        rl.prompt(); return;
+        rl.prompt(); printStatusBar(); return;
       }
       rl.pause();
       process.stdout.write('\n');
@@ -1674,7 +1674,7 @@ async function runREPL(
         spinnerC.fail('Compact failed: ' + (eC instanceof Error ? eC.message : String(eC)));
       }
       rl.resume();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input.startsWith('/history')) {
       const parts = input.split(/\s+/);
@@ -1689,11 +1689,11 @@ async function runREPL(
         });
         console.log();
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input === '/init') {
       console.log(chalk.green(initAgentsMd(process.cwd())));
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // /memory — long-term memory commands (mem9-inspired)
     if (input.startsWith('/memory')) {
@@ -1750,7 +1750,7 @@ async function runREPL(
       } else {
         console.log(chalk.gray('Unknown /memory subcommand. Try: /memory  /memory pin <text>  /memory list  /memory forget  /memory ingest'));
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // /spec — generate technical spec from requirement (kstack article #15332)
     if (input.startsWith('/spec')) {
@@ -1765,7 +1765,7 @@ async function runREPL(
           specs.forEach((s, i) => console.log(`  ${chalk.gray(String(i + 1) + '.')} ${chalk.cyan(s.date)}  ${s.name}`));
           console.log();
         }
-        rl.prompt(); return;
+        rl.prompt(); printStatusBar(); return;
       }
       rl.pause();
       process.stdout.write('\n');
@@ -1793,7 +1793,7 @@ async function runREPL(
         spinnerS.fail('Spec failed: ' + (eS instanceof Error ? eS.message : String(eS)));
       }
       rl.resume();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // /review — AI code review P1/P2/P3 (kstack article #15332)
     if (input.startsWith('/review')) {
@@ -1810,7 +1810,7 @@ async function runREPL(
         spinnerR.fail('Review failed: ' + (eR instanceof Error ? eR.message : String(eR)));
       }
       rl.resume();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // /rules — list loaded rule files (kstack article #15310 SSOT pattern)
     if (input === '/rules') {
@@ -1824,7 +1824,7 @@ async function runREPL(
         }
         console.log(chalk.gray('\n  Tip: Add .uagent/rules/coding.md, api-style.md, etc. to enforce standards\n'));
       }
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input.startsWith('/inspect')) {
       const parts = input.split(/\s+/);
@@ -1841,13 +1841,13 @@ async function runREPL(
       }
       process.stdout.write('\n');
       rl.resume();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // s09: /team — list all teammates with roles and status
     if (input === '/team') {
       const { getTeammateManager } = await import('../core/teammate-manager.js');
       console.log('\n' + getTeammateManager(process.cwd()).listAll() + '\n');
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // s09: /inbox — drain and display lead inbox
     if (input === '/inbox') {
@@ -1856,13 +1856,13 @@ async function runREPL(
       console.log(msgs.length > 0
         ? '\n' + JSON.stringify(msgs, null, 2) + '\n'
         : chalk.gray('\n  (inbox empty)\n'));
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     // s07: /tasks — list all tasks on the persistent board
     if (input === '/tasks') {
       const { getTaskBoard } = await import('../core/task-board.js');
       console.log('\n' + getTaskBoard(process.cwd()).listAll() + '\n');
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
     if (input.startsWith('/purify')) {
       const parts = input.split(/\s+/);
@@ -1880,7 +1880,7 @@ async function runREPL(
       }
       process.stdout.write('\n');
       rl.resume();
-      rl.prompt(); return;
+      rl.prompt(); printStatusBar(); return;
     }
 
     rl.pause();
@@ -1898,7 +1898,7 @@ async function runREPL(
         // Hook blocked this input
         console.log(chalk.yellow(`  [hook] Blocked: ${hookCtx.value ?? 'no reason given'}`));
         rl.resume();
-        rl.prompt();
+        rl.prompt(); printStatusBar();
         return;
       }
       if (hookCtx.injection) {
@@ -1984,7 +1984,7 @@ async function runREPL(
       }
     }
     rl.resume();
-    rl.prompt();
+    rl.prompt(); printStatusBar();
   });
 
   rl.on('close', () => {

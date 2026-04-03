@@ -1,14 +1,15 @@
 /**
- * statusbar.ts — Status embedded in the readline prompt string
+ * statusbar.ts — Status bar printed below the readline prompt
  *
- * ANSI cursor-positioning does not work in all terminal emulators (e.g. the
- * codeflicker sandbox strips cursor-movement sequences).  The only reliable
- * way to show persistent status is to bake it into the readline prompt itself.
+ * Layout after each rl.prompt():
  *
- * Layout — two lines joined with \n so readline renders them as one prompt:
+ *   [domain] model ❯ _
+ *   ──────────────────────────────────────────────────────────────────────────
+ *    model │ thinking… │ project │ tokens │ ctx% │  ID  xxxxxxxx
  *
- *   ╭─ GLM-5 │ thinking… │ project │ 1.2K │ 76% │ ID a1b2c3d4
- *   ╰❯ _
+ * The ❯ line is the actual readline prompt (cursor sits here).
+ * The two lines below are written by printStatusBar() right after rl.prompt().
+ * Then we move the cursor back up two lines so readline keeps the cursor on ❯.
  */
 
 import chalk from 'chalk';
@@ -35,7 +36,6 @@ let _state: StatusBarState = {
 };
 
 let _enabled = false;
-let _onUpdate: (() => void) | null = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -46,20 +46,13 @@ export function initStatusBar(
   onUpdate?: () => void,
 ): void {
   _state = { ..._state, ...initialState };
-  if (onUpdate !== undefined) _onUpdate = onUpdate;
   _enabled = true;
+  // onUpdate is no longer used — status bar is printed by printStatusBar()
+  void onUpdate;
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
-  const wasThinking = _state.isThinking;
   _state = { ..._state, ...patch };
-  if (_enabled && _onUpdate) {
-    const onlyThinkingChanged =
-      Object.keys(patch).length === 1 &&
-      'isThinking' in patch &&
-      wasThinking !== patch.isThinking;
-    if (!onlyThinkingChanged) _onUpdate();
-  }
 }
 
 export function clearStatusBar(): void {
@@ -67,16 +60,31 @@ export function clearStatusBar(): void {
 }
 
 /**
- * Build the two-line prompt string to pass to rl.setPrompt().
- * Line 1: status bar   Line 2: input chevron
+ * Returns the single-line ❯ prompt for rl.setPrompt().
+ * Call printStatusBar() right after rl.prompt() to show the status below.
  */
 export function buildStatusPrompt(domain: string, model?: string): string {
-  if (!_enabled) return _inputLine(domain, model);
-  return _statusLine() + '\n' + _inputLine(domain, model);
+  return _inputLine(domain, model);
+}
+
+/**
+ * Write the status bar (separator + info line) below the current cursor,
+ * then move the cursor back up so readline keeps it on the ❯ line.
+ *
+ * Call this immediately after every rl.prompt() call.
+ */
+export function printStatusBar(): void {
+  if (!_enabled) return;
+  const cols = process.stdout.columns ?? process.stderr.columns ?? 80;
+  const sep  = chalk.dim('─'.repeat(cols));
+  const info = _statusLine();
+  // Print two lines below, then move cursor back up two lines
+  process.stdout.write(`\n${sep}\n${info}\x1b[2A\r`);
+  // Re-draw the ❯ prompt text so the cursor is visually correct
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Internal
+// Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _inputLine(domain: string, model?: string): string {
@@ -98,9 +106,10 @@ function _statusLine(): string {
   const idPart      = _state.sessionId.slice(0, 8);
 
   const sep = chalk.dim(' │ ');
+  const thinking = _thinkingPart(_state.isThinking);
   const parts: string[] = [
     chalk.white(modelShort),
-    ...(_thinkingPart(_state.isThinking) ? [_thinkingPart(_state.isThinking)!] : []),
+    ...(thinking ? [thinking] : []),
     chalk.dim(projectName),
     chalk.dim(tokensPart),
     _ctxColor(pctCapped)(`${pctCapped}%`),
