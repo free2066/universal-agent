@@ -269,7 +269,8 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
   // service.  We trust the key is valid and return immediately — no network
   // probe needed (internal endpoints may not be reachable from everywhere).
   const wqKey = process.env.WQ_API_KEY;
-  const wqModel = process.env.UAGENT_MODEL;
+  // 防御性解析：UAGENT_MODEL 可能误写成 ep-xxx:名称 格式，只取冒号前的 ID 部分
+  const wqModel = (process.env.UAGENT_MODEL || '').split(':')[0].trim() || undefined;
   const wqBase = process.env.OPENAI_BASE_URL;
   // WQ_MODELS 支持逗号分隔多个万擎 endpoint，格式：ep-xxx 或 ep-xxx:显示名称
   const wqModelsRaw = process.env.WQ_MODELS || '';
