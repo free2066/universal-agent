@@ -22,12 +22,12 @@ import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui.js';
 import { HookRunner } from '../core/hooks.js';
 
-// Load env
+// Load env — ~/.uagent/.env is the primary config store (override: true so it
+// always wins over any stale values from the project .env or shell environment).
+const homeEnv = resolve(process.env.HOME || '~', '.uagent', '.env');
+if (existsSync(homeEnv)) config({ path: homeEnv, override: true });
+// Also load project-level .env (without override — home .env takes precedence)
 config({ path: resolve(process.cwd(), '.env') });
-if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
-  const homeEnv = resolve(process.env.HOME || '~', '.uagent', '.env');
-  if (existsSync(homeEnv)) config({ path: homeEnv });
-}
 
 const pkg = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf-8')
