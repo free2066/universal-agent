@@ -55,22 +55,18 @@ function _setScroll(top: number, bottom: number) {
   process.stdout.write(`\x1b[${top};${bottom}r`);
 }
 
-/** Draw separator + status on the last 2 rows without disturbing the cursor. */
+/** Draw status bar on the last row only. */
 function _drawBar() {
   const rows = _rows();
-  const cols = _cols();
-  const sep  = chalk.dim('─'.repeat(cols));
   const info = _statusLine();
 
   process.stdout.write(
-    '\x1b[?25l'            +   // hide cursor
-    '\x1b[s'               +   // save cursor
-    `\x1b[${rows - 1};1H`  +   // row rows-1: separator
-    '\x1b[2K' + sep        +
-    `\x1b[${rows};1H`      +   // row rows: status
-    '\x1b[2K' + info       +
-    '\x1b[u'               +   // restore cursor
-    '\x1b[?25h',               // show cursor
+    '\x1b[?25l'        +
+    '\x1b[s'           +
+    `\x1b[${rows};1H`  +
+    '\x1b[2K' + info   +
+    '\x1b[u'           +
+    '\x1b[?25h',
   );
 }
 
@@ -91,10 +87,14 @@ export function initStatusBar(
   _enabled = true;
 
   if (_isTTY) {
-    _setScroll(1, _rows() - 2);
+    const bottom = _rows() - 1;
+    _setScroll(1, bottom);
+    process.stdout.write(`\x1b[${bottom};1H`);
     _drawBar();
     process.stdout.on('resize', () => {
-      _setScroll(1, _rows() - 2);
+      const newBottom = _rows() - 1;
+      _setScroll(1, newBottom);
+      process.stdout.write(`\x1b[${newBottom};1H`);
       _drawBar();
     });
   }
@@ -114,11 +114,10 @@ export function clearStatusBar(): void {
   if (_isTTY && _enabled) {
     const rows = _rows();
     process.stdout.write(
-      '\x1b[s'               +
-      `\x1b[${rows - 1};1H`  +  '\x1b[2K' +
-      `\x1b[${rows};1H`      +  '\x1b[2K' +
-      '\x1b[u'               +
-      `\x1b[1;${rows}r`,         // restore full scroll region
+      '\x1b[s'           +
+      `\x1b[${rows};1H`  + '\x1b[2K' +
+      '\x1b[u'           +
+      `\x1b[1;${rows}r`,
     );
   }
   _enabled = false;
@@ -143,6 +142,7 @@ export function buildStatusPrompt(domain: string, _model?: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _statusLine(): string {
+  const cols = process.stdout.columns ?? 80;
   const pct = _state.contextLength > 0
     ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
     : 0;
@@ -152,24 +152,29 @@ function _statusLine(): string {
   const tokensPart  = _fmtTokens(_state.estimatedTokens);
   const idPart      = _state.sessionId.slice(0, 8);
 
-  const sep = chalk.dim(' │ ');
+  const bg = chalk.bgHex('#1e1b4b');
+  const sep = bg.dim(' │ ');
   const thinking = _thinkingPart(_state.isThinking);
   const parts: string[] = [
-    chalk.white(modelShort),
+    bg.white(modelShort),
     ...(thinking ? [thinking] : []),
-    chalk.dim(projectName),
-    chalk.dim(tokensPart),
-    _ctxColor(pctCapped)(`${pctCapped}%`),
-    chalk.bgHex('#7c3aed').white(' ID ') + ' ' + chalk.dim(idPart),
+    bg.dim(projectName),
+    bg.dim(tokensPart),
+    bg(_ctxColor(pctCapped)(`${pctCapped}%`)),
+    chalk.bgHex('#7c3aed').white(' ID ') + bg.dim(` ${idPart}`),
   ];
-  return chalk.dim(' ') + parts.join(sep);
+  const content = bg(' ') + parts.join(sep);
+  const visLen = content.replace(/\x1b\[[0-9;]*m/g, '').length;
+  const pad = Math.max(0, cols - visLen);
+  return content + bg(' '.repeat(pad));
 }
 
 function _thinkingPart(t: ThinkingLevel): string | null {
+  const bg = chalk.bgHex('#1e1b4b');
   if (t === false || t === 'none') return null;
-  if (t === true  || t === 'low')  return chalk.dim('thinking…');
-  if (t === 'medium')              return chalk.yellow('thinking…');
-  if (t === 'high')                return chalk.magenta('thinking…');
+  if (t === true  || t === 'low')  return bg.dim('thinking…');
+  if (t === 'medium')              return bg.yellow('thinking…');
+  if (t === 'high')                return bg.magenta('thinking…');
   return null;
 }
 
