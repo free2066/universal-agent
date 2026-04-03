@@ -1169,12 +1169,36 @@ async function runREPL(
   const { estimateHistoryTokens } = await import('../core/context/context-compressor.js').catch(() => ({ estimateHistoryTokens: () => 0 }));
   const currentModel = modelManager.getCurrentModel('main');
   const { friendlyName } = await import('./model-picker.js');
-  initStatusBar({
-    model: friendlyName(currentModel),
+  // ── 从 WQ_MODELS 解析自定义显示名（格式: ep-xxx:显示名,ep-yyy:名称）──────────
+  const _wqNameMap: Record<string, string> = {};
+  (process.env.WQ_MODELS || '').split(',').forEach(entry => {
+    const [id, ...nameParts] = entry.trim().split(':');
+    if (nameParts.length > 0 && id && !id.startsWith('ep-xxxxxx')) {
+      _wqNameMap[id.trim()] = nameParts.join(':').trim();
+    }
+  });
+  const getModelDisplayName = (modelId: string) =>
+    _wqNameMap[modelId] ?? friendlyName(modelId);
+  // ── 从 profile 读取真实 context window，否则 fallback 128K ─────────────────
+  const _startProfile = modelManager.listProfiles().find(p => p.name === currentModel);
+  const _startContextLen = _startProfile?.contextLength ?? 128000;
+  // 初始 token 估算（恢复会话时有历史记录，需算出来）
+  const _initialTokens = (() => {
+    try {
+      const h = agent.getHistory();
+      return h.length > 0 && typeof estimateHistoryTokens === 'function'
+        ? (estimateHistoryTokens as (h: unknown[]) => number)(h)
+        : 0;
+    } catch { return 0; }
+  })();
+  // 状态栏在 rl.prompt() 之后再 init，确保在所有欢迎文本之后渲染
+  // （defer 到微任务，避免被 readline 初始 prompt 覆盖）
+  const _doInitStatusBar = () => initStatusBar({
+    model: getModelDisplayName(currentModel),
     domain: options.domain,
     sessionId: SHORT_ID,
-    estimatedTokens: 0,
-    contextLength: 128000,
+    estimatedTokens: _initialTokens,
+    contextLength: _startContextLen,
     isThinking: 'none' as const,
   });
 
@@ -1232,6 +1256,8 @@ async function runREPL(
   }
 
   rl.prompt();
+  // 状态栏在 prompt 输出之后渲染，确保它在屏幕最底部
+  setImmediate(_doInitStatusBar);
 
   rl.on('line', async (line) => {
     const input = line.trim();
@@ -1423,8 +1449,16 @@ async function runREPL(
         if (selected) {
           agent.setModel(selected);
           rl.setPrompt(makePrompt(options.domain, selected));
-          updateStatusBar({ model: friendlyName(selected) });
-          process.stdout.write(chalk.green(`  ✓ Model → ${selected}`) + '\n\n');
+          // 持久化：下次启动仍使用该模型
+          modelManager.setPointer('main', selected);
+          // 更新状态栏显示名，同步读取新模型的 context window
+          const _newProfile = modelManager.listProfiles().find(p => p.name === selected);
+          const _newCtxLen = _newProfile?.contextLength ?? 128000;
+          updateStatusBar({
+            model: getModelDisplayName(selected),
+            contextLength: _newCtxLen,
+          });
+          process.stdout.write(chalk.green(`  ✓ Model → ${getModelDisplayName(selected)} (${selected})`) + '\n\n');
         }
         rl.resume();
       } else {
@@ -1840,8 +1874,8 @@ async function runREPL(
       try {
         const h = agent.getHistory();
         const est = typeof estimateHistoryTokens === 'function' ? (estimateHistoryTokens as (h: unknown[]) => number)(h) : 0;
-        updateStatusBar({ isThinking: false, estimatedTokens: est });
-      } catch { updateStatusBar({ isThinking: false }); }
+        updateStatusBar({ isThinking: 'none', estimatedTokens: est });
+      } catch { updateStatusBar({ isThinking: 'none' }); }
       process.stdout.write('\n\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
