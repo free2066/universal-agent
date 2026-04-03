@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+
+// Auto-update: check for new commits on startup and rebuild transparently.
+// Must run before any other imports so the updated code takes effect on restart.
+import { checkAndUpdate } from './auto-update.js';
+await checkAndUpdate();
+
 import { program } from 'commander';
 import { createInterface } from 'readline';
 import chalk from 'chalk';
