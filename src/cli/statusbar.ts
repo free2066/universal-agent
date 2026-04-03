@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { basename } from 'path';
+import { execFileSync } from 'child_process';
 
 export type ThinkingLevel = boolean | 'none' | 'low' | 'medium' | 'high';
 
@@ -25,8 +26,22 @@ let _enabled  = false;
 let _isTTY    = false;
 let _onUpdate: (() => void) | null = null;
 
-function _rows() { return process.stdout.rows    ?? process.stderr.rows    ?? 24; }
-function _cols() { return process.stdout.columns ?? process.stderr.columns ?? 80; }
+function _tput(cmd: string, fallback: number): number {
+  try {
+    const v = parseInt(execFileSync('tput', [cmd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(), 10);
+    return v > 0 ? v : fallback;
+  } catch { return fallback; }
+}
+
+function _rows(): number {
+  const r = process.stdout.rows ?? 0;
+  return r > 0 ? r : _tput('lines', 24);
+}
+
+function _cols(): number {
+  const c = process.stdout.columns ?? 0;
+  return c > 0 ? c : _tput('cols', 80);
+}
 
 function _drawBar() {
   const row  = _rows();
