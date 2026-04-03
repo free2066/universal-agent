@@ -360,7 +360,8 @@ export class ModelManager {
         // Without this, the pointer points to a model name that has no profile entry,
         // causing getClient() to throw "Unknown model" error.
         for (const m of result.available) {
-          const pointerId = result.source === 'openrouter'
+          // 万擎 (wanqing) models use their raw id — no openrouter: prefix
+          const pointerId = result.source === 'openrouter' && !m.id.startsWith('ep-') && !m.id.startsWith('api-')
             ? `openrouter:${m.id}`
             : m.id;
           if (!this.profiles.has(pointerId)) {
@@ -378,12 +379,14 @@ export class ModelManager {
           }
         }
 
-        // Only update pointers that aren't already explicitly set via env vars
-        if (!process.env.UAGENT_MODEL && pointers.main) {
+        // 万擎 source: always override pointers — UAGENT_MODEL IS the wanqing config,
+        // not a reason to skip updating. For other sources, respect explicit env vars.
+        const isWanqing = result.source === 'wanqing';
+        if ((isWanqing || !process.env.UAGENT_MODEL) && pointers.main) {
           this.pointers.main = pointers.main;
           this.pointers.task = pointers.task ?? pointers.main;
         }
-        if (!process.env.UAGENT_QUICK_MODEL && pointers.quick) {
+        if ((isWanqing || !process.env.UAGENT_QUICK_MODEL) && pointers.quick) {
           this.pointers.quick = pointers.quick;
           this.pointers.compact = pointers.compact ?? pointers.quick;
         }
