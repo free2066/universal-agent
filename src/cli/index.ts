@@ -1255,9 +1255,12 @@ async function runREPL(
     setTimeout(() => rl.emit('line', extra.initialPrompt!), 100);
   }
 
+  // 状态栏在 rl.prompt() 之前初始化：
+  // initStatusBar 内部会先输出 \n 把光标往上推一行，
+  // 再把状态栏画到最后一行，之后 stdout-patch 拦截所有写入，
+  // 确保 readline prompt 始终在倒数第二行，状态栏独占最后一行。
+  _doInitStatusBar();
   rl.prompt();
-  // 状态栏在 prompt 输出之后渲染，确保它在屏幕最底部
-  setImmediate(_doInitStatusBar);
 
   rl.on('line', async (line) => {
     const input = line.trim();
