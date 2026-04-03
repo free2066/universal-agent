@@ -14,6 +14,9 @@ import { businessDefectDetectorTool } from './tools/code/business-defect-detecto
 import { reverseAnalyzeTool } from './tools/code/reverse-analyze.js';
 import { loadSkillTool, runSkillTool } from './tools/productivity/skill-tool.js';
 import { readDocTool, docSearchTool, fetchDocTool } from './tools/productivity/docs-tool.js';
+import { scriptSaveTool, scriptRunTool, scriptListTool } from './tools/productivity/script-tools.js';
+import { testRunnerTool } from './tools/productivity/test-runner.js';
+import { envProbeTool } from './tools/productivity/env-probe.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
 import { backgroundRunTool, checkBackgroundTool } from './tools/productivity/background-tools.js';
 import { backgroundManager } from './background-manager.js';
@@ -170,6 +173,15 @@ export class AgentCore {
 
     // Docs tools — read local/remote documents, search doc directories (inspired by jarvis-cc)
     this.registry.registerMany([readDocTool, docSearchTool, fetchDocTool]);
+
+    // Script tools — save & reuse named command sequences (kstack #15370: 固定操作脚本化)
+    this.registry.registerMany([scriptSaveTool, scriptRunTool, scriptListTool]);
+
+    // TDD tools — run tests with structured output (kstack #15370: TDD loop)
+    this.registry.register(testRunnerTool);
+
+    // EnvProbe — system environment sensing: ports, processes, system info, deps (kstack #15370)
+    this.registry.register(envProbeTool);
 
     // s07 — persistent task board (+ s11 claim)
     this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
