@@ -153,6 +153,51 @@ export class ToolRegistry {
     return Array.from(this.tools.values()).map((t) => t.definition);
   }
 
+  /**
+   * Classify whether a tool is safe to run concurrently with other tools.
+   *
+   * Inspired by Claude Code's tool concurrency safety classification (kstack #15375):
+   * "工具并发安全分类: 读工具并发/写工具独占"
+   *
+   * Read-only tools can run concurrently (no shared state mutation).
+   * Write/side-effect tools must run exclusively to avoid conflicts.
+   *
+   * Classification rules:
+   *   SAFE (concurrent):  Read, Grep, LS, WebFetch, WebSearch, AskExpertModel, TodoRead
+   *   UNSAFE (exclusive): Write, Edit, Bash, Task, Spawn*, Worktree*, MCP tools
+   *
+   * Usage in agent.ts: when the LLM requests multiple tool calls in one turn,
+   * we can run SAFE tools in parallel using Promise.allSettled, while UNSAFE tools
+   * must be executed sequentially.
+   */
+  isConcurrencySafe(name: string): boolean {
+    // Explicitly safe: pure read operations with no side effects
+    const SAFE_TOOLS = new Set([
+      'Read', 'Grep', 'LS', 'ListFiles',
+      'WebFetch', 'WebSearch', 'Fetch',
+      'AskExpertModel',
+      'TodoRead', 'GetTask', 'ListTasks',
+      'MemoryRead', 'MemoryList',
+      'DocSearch', 'FetchDoc',
+    ]);
+    // Explicitly unsafe: write / side-effect tools
+    const UNSAFE_PREFIXES = [
+      'Write', 'Edit', 'Bash', 'Task',
+      'Spawn', 'Worktree', 'Teammate',
+      'Proxy', 'Ws', 'WS',
+      'DbQuery', 'DatabaseQuery', 'Redis',
+      'TodoWrite', 'CreateTask', 'UpdateTask',
+      'ScriptRun', 'ScriptSave', 'TestRun',
+    ];
+
+    if (SAFE_TOOLS.has(name)) return true;
+    for (const prefix of UNSAFE_PREFIXES) {
+      if (name.startsWith(prefix)) return false;
+    }
+    // Default: treat unknown tools as unsafe (fail-closed principle)
+    return false;
+  }
+
   async execute(name: string, args: Record<string, unknown>): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Unknown tool: "${name}". Available: ${Array.from(this.tools.keys()).join(', ')}`);

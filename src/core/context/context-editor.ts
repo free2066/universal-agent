@@ -26,6 +26,68 @@ const log = createLogger('ctx-editor');
 
 const CLEARED_PLACEHOLDER = '[cleared]';
 
+// ── Layer 3: Microcompact ──────────────────────────────────────────────────────
+
+/**
+ * Microcompact — replace stale tool results with a lightweight placeholder.
+ *
+ * Inspired by Claude Code's Layer 3 (kstack #15375):
+ *   "Microcompact: clean up stale tool outputs — zero API calls, <1ms latency"
+ *
+ * Criteria for "stale":
+ *   - Tool result is older than MICROCOMPACT_AGE_MS (default: 60 min)
+ *   - Tool result content is over MICROCOMPACT_MIN_CHARS (only large results)
+ *   - Not one of the always-preserve tools (read_file, etc.)
+ *   - Not already cleared
+ *
+ * Each message has a `_ts` timestamp field we inject when adding to history.
+ * If no timestamp is available (older messages), we fall back to position-based
+ * heuristic: messages in the first half of history that are "large" get cleared.
+ *
+ * Returns the number of tool results cleared.
+ */
+
+/** Age threshold for microcompact — 60 minutes matches Claude Code's observed TTL */
+const MICROCOMPACT_AGE_MS = 60 * 60 * 1000;
+
+/** Only microcompact tool results over this char count (small results stay) */
+const MICROCOMPACT_MIN_CHARS = 500;
+
+export function microcompact(history: Message[]): number {
+  const now = Date.now();
+  let cleared = 0;
+
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+    if (msg.role !== 'tool') continue;
+    if (msg.content === CLEARED_PLACEHOLDER) continue;
+    if (msg.content.length < MICROCOMPACT_MIN_CHARS) continue;
+
+    // Check tool name — never clear read_file results (they're reference material)
+    const rawId = msg.toolCallId ?? '';
+    const toolName = rawId.replace(/-\d+-[a-z0-9]+$/, '').replace(/-\d+$/, '');
+    if (PRESERVE_RESULT_TOOLS.has(toolName)) continue;
+
+    // Age check: use _ts if available, otherwise position heuristic
+    const msgTs = (msg as Message & { _ts?: number })._ts;
+    const isStaleByTime = msgTs !== undefined && (now - msgTs) > MICROCOMPACT_AGE_MS;
+    const isStaleByPosition = msgTs === undefined && i < Math.floor(history.length * 0.4);
+
+    if (isStaleByTime || isStaleByPosition) {
+      history[i] = {
+        ...msg,
+        content: `[microcompact: tool result cleared after ${Math.round((now - (msgTs ?? now)) / 60000)}min — re-run tool if needed]`,
+      };
+      cleared++;
+    }
+  }
+
+  if (cleared > 0) {
+    log.info(`Microcompact: cleared ${cleared} stale tool results`);
+  }
+  return cleared;
+}
+
 export interface ContextEditorConfig {
   /**
    * Token count that triggers editing (approximated via chars/4 heuristic).

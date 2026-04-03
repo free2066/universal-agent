@@ -1,31 +1,51 @@
 /**
- * Context Auto-Compactor
+ * Context Auto-Compactor — Claude Code 7-layer defence alignment
  *
- * Upgraded from basic LLM summarization to a Claude Code-inspired 9-chapter
- * structured summary with a circuit breaker (kstack article #15375).
+ * Layers implemented here:
+ *   Layer 5 (AutoCompact)  — LLM 9-chapter summary + circuit breaker + anti-recursion
+ *   Layer 6 (Blocking)     — Hard stop when circuit open (no infinite loops)
  *
- * Key improvements over original:
- *   1. 9-chapter structured summary — preserves all critical info across compact
- *   2. Circuit breaker — stops after 3 consecutive failures to avoid wasting LLM calls
- *      (Claude Code data: 1,279 sessions had 50+ consecutive failures, wasting ~250K API calls/day)
- *   3. Anti-recursion guard — compact calls from within compact are rejected
- *   4. Tool/user message pairing protection — never splits a tool_use/tool_result pair
- *   5. Smarter keep window — always keeps at least 6 recent turns after compaction
+ * Layers in context-editor.ts:
+ *   Layer 2 (Snip)         — Selective tool result clearing (editContextIfNeeded)
+ *   Layer 3 (Microcompact) — Time-based stale tool result replacement (microcompact)
+ *
+ * Layer 7 (Reactive)       — 413/context-overflow emergency compact (reactiveCompact, in agent.ts)
+ *
+ * Environment overrides:
+ *   DISABLE_AUTO_COMPACT=1          — Skip AutoCompact entirely (e.g. for CI)
+ *   AGENT_COMPACT_PCT_OVERRIDE=0.6  — Override threshold fraction (default 0.75)
  */
 
 import type { Message } from '../../models/types.js';
 import { modelManager } from '../../models/model-manager.js';
 
-/** Fraction of context window that triggers compaction */
-const COMPACT_THRESHOLD = 0.75;
+// ── Environment overrides ──────────────────────────────────────────────────────
 
-/** Always keep at least this many recent turns intact */
+/** Set DISABLE_AUTO_COMPACT=1 to skip all LLM-based compaction (e.g. in CI or batch mode) */
+export const AUTO_COMPACT_DISABLED = process.env.DISABLE_AUTO_COMPACT === '1';
+
+/**
+ * Override the compaction threshold fraction via AGENT_COMPACT_PCT_OVERRIDE.
+ * Values: 0.0–1.0. Default: 0.75.
+ * Example: AGENT_COMPACT_PCT_OVERRIDE=0.6 triggers compact earlier (60% of context window).
+ */
+const COMPACT_THRESHOLD_OVERRIDE = (() => {
+  const v = parseFloat(process.env.AGENT_COMPACT_PCT_OVERRIDE ?? '');
+  if (!isNaN(v) && v > 0 && v <= 1.0) return v;
+  return null;
+})();
+
+/** Fraction of context window that triggers compaction (default: 75%) */
+const COMPACT_THRESHOLD = COMPACT_THRESHOLD_OVERRIDE ?? 0.75;
+
+/** Always keep at least this many recent turns intact after compaction */
 const KEEP_LAST_TURNS = 6;
 
 /**
  * Circuit breaker: max consecutive autocompact failures per session.
  * After this many failures, stop attempting autocompact for the rest of the session.
  * Inspired by Claude Code's MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3 pattern.
+ * (Production data: 1,279 sessions had 50+ consecutive failures, ~250K wasted API calls/day)
  */
 const MAX_CONSECUTIVE_FAILURES = 3;
 
@@ -56,30 +76,23 @@ export function resetCompactCircuitBreaker(): void {
  * ~4× fewer tokens than reality, causing missed compaction triggers.
  *
  * Heuristic:
- *   - CJK / full-width / emoji codepoints  → 1.5 chars/token  (divisor 1.5)
- *   - Latin + JSON                          → 2 chars/token    (divisor 2)
- *   - Latin text                            → 4 chars/token    (divisor 4)
+ *   - CJK / full-width / emoji codepoints  → 2.0 chars/token  (divisor 2.0)
+ *   - Latin + JSON                          → 2.0 chars/token  (divisor 2)
+ *   - Latin text                            → 4.0 chars/token  (divisor 4)
  */
 function estimateTokens(text: string, isJson = false): number {
   if (!text) return 0;
-  // Count non-ASCII characters that are likely to be CJK/Arabic/etc.
-  // Unicode ranges: CJK Unified (4E00-9FFF), CJK Extension A (3400-4DBF),
-  // Hangul (AC00-D7AF), Arabic (0600-06FF), etc.
   const nonLatinCount = (text.match(/[\u0600-\u06FF\u0900-\u097F\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/g) ?? []).length;
   const nonLatinRatio = nonLatinCount / Math.max(text.length, 1);
 
-  // Weighted divisor: blend Latin divisor and non-Latin divisor
   const latinDivisor = isJson ? 2 : 4;
-  // CJK characters are typically 1.5–2.5 chars/token in most tokenizers (mean ~2.0).
-  // Using 1.5 over-estimates tokens → compaction triggers too early → wastes LLM calls.
-  // 2.0 is a more accurate midpoint (confirmed via GPT tokenizer on Chinese text)
   const nonLatinDivisor = 2.0;
   const effectiveDivisor = latinDivisor * (1 - nonLatinRatio) + nonLatinDivisor * nonLatinRatio;
 
   return Math.ceil(text.length / effectiveDivisor);
 }
 
-// Export estimateMessageTokens so context-editor.ts can reuse it (avoids duplicating the CJK correction logic)
+// Export estimateMessageTokens so context-editor.ts can reuse it
 export function estimateMessageTokens(msg: Message): number {
   const contentTokens = estimateTokens(msg.content, msg.role === 'tool');
   const toolCallTokens = msg.toolCalls
@@ -128,17 +141,6 @@ export function shouldCompact(
 /**
  * System prompt for 9-chapter structured summary.
  * Inspired by Claude Code's autoCompact prompt structure (kstack #15375).
- *
- * The 9 chapters ensure all critical information survives compaction:
- * 1. Primary Request / Intent
- * 2. Key Technical Concepts
- * 3. Files and Code sections
- * 4. Errors and Fixes
- * 5. Problem Solving approach
- * 6. All User Messages (verbatim)
- * 7. Pending Tasks
- * 8. Current Work
- * 9. Optional Next Step
  */
 const COMPACT_SYSTEM =
   'You are a conversation summarizer for an AI coding assistant session. ' +
@@ -170,11 +172,6 @@ const COMPACT_SYSTEM =
 /** Max chars to include from a single tool result in the compaction prompt */
 const MAX_TOOL_RESULT_CHARS = 1500;
 
-/**
- * Serialize history turns for the compaction prompt.
- * Long tool results are truncated to prevent the summary prompt itself from
- * exceeding context limits on large grep/read outputs.
- */
 function serializeTurns(turns: Message[]): string {
   return turns
     .map((m) => {
@@ -198,87 +195,64 @@ function serializeTurns(turns: Message[]): string {
 /**
  * Find a safe split point that doesn't break tool_use/tool_result pairs.
  * Returns the largest index ≤ `targetIdx` where splitting is safe.
- *
- * A split is UNSAFE if:
- * - The message at `targetIdx` is a tool result (role === 'tool')
- * - The message at `targetIdx - 1` has toolCalls but the result is after `targetIdx`
- *
- * This prevents invalid histories where an assistant tool_call has no matching result.
  */
 function findSafeSplitPoint(history: Message[], targetIdx: number): number {
   let idx = targetIdx;
-  // Walk backward until we find a safe boundary
   while (idx > 0) {
     const msg = history[idx];
-    // A 'tool' role message must come after its matching assistant message
-    if (msg?.role === 'tool') {
-      idx--;
-      continue;
-    }
-    // An assistant message with toolCalls must be followed by all its results
+    if (msg?.role === 'tool') { idx--; continue; }
     if (msg?.role === 'assistant' && msg.toolCalls?.length) {
-      // Check if all tool results are within [0, idx]
       const callIds = new Set(msg.toolCalls.map((tc) => tc.id));
       let allResultsBeforeIdx = true;
       for (let i = idx + 1; i < history.length; i++) {
         if (history[i].role === 'tool' && history[i].toolCallId) {
-          if (callIds.has(history[i].toolCallId!)) {
-            if (i > targetIdx) {
-              allResultsBeforeIdx = false;
-              break;
-            }
+          if (callIds.has(history[i].toolCallId!) && i > targetIdx) {
+            allResultsBeforeIdx = false;
+            break;
           }
         }
       }
-      if (!allResultsBeforeIdx) {
-        idx--;
-        continue;
-      }
+      if (!allResultsBeforeIdx) { idx--; continue; }
     }
     break;
   }
   return idx;
 }
 
+// ── Layer 5: AutoCompact ──────────────────────────────────────────────────────
+
 /**
- * Auto-compact the history in-place.
- * Returns the number of turns that were compacted (0 if nothing happened).
+ * Auto-compact the history in-place using LLM 9-chapter summarization.
+ * Returns the number of turns compacted (0 if nothing happened).
  *
- * Improvements over original:
- * - Circuit breaker: stops after 3 consecutive failures
- * - Anti-recursion guard: rejects compact calls from within compact
- * - Tool pair safety: never splits assistant tool_call / tool result pairs
- * - 9-chapter structured summary for better context preservation
+ * Respects:
+ *   DISABLE_AUTO_COMPACT=1          — skip entirely
+ *   AGENT_COMPACT_PCT_OVERRIDE=0.x  — override threshold fraction
  */
 export async function autoCompact(
   history: Message[],
   onProgress?: (msg: string) => void,
 ): Promise<number> {
-  // ── Circuit breaker ──────────────────────────────────────────────────────
-  if (circuitOpen) {
-    // Don't spam the user — only log at debug level
-    return 0;
-  }
+  // Environment kill switch
+  if (AUTO_COMPACT_DISABLED) return 0;
 
-  // ── Anti-recursion guard ─────────────────────────────────────────────────
-  // Prevents recursive deadlock: if compact is called while already compacting
-  // (e.g. the compact LLM call itself triggers another compact), reject silently.
+  // Circuit breaker — stop after MAX_CONSECUTIVE_FAILURES failures
+  if (circuitOpen) return 0;
+
+  // Anti-recursion guard
   if (isCompacting) return 0;
 
   const decision = shouldCompact(history);
   if (!decision.shouldCompact) return 0;
 
-  // Split: keep the last KEEP_LAST_TURNS, compact the rest
   const targetSplit = history.length - KEEP_LAST_TURNS;
   if (targetSplit <= 0) return 0;
 
-  // Find safe split point that doesn't break tool pairs
   const safeSplit = findSafeSplitPoint(history, targetSplit);
   if (safeSplit <= 0) return 0;
 
   const toCompact = history.slice(0, safeSplit);
   const toKeep = history.slice(safeSplit);
-
   if (toCompact.length === 0) return 0;
 
   onProgress?.(
@@ -287,9 +261,7 @@ export async function autoCompact(
   );
 
   const serialized = serializeTurns(toCompact);
-  const summaryPrompt =
-    'Please summarize the following conversation turns using the 9-chapter format:\n\n' +
-    serialized;
+  const summaryPrompt = 'Please summarize the following conversation turns using the 9-chapter format:\n\n' + serialized;
 
   let summary = '';
   isCompacting = true;
@@ -301,17 +273,14 @@ export async function autoCompact(
       tools: [],
     });
     summary = response.content;
-
-    // Success — reset failure counter
-    consecutiveFailures = 0;
+    consecutiveFailures = 0; // Reset on success
   } catch (err) {
-    // ── Circuit breaker update ──────────────────────────────────────────────
     consecutiveFailures++;
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
       circuitOpen = true;
       onProgress?.(
         `\n⚡ Auto-compact circuit breaker opened after ${consecutiveFailures} consecutive failures — ` +
-        `stopping compact attempts for this session to avoid wasting API calls.\n`,
+        `stopping compact attempts for this session.\n`,
       );
     } else {
       onProgress?.(
@@ -324,19 +293,85 @@ export async function autoCompact(
     isCompacting = false;
   }
 
-  // Replace history in-place
   const summaryMessage: Message = {
     role: 'user',
-    content:
-      `[Context summary — ${toCompact.length} earlier turns compressed using 9-chapter structure]\n\n` +
-      summary,
+    content: `[Context summary — ${toCompact.length} earlier turns compressed using 9-chapter structure]\n\n` + summary,
   };
 
   history.splice(0, history.length, summaryMessage, ...toKeep);
-
-  onProgress?.(
-    `\n✅  Compacted ${toCompact.length} turns → 1 structured summary (9 chapters).\n`,
-  );
+  onProgress?.(`\n✅  Compacted ${toCompact.length} turns → 1 structured summary (9 chapters).\n`);
 
   return toCompact.length;
+}
+
+// ── Layer 7: Reactive Compact (emergency compaction on 413 / context overflow) ──
+
+/**
+ * Reactive compact: triggered when the LLM returns a 413 or context-overflow error.
+ *
+ * Strategy (Claude Code-inspired):
+ *   1. Immediately try microcompact (zero LLM cost — replace stale tool results)
+ *   2. If still over limit, do an emergency LLM compact with 50% retention target
+ *   3. If compact also fails, throw to surface the error (no infinite retry)
+ *
+ * Returns true if recovery was successful, false if it could not recover.
+ */
+export async function reactiveCompact(
+  history: Message[],
+  onProgress?: (msg: string) => void,
+): Promise<boolean> {
+  onProgress?.('\n🚨 Context overflow detected — triggering reactive compact (Layer 7)…\n');
+
+  // Step 1: Microcompact (zero cost, immediate)
+  const { microcompact } = await import('./context-editor.js');
+  const microdCleared = microcompact(history);
+  if (microdCleared > 0) {
+    onProgress?.(`  ✂️  Microcompact cleared ${microdCleared} stale tool results.\n`);
+  }
+
+  // Step 2: Check if that was enough
+  const dec = shouldCompact(history);
+  if (!dec.shouldCompact) {
+    onProgress?.('  ✅ Context recovered via microcompact — no LLM call needed.\n');
+    return true;
+  }
+
+  // Step 3: Emergency LLM compact — compress aggressively (keep only last 3 turns)
+  const emergencySafeSplit = findSafeSplitPoint(history, Math.max(0, history.length - 3));
+  if (emergencySafeSplit <= 0) {
+    onProgress?.('  ⚠️  Cannot compact further — too few turns to split safely.\n');
+    return false;
+  }
+
+  const toCompact = history.slice(0, emergencySafeSplit);
+  const toKeep = history.slice(emergencySafeSplit);
+
+  onProgress?.(`  🗜️  Emergency compact: summarizing ${toCompact.length} turns (keeping last 3)…\n`);
+
+  const serialized = serializeTurns(toCompact);
+  const emergencyPrompt =
+    'EMERGENCY: Produce the most compact possible 9-chapter summary of these turns. ' +
+    'Be extremely terse — every token counts. The context window is nearly full.\n\n' +
+    serialized;
+
+  try {
+    // Use the fast/cheap model for emergency compact — speed over quality
+    const client = modelManager.getClient('quick');
+    const response = await client.chat({
+      systemPrompt: COMPACT_SYSTEM,
+      messages: [{ role: 'user', content: emergencyPrompt }],
+      tools: [],
+    });
+
+    const summaryMessage: Message = {
+      role: 'user',
+      content: `[Emergency compact — ${toCompact.length} turns compressed]\n\n` + response.content,
+    };
+    history.splice(0, history.length, summaryMessage, ...toKeep);
+    onProgress?.('  ✅ Emergency compact complete.\n');
+    return true;
+  } catch (err) {
+    onProgress?.(`  ❌ Emergency compact failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return false;
+  }
 }

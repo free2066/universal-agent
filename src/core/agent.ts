@@ -54,7 +54,7 @@ import {
   taskBindWorktreeTool,
 } from './tools/agents/worktree-tools.js';
 import { MCPManager } from './mcp-manager.js';
-import { autoCompact } from './context/context-compressor.js';
+import { autoCompact, reactiveCompact } from './context/context-compressor.js';
 import { addToHistory } from './memory/session-history.js';
 import { getMemoryStore } from './memory/memory-store.js';
 import { createLogger } from './logger.js';
@@ -449,11 +449,29 @@ export class AgentCore {
     // who need more turns for complex multi-step tasks (default: 15).
     const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? '15', 10);
 
+    // ── AGENT_UNATTENDED_RETRY (kstack article #15375: Claude Code 无人值守重试模式) ──
+    // When AGENT_UNATTENDED_RETRY=1 (e.g. in CI/batch mode), the agent may retry
+    // after hitting the iteration limit instead of stopping.
+    // Safety: max 5 minutes between retry attempts to avoid infinite loops.
+    const unattendedRetry = process.env.AGENT_UNATTENDED_RETRY === '1';
+    let unattendedRetryCount = 0;
+    const MAX_UNATTENDED_RETRIES = parseInt(process.env.AGENT_MAX_UNATTENDED_RETRIES ?? '2', 10);
+    const UNATTENDED_RETRY_DELAY_MS = Math.min(
+      parseInt(process.env.AGENT_UNATTENDED_RETRY_DELAY_MS ?? '30000', 10),
+      5 * 60 * 1000, // Hard cap: 5 minutes max wait (prevents infinite blocking)
+    );
+
     // s03: track rounds since last TodoWrite call; inject nag reminder after 3 rounds
     let roundsWithoutTodo = 0;
 
     // s09: get the teammate manager for inbox drain before each LLM call
     const teamMgr = getTeammateManager(process.cwd());
+
+    // Outer unattended-retry loop — wraps the inner while.
+    // In non-unattended mode this executes exactly once.
+    let _unattendedDone = false;
+    while (!_unattendedDone) {
+    _unattendedDone = true; // default: don't retry unless explicitly set below
 
     while (iteration < MAX_ITERATIONS) {
       iteration++;
@@ -511,7 +529,22 @@ export class AgentCore {
           ? await this.fallbackChain.call(this._getLLM(), chatOpts)
           : await this._getLLM().chat(chatOpts);
       } catch (err) {
-        onChunk(`\n❌ LLM error: ${err instanceof Error ? err.message : String(err)}\n`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        // ── Layer 7: Reactive Compact — 413 / context-overflow emergency recovery ──
+        // Triggered when the LLM rejects the request because the context is too large.
+        // Strategy: first try microcompact (zero LLM cost), then emergency LLM compact.
+        // If recovery succeeds, retry this iteration immediately instead of breaking.
+        // Inspired by Claude Code's Layer 7 Reactive Compact (kstack #15375).
+        const isContextOverflow = /413|context.{0,30}(overflow|limit|length|window)|too.{0,10}(long|large|many.{0,10}token)|maximum.{0,20}(context|length)/i.test(errMsg);
+        if (isContextOverflow) {
+          onChunk(`\n⚠️  Context overflow detected (${errMsg.slice(0, 80)}) — attempting reactive compact…\n`);
+          const recovered = await reactiveCompact(this.history, onChunk);
+          if (recovered) {
+            onChunk('  ↩️  Retrying with compacted context…\n');
+            continue; // retry this iteration with smaller history
+          }
+        }
+        onChunk(`\n❌ LLM error: ${errMsg}\n`);
         break;
       }
 
@@ -698,6 +731,32 @@ export class AgentCore {
       if (last?.role === 'tool') {
         this.history.push({ role: 'assistant', content: '[Iteration limit reached]' });
       }
+
+      // ── AGENT_UNATTENDED_RETRY (kstack article #15375) ─────────────────────
+      // In unattended/CI mode, instead of stopping, wait and retry.
+      // Safety: hard cap of 5 minutes between retries and MAX_UNATTENDED_RETRIES total.
+      if (unattendedRetry && unattendedRetryCount < MAX_UNATTENDED_RETRIES) {
+        unattendedRetryCount++;
+        onChunk(
+          `\n♻️  Unattended retry ${unattendedRetryCount}/${MAX_UNATTENDED_RETRIES} ` +
+          `— waiting ${UNATTENDED_RETRY_DELAY_MS / 1000}s before continuing…\n`,
+        );
+        await new Promise((res) => setTimeout(res, UNATTENDED_RETRY_DELAY_MS));
+        // Reset iteration counter and re-enter via the outer _unattendedDone loop.
+        // We CANNOT use `continue` here because this block is outside the inner
+        // `while (iteration < MAX_ITERATIONS)` loop (TS1107 error).
+        // Instead, we reset iteration and flip _unattendedDone so the outer while
+        // loops back, which re-enters the inner while naturally.
+        iteration = 0;
+        _unattendedDone = false; // Outer loop will restart
+        this.history.push({
+          role: 'user',
+          content: `[SYSTEM] Unattended retry ${unattendedRetryCount}: please continue from where you left off. Max iterations reset.`,
+        });
+        // (no snapshot — continuing)
+      } else {
+        // No more retries — _unattendedDone stays true, outer loop exits
+      }
     } else {
       // ── Iteration Snapshot (Cowork Forge "迭代知识记忆" pattern) ────────────
       // On successful completion (NOT on iteration limit), auto-save a snapshot
@@ -706,6 +765,7 @@ export class AgentCore {
       // Non-blocking: snapshot failures never surface to the user.
       this._captureIterationSnapshot(prompt).catch(() => { /* non-fatal */ });
     }
+    } // end while (!_unattendedDone)
   }
 
   /**

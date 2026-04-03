@@ -112,6 +112,84 @@ export const readFileTool: ToolRegistration = {
   },
 };
 
+// ── Secret Detection (kstack article #15375: "30种秘密扫描模式防止写入") ─────
+// 30 patterns covering AWS/GCP/Azure/GitHub/Anthropic/OpenAI and generic API keys.
+// Applied before writing any file to prevent accidentally leaking credentials.
+const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
+  // AWS
+  { name: 'AWS Access Key ID',        pattern: /AKIA[0-9A-Z]{16}/ },
+  { name: 'AWS Secret Access Key',    pattern: /(?:aws.{0,10})?(?:secret.{0,10})?(?:access.{0,10})?key['":\s=]+[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/i },
+  // Google
+  { name: 'GCP Service Account Key', pattern: /"private_key":\s*"-----BEGIN RSA PRIVATE KEY-----/ },
+  { name: 'Google API Key',           pattern: /AIza[0-9A-Za-z_-]{35}/ },
+  { name: 'Google OAuth Token',       pattern: /ya29\.[0-9A-Za-z_-]{68,}/ },
+  // Anthropic
+  { name: 'Anthropic API Key',        pattern: /sk-ant-(?:api03|api02|api01)-[A-Za-z0-9_-]{93,}/ },
+  // OpenAI
+  { name: 'OpenAI API Key',           pattern: /sk-[A-Za-z0-9]{48}/ },
+  { name: 'OpenAI Org Key',           pattern: /org-[A-Za-z0-9]{24,}/ },
+  // GitHub
+  { name: 'GitHub Token',             pattern: /(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{36,}/ },
+  // Slack
+  { name: 'Slack Token',              pattern: /xox[baprs]-[0-9A-Za-z\-]{10,}/ },
+  // Azure
+  { name: 'Azure Connection String',  pattern: /DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{88}/ },
+  { name: 'Azure SAS Token',          pattern: /sv=\d{4}-\d{2}-\d{2}&(?:st|se|spr|sv|sr|sp|sip|si|sig)=[^&"'\s]+/ },
+  // Private Keys
+  { name: 'RSA Private Key',          pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/ },
+  { name: 'PGP Private Key',          pattern: /-----BEGIN PGP PRIVATE KEY BLOCK-----/ },
+  // Generic secrets
+  { name: 'Bearer Token (long)',      pattern: /[Bb]earer\s+[A-Za-z0-9+/=_-]{32,}/ },
+  { name: 'Basic Auth (base64)',      pattern: /[Bb]asic\s+[A-Za-z0-9+/=]{20,}/ },
+  // Database URLs with passwords
+  { name: 'Database URL with auth',   pattern: /(?:mongodb|postgres|postgresql|mysql|redis):\/\/[^:]+:[^@]+@/ },
+  // Twilio
+  { name: 'Twilio Account SID',       pattern: /AC[a-z0-9]{32}/ },
+  { name: 'Twilio Auth Token',        pattern: /SK[a-z0-9]{32}/ },
+  // Stripe
+  { name: 'Stripe API Key',           pattern: /(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{24,}/ },
+  // SendGrid
+  { name: 'SendGrid API Key',         pattern: /SG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{43,}/ },
+  // HuggingFace
+  { name: 'HuggingFace Token',        pattern: /hf_[A-Za-z0-9]{37,}/ },
+  // Groq
+  { name: 'Groq API Key',             pattern: /gsk_[A-Za-z0-9]{50,}/ },
+  // Generic: long hex secrets often used as API keys / tokens
+  { name: 'Generic Hex Secret',       pattern: /(?:api[_-]?key|secret[_-]?key|auth[_-]?token|access[_-]?token)['":\s=]+[0-9a-fA-F]{32,}/ },
+  // .env style SECRET= assignments with long values
+  { name: 'Env Secret Assignment',    pattern: /^(?:export\s+)?[A-Z][A-Z0-9_]*(?:SECRET|KEY|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL|CRED)=['"]?[A-Za-z0-9+/=_-]{20,}['"]?$/m },
+  // Kubernetes/Helm secrets
+  { name: 'Kubernetes Secret (b64)',  pattern: /data:\s*\n\s+[a-z-]+:\s+[A-Za-z0-9+/=]{40,}/ },
+  // JWT tokens
+  { name: 'JWT Token',                pattern: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+  // npm token
+  { name: 'NPM Access Token',         pattern: /npm_[A-Za-z0-9]{36,}/ },
+  // Cloudflare
+  { name: 'Cloudflare API Token',     pattern: /[A-Za-z0-9_-]{37}(?=[^A-Za-z0-9_-]|$)/ },
+];
+
+/**
+ * Scan content for secrets before writing.
+ * Returns null if safe, or a string describing the detected secret (for user feedback).
+ *
+ * Only enabled in safe mode (AGENT_SAFE_MODE=1) or when DISABLE_SECRET_SCAN is not set.
+ * Does NOT block in non-safe mode — only warns via return value.
+ */
+function detectSecrets(content: string, filePath: string): string | null {
+  // Never scan binary-like content
+  if (content.includes('\x00')) return null;
+  // Skip content that looks like it's explicitly a secrets file the user is creating
+  const base = filePath.split('/').pop() ?? '';
+  if (/^\.?env(?:\.|$)/.test(base)) return null; // .env files are expected to have secrets
+
+  for (const { name, pattern } of SECRET_PATTERNS) {
+    if (pattern.test(content)) {
+      return name;
+    }
+  }
+  return null;
+}
+
 // ─── Write File ─────────────────────────────────────────
 export const writeFileTool: ToolRegistration = {
   definition: {
@@ -128,9 +206,31 @@ export const writeFileTool: ToolRegistration = {
   },
   handler: async (args) => {
     const filePath = resolve(process.cwd(), args.file_path as string);
+    const content = args.content as string;
+
+    // ── Secret detection (kstack article #15375) ──────────────────────────────
+    // Inspired by Claude Code's 30-pattern secret scanner that prevents
+    // credentials from being written to version-controlled files.
+    // In safe mode: block the write entirely.
+    // In normal mode: warn but allow (user may be intentionally writing secrets).
+    const secretType = detectSecrets(content, filePath);
+    if (secretType) {
+      const isSafe = process.env.AGENT_SAFE_MODE === '1';
+      if (isSafe) {
+        return (
+          `⚠️  BLOCKED: Potential secret detected in write content.\n` +
+          `  Type: ${secretType}\n` +
+          `  File: ${filePath}\n` +
+          `  Safe mode prevents writing credentials to disk.\n` +
+          `  If this is intentional, disable safe mode or exclude the file.`
+        );
+      }
+      // Non-safe mode: warn but write
+      console.warn(`[secret-scan] ⚠️  Potential secret (${secretType}) detected in write to ${filePath} — proceeding (not in safe mode)`);
+    }
+
     try {
       mkdirSync(dirname(filePath), { recursive: true });
-      const content = args.content as string;
       // Compute diff summary if file already exists
       let diffSummary = '';
       if (existsSync(filePath)) {
@@ -143,7 +243,8 @@ export const writeFileTool: ToolRegistration = {
       }
       writeFileSync(filePath, content, 'utf-8');
       const lines = content.split('\n').length;
-      return `✓ Written ${lines} lines to ${filePath}${diffSummary}`;
+      const secretWarning = secretType ? `\n⚠️  Warning: potential secret (${secretType}) detected in written content.` : '';
+      return `✓ Written ${lines} lines to ${filePath}${diffSummary}${secretWarning}`;
     } catch (err) {
       return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
     }
