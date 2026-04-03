@@ -231,7 +231,7 @@ export interface DetectionResult {
   best: RankedFreeModel | null;
   bestQuick: RankedFreeModel | null;        // fastest/lightest model for quick tasks
   available: RankedFreeModel[];
-  source: 'openrouter' | 'gemini' | 'groq' | 'ollama' | 'none';
+  source: 'openrouter' | 'gemini' | 'groq' | 'ollama' | 'wanqing' | 'none';
   anonymous: boolean;                        // true = no API key, using anonymous OpenRouter
   totalFreeModels: number;                   // total free models found on OpenRouter
 }
@@ -264,6 +264,40 @@ async function tryOpenRouter(apiKey?: string, silent = false): Promise<RankedFre
  * @param silent - suppress all output (for non-interactive / CI contexts)
  */
 export async function detectFreeModes(silent = false): Promise<DetectionResult> {
+  // ── Step 0: 万擎 (Wanqing) internal API ───────────────────────────────────
+  // If WQ_API_KEY is set, the user has configured the Kuaishou internal model
+  // service.  We trust the key is valid and return immediately — no network
+  // probe needed (internal endpoints may not be reachable from everywhere).
+  const wqKey = process.env.WQ_API_KEY;
+  const wqModel = process.env.UAGENT_MODEL;
+  const wqBase = process.env.OPENAI_BASE_URL;
+  // 万擎识别条件：有 WQ_API_KEY，且 UAGENT_MODEL 已填（不是占位符），或者 OPENAI_BASE_URL 指向万擎
+  const isWanqing = wqKey && (
+    (wqModel && !wqModel.startsWith('ep-xxxxxx')) ||
+    (wqBase && (wqBase.includes('wanqing') || wqBase.includes('wanqing.internal')))
+  );
+  if (isWanqing) {
+    const modelId = wqModel && !wqModel.startsWith('ep-xxxxxx') ? wqModel : 'wanqing-default';
+    if (!silent) process.stdout.write(`✅ Using 万擎 (Wanqing) internal API: ${modelId}\n`);
+    const model: RankedFreeModel = {
+      id: modelId,
+      name: `万擎: ${modelId}`,
+      score: 100,
+      contextLength: 128000,
+      supportsTools: true,
+      isFree: true,
+    };
+    return {
+      found: true,
+      best: model,
+      bestQuick: model,
+      available: [model],
+      source: 'wanqing',
+      anonymous: false,
+      totalFreeModels: 1,
+    };
+  }
+
   const apiKey = process.env.OPENROUTER_API_KEY;
   // NOTE: OpenRouter no longer supports anonymous access (HTTP 401 without a key).
   // Only attempt OpenRouter when a valid key is configured.
@@ -334,6 +368,8 @@ export function buildPointersFromDetection(result: DetectionResult): Partial<Mod
    */
   const toPointer = (id: string): string => {
     if (result.source !== 'openrouter') return id;
+    // 万擎模型 (ep-xxx) 走 OpenAIClient + OPENAI_BASE_URL，不需要 openrouter: 前缀
+    if (id.startsWith('ep-')) return id;
     if (id.startsWith('gemini') || id.startsWith('groq:') || id.startsWith('ollama:')) return id;
     return `openrouter:${id}`;
   };
