@@ -11,19 +11,28 @@ function getVersion(): string {
   }
 }
 
-/** CodeFlicker-style clean banner — no box border */
+// ASCII art logo — pixel font style (like CodeFlicker)
+const LOGO_LINES = [
+  ' █  █ █▀█ █ █ ██▀ █▀▄ ▄▀▀ ▄▀▄ █   ',
+  ' ▀▄▀  █ █ █ █ █▄▄ █▀▄ ▄██ █▀█ █▄▄ ',
+  '      ▀▀▀ ▀▀▀ ▀▀▀ ▀ ▀ ▀▀▀ ▀ ▀ ▀▀▀ ',
+];
+
+/** CodeFlicker-inspired banner with pixel-font logo */
 export function printBanner() {
   const ver = getVersion();
   process.stdout.write('\n');
+  for (const line of LOGO_LINES) {
+    process.stdout.write(chalk.hex('#e879f9')(line) + '\n');
+  }
+  process.stdout.write('\n');
   process.stdout.write(
-    chalk.bold.white('  Universal Agent') +
+    chalk.bold.white('  UAGENT') +
     chalk.gray(` v${ver}`) +
     '\n',
   );
   process.stdout.write(
-    chalk.gray('  Multi-domain AI assistant') +
-    '  ' +
-    chalk.dim('auto · dev · data · service') +
+    chalk.dim('  Multi-domain AI assistant  auto · dev · data · service') +
     '\n\n',
   );
 }

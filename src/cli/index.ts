@@ -23,6 +23,7 @@ import { codeInspectorTool } from '../core/tools/code/code-inspector.js';
 import { selfHealTool } from '../core/tools/code/self-heal.js';
 import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui.js';
+import { initStatusBar, updateStatusBar, clearStatusBar } from './statusbar.js';
 import { HookRunner } from '../core/hooks.js';
 
 // Load env — ~/.uagent/.env is the primary config store (override: true so it
@@ -995,8 +996,23 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
   const hookRunner = new HookRunner(process.cwd());
   const { loadLastSnapshot, saveSnapshot, formatAge } = await import('../core/memory/session-snapshot.js');
 
-  // Unique session ID for this run (used for snapshot file name)
+  // Unique session ID for this run (used for snapshot file name + status bar)
   const SESSION_ID = `session-${Date.now()}`;
+  // Short 8-char ID for display (last 8 hex chars of timestamp)
+  const SHORT_ID = Date.now().toString(16).slice(-8);
+
+  // ── Status bar init ────────────────────────────────────────────────────
+  const { estimateHistoryTokens } = await import('../core/context/context-compressor.js').catch(() => ({ estimateHistoryTokens: () => 0 }));
+  const currentModel = modelManager.getCurrentModel('main');
+  const { friendlyName } = await import('./model-picker.js');
+  initStatusBar({
+    model: friendlyName(currentModel),
+    domain: options.domain,
+    sessionId: SHORT_ID,
+    estimatedTokens: 0,
+    contextLength: 128000,
+    isThinking: false,
+  });
 
   // CodeFlicker-style prompt: dim domain tag + bold ❯
   const makePrompt = (domain: string, model?: string) => {
@@ -1046,6 +1062,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
 
     // ── slash commands ──
     if (input === '/exit' || input === '/quit') {
+      clearStatusBar();
       process.stdout.write('\n' + chalk.dim('  Bye!') + '\n');
       // Fire on_session_end hooks
       await hookRunner.run({ event: 'on_session_end', cwd: process.cwd() }).catch(() => {});
@@ -1229,6 +1246,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
         if (selected) {
           agent.setModel(selected);
           rl.setPrompt(makePrompt(options.domain, selected));
+          updateStatusBar({ model: friendlyName(selected) });
           process.stdout.write(chalk.green(`  ✓ Model → ${selected}`) + '\n\n');
         }
         rl.resume();
@@ -1622,15 +1640,16 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
         console.log(chalk.gray('  (Image context attached to this request)'));
       }
 
-      // ── Thinking spinner ──────────────────────────────────────────────
+      // Thinking spinner + status bar 'thinking' indicator
       const spinnerFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
       let spinIdx = 0;
       let firstChunk = true;
+      updateStatusBar({ isThinking: true });
       const spinTimer = setInterval(() => {
-        process.stdout.write(`\r${chalk.cyan(spinnerFrames[spinIdx++ % spinnerFrames.length])} ${chalk.gray('Thinking...')}`);
+        process.stdout.write(`\r${chalk.cyan(spinnerFrames[spinIdx++ % spinnerFrames.length])} ${chalk.dim('Thinking...')}`);
       }, 120);
 
-      process.stdout.write(chalk.gray('\n' + '─'.repeat(56) + '\n'));
+      process.stdout.write('\n');
       await agent.runStream(finalInput, (chunk) => {
         if (firstChunk) {
           clearInterval(spinTimer);
@@ -1640,6 +1659,12 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
         process.stdout.write(chunk);
       });
       clearInterval(spinTimer);
+      // Update status bar with fresh token estimate
+      try {
+        const h = agent.getHistory();
+        const est = typeof estimateHistoryTokens === 'function' ? (estimateHistoryTokens as (h: unknown[]) => number)(h) : 0;
+        updateStatusBar({ isThinking: false, estimatedTokens: est });
+      } catch { updateStatusBar({ isThinking: false }); }
       process.stdout.write('\n\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1697,11 +1722,13 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
           }
         } catch { /* non-fatal */ }
       })().finally(() => {
-        console.log(chalk.yellow('\nGoodbye! 👋'));
+        clearStatusBar();
+        console.log(chalk.dim('\nGoodbye!'));
         process.exit(0);
       });
     } else {
-      console.log(chalk.yellow('\nGoodbye! 👋'));
+      clearStatusBar();
+      console.log(chalk.dim('\nGoodbye!'));
       process.exit(0);
     }
   });
