@@ -94,8 +94,7 @@ program
       process.exit(0);
     }
 
-    // Interactive mode — init scroll region BEFORE printing anything
-    initStatusBar({});
+    // Interactive mode
     printBanner();
     if (_hasUpdate) printUpdateBanner();
     const summary = await modelManager.autoSelectFreeModel(true);
@@ -1223,17 +1222,6 @@ async function runREPL(
     completer,
   });
 
-  initStatusBar({
-    model: getModelDisplayName(currentModel),
-    domain: options.domain,
-    sessionId: SHORT_ID,
-    estimatedTokens: _initialTokens,
-    contextLength: _startContextLen,
-    isThinking: 'none' as const,
-  }, () => {
-    rl.setPrompt(makePrompt(options.domain));
-  });
-
   // ── Ctrl+R: reverse history search ──────────────────────────────────────
   const _inputHistory: string[] = [];
   let _historySearch = false;
@@ -1318,11 +1306,22 @@ async function runREPL(
 
   // ── initialPrompt: send first message automatically ─────────────────────
   if (extra.initialPrompt) {
-    // Simulate a line input so the REPL processes it naturally
     setTimeout(() => rl.emit('line', extra.initialPrompt!), 100);
   }
 
-  rl.prompt(); printStatusBar();
+  // Init status bar LAST — after all welcome output is done, before first prompt
+  initStatusBar({
+    model: getModelDisplayName(currentModel),
+    domain: options.domain,
+    sessionId: SHORT_ID,
+    estimatedTokens: _initialTokens,
+    contextLength: _startContextLen,
+    isThinking: 'none' as const,
+  }, () => {
+    rl.setPrompt(makePrompt(options.domain));
+  });
+
+  rl.prompt();
 
   rl.on('line', async (line) => {
     const input = line.trim();
