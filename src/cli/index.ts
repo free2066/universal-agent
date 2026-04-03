@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
-// Auto-update: check for new commits on startup and rebuild transparently.
-// Must run before any other imports so the updated code takes effect on restart.
-import { checkAndUpdate } from './auto-update.js';
-await checkAndUpdate();
+// Auto-update: pull + rebuild if a new version is available, then prompt restart.
+import { checkAndUpdate, printUpdateBanner } from './auto-update.js';
+const _hasUpdate = await checkAndUpdate();
 
 import { program } from 'commander';
 import { createInterface } from 'readline';
@@ -50,6 +49,8 @@ program
   .action(async (options) => {
     validateDomain(options.domain);
     printBanner();
+    // If a new version was pulled and compiled above, show the restart banner now.
+    if (_hasUpdate) printUpdateBanner();
 
     // Auto-detect free models if no explicit model specified
     let resolvedModel = options.model;
