@@ -45,11 +45,11 @@ let _tty = false;
 let _onUpdate: (() => void) | null = null;
 
 function _rows(): number {
-  return process.stdout.rows ?? 24;
+  return process.stdout.rows ?? process.stderr.rows ?? 24;
 }
 
 function _cols(): number {
-  return process.stdout.columns ?? 80;
+  return process.stdout.columns ?? process.stderr.columns ?? 80;
 }
 
 function _setScrollRegion(top: number, bottom: number) {
@@ -89,7 +89,8 @@ export function initStatusBar(
     return;
   }
 
-  _tty = Boolean(process.stdout.isTTY);
+  _tty = Boolean(process.stdout.isTTY) ||
+    (process.stdout.writable && Boolean(process.env.TERM && process.env.TERM !== 'dumb'));
   _enabled = true;
 
   if (_tty) {
