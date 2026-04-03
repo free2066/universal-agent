@@ -390,6 +390,13 @@ export class ModelManager {
           this.pointers.quick = pointers.quick;
           this.pointers.compact = pointers.compact ?? pointers.quick;
         }
+        // Save detected model ids for /model cycle (only cycle available models)
+        this._detectedModels = result.available.map(m => {
+          if (result.source === 'openrouter' && !m.id.startsWith('ep-') && !m.id.startsWith('api-')) {
+            return `openrouter:${m.id}`;
+          }
+          return m.id;
+        });
         this.clientCache.clear(); // invalidate cache
       }
     }
@@ -397,12 +404,22 @@ export class ModelManager {
     return summary;
   }
 
+  /** Models detected at startup by autoSelectFreeModel — only these are cycled by /model */
+  private _detectedModels: string[] = [];
+
   cycleMainModel(): string {
-    // Only cycle through profiles that correspond to a known, default model name.
-    // This prevents test-injected or stale profiles from being included in the cycle.
-    // A profile is considered "cycleable" if it's one of the built-in defaults
-    // (i.e. its name matches a profile loaded in loadDefaults) — we detect this
-    // by checking that the profile doesn't look like a placeholder/test value.
+    // If we have a detected-models list (set by autoSelectFreeModel), cycle only those.
+    // This prevents /model from cycling into gpt-4.1 / claude when the user hasn't
+    // configured those providers.
+    if (this._detectedModels.length > 1) {
+      const idx = this._detectedModels.indexOf(this.pointers.main);
+      const next = this._detectedModels[(idx + 1) % this._detectedModels.length];
+      this.pointers.main = next;
+      this.saveToDisk();
+      return next;
+    }
+
+    // Fallback: original behaviour (cycle all real profiles)
     const isRealProfile = (name: string) =>
       !name.includes('non-existent') &&
       !name.includes('invalid') &&
