@@ -1,20 +1,14 @@
 /**
- * statusbar.ts — Pinned bottom status bar via ANSI scroll-region
+ * statusbar.ts — Status embedded in the readline prompt string
  *
- * Strategy:
- *   1. On init, reserve the last terminal row by setting the scroll region to
- *      rows [1 .. (rows-1)], then draw the status bar on the last row.
- *   2. All normal output (including readline) stays inside the scroll region,
- *      so it never overwrites the status line.
- *   3. On every state update we redraw only the last row.
- *   4. On teardown we restore the full scroll region and clear the last row.
+ * ANSI cursor-positioning does not work in all terminal emulators (e.g. the
+ * codeflicker sandbox strips cursor-movement sequences).  The only reliable
+ * way to show persistent status is to bake it into the readline prompt itself.
  *
- * ANSI sequences used:
- *   \x1b[{top};{bottom}r   — set scroll region
- *   \x1b[s / \x1b[u        — save / restore cursor position
- *   \x1b[{row};1H          — move cursor to row
- *   \x1b[2K                — erase entire line
- *   \x1b[?25l / \x1b[?25h  — hide / show cursor (avoids flicker)
+ * Layout — two lines joined with \n so readline renders them as one prompt:
+ *
+ *   ╭─ GLM-5 │ thinking… │ project │ 1.2K │ 76% │ ID a1b2c3d4
+ *   ╰❯ _
  */
 
 import chalk from 'chalk';
@@ -41,37 +35,7 @@ let _state: StatusBarState = {
 };
 
 let _enabled = false;
-let _tty = false;
 let _onUpdate: (() => void) | null = null;
-
-function _rows(): number {
-  return process.stdout.rows ?? process.stderr.rows ?? 24;
-}
-
-function _cols(): number {
-  return process.stdout.columns ?? process.stderr.columns ?? 80;
-}
-
-function _setScrollRegion(top: number, bottom: number) {
-  process.stdout.write(`\x1b[${top};${bottom}r`);
-}
-
-function _drawBar() {
-  if (!_tty) return;
-  const row = _rows();
-  const scrollBottom = row - 1;
-  const line = _buildStatusLine();
-  process.stdout.write(
-    '\x1b[?25l' +
-    '\x1b[s' +
-    `\x1b[${row};1H` +
-    '\x1b[2K' +
-    line +
-    '\x1b[u' +
-    `\x1b[1;${scrollBottom}r` +
-    '\x1b[?25h',
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -83,66 +47,39 @@ export function initStatusBar(
 ): void {
   _state = { ..._state, ...initialState };
   if (onUpdate !== undefined) _onUpdate = onUpdate;
-
-  if (_enabled) {
-    _drawBar();
-    return;
-  }
-
-  _tty = Boolean(process.stdout.isTTY) ||
-    (process.stdout.writable && Boolean(process.env.TERM && process.env.TERM !== 'dumb'));
   _enabled = true;
-
-  if (_tty) {
-    _setScrollRegion(1, _rows() - 1);
-    _drawBar();
-
-    process.stdout.on('resize', () => {
-      _setScrollRegion(1, _rows() - 1);
-      _drawBar();
-    });
-  }
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   const wasThinking = _state.isThinking;
   _state = { ..._state, ...patch };
-  if (_enabled) {
-    _drawBar();
+  if (_enabled && _onUpdate) {
     const onlyThinkingChanged =
-      Object.keys(patch).length === 1 && 'isThinking' in patch && wasThinking !== patch.isThinking;
-    if (_onUpdate && !onlyThinkingChanged) _onUpdate();
+      Object.keys(patch).length === 1 &&
+      'isThinking' in patch &&
+      wasThinking !== patch.isThinking;
+    if (!onlyThinkingChanged) _onUpdate();
   }
 }
 
 export function clearStatusBar(): void {
-  if (!_tty || !_enabled) { _enabled = false; return; }
-  const row = _rows();
-  process.stdout.write(
-    '\x1b[?25l' +
-    '\x1b[s' +
-    `\x1b[${row};1H` +
-    '\x1b[2K' +
-    '\x1b[u' +
-    '\x1b[?25h' +
-    `\x1b[1;${row}r`,
-  );
   _enabled = false;
 }
 
 /**
- * Returns a plain single-line prompt (no status line embedded).
- * The status bar is drawn independently on the last terminal row.
+ * Build the two-line prompt string to pass to rl.setPrompt().
+ * Line 1: status bar   Line 2: input chevron
  */
 export function buildStatusPrompt(domain: string, model?: string): string {
-  return _plainPrompt(domain, model);
+  if (!_enabled) return _inputLine(domain, model);
+  return _statusLine() + '\n' + _inputLine(domain, model);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Internal helpers
+// Internal
 // ─────────────────────────────────────────────────────────────────────────────
 
-function _plainPrompt(domain: string, model?: string): string {
+function _inputLine(domain: string, model?: string): string {
   const domainTag = chalk.dim(`[${domain}]`);
   const modelTag  = model
     ? chalk.dim(` ${(model.split('/').pop() ?? model).slice(0, 22)}`)
@@ -150,8 +87,7 @@ function _plainPrompt(domain: string, model?: string): string {
   return `${domainTag}${modelTag} ${chalk.bold.green('❯')} `;
 }
 
-function _buildStatusLine(): string {
-  const cols = _cols();
+function _statusLine(): string {
   const pct = _state.contextLength > 0
     ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
     : 0;
@@ -159,37 +95,27 @@ function _buildStatusLine(): string {
   const projectName = basename(process.cwd());
   const modelShort  = (_state.model.split('/').pop() ?? _state.model).slice(0, 28);
   const tokensPart  = _fmtTokens(_state.estimatedTokens);
-  const pctPart     = `${pctCapped}%`;
   const idPart      = _state.sessionId.slice(0, 8);
 
-  const content =
-    chalk.bgHex('#1e1b4b').dim(' ') +
-    chalk.bgHex('#1e1b4b').white(modelShort) +
-    _thinkingLabel(_state.isThinking) +
-    chalk.bgHex('#1e1b4b').dim(' │ ') +
-    chalk.bgHex('#1e1b4b').dim(projectName) +
-    chalk.bgHex('#1e1b4b').dim(' │ ') +
-    chalk.bgHex('#1e1b4b').dim(tokensPart) +
-    chalk.bgHex('#1e1b4b').dim(' │ ') +
-    chalk.bgHex('#1e1b4b')(_ctxColor(pctCapped)(pctPart)) +
-    chalk.bgHex('#1e1b4b').dim(' │ ') +
-    chalk.bgHex('#7c3aed').white(' ID ') +
-    chalk.bgHex('#1e1b4b').dim(` ${idPart} `);
+  const sep = chalk.dim(' │ ');
+  const parts: string[] = [
+    chalk.white(modelShort),
+    ...(_thinkingPart(_state.isThinking) ? [_thinkingPart(_state.isThinking)!] : []),
+    chalk.dim(projectName),
+    chalk.dim(tokensPart),
+    _ctxColor(pctCapped)(`${pctCapped}%`),
+    chalk.bgHex('#7c3aed').white(' ID ') + ' ' + chalk.dim(idPart),
+  ];
 
-  const padding = ' '.repeat(Math.max(0, cols - _stripAnsi(content).length));
-  return chalk.bgHex('#1e1b4b')(content + padding);
+  return chalk.dim(' ') + parts.join(sep);
 }
 
-function _stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*m/g, '');
-}
-
-function _thinkingLabel(t: ThinkingLevel): string {
-  if (t === false || t === 'none') return chalk.bgHex('#1e1b4b')('');
-  if (t === true  || t === 'low')  return chalk.bgHex('#1e1b4b').dim(' │ ') + chalk.bgHex('#1e1b4b').dim('thinking…');
-  if (t === 'medium')              return chalk.bgHex('#1e1b4b').dim(' │ ') + chalk.bgHex('#1e1b4b').yellow('thinking…');
-  if (t === 'high')                return chalk.bgHex('#1e1b4b').dim(' │ ') + chalk.bgHex('#1e1b4b').magenta('thinking…');
-  return '';
+function _thinkingPart(t: ThinkingLevel): string | null {
+  if (t === false || t === 'none') return null;
+  if (t === true  || t === 'low')  return chalk.dim('thinking…');
+  if (t === 'medium')              return chalk.yellow('thinking…');
+  if (t === 'high')                return chalk.magenta('thinking…');
+  return null;
 }
 
 function _ctxColor(pct: number): (s: string) => string {
