@@ -94,7 +94,8 @@ program
       process.exit(0);
     }
 
-    // Interactive mode
+    // Interactive mode — init scroll region BEFORE printing anything
+    initStatusBar({});
     printBanner();
     if (_hasUpdate) printUpdateBanner();
     const summary = await modelManager.autoSelectFreeModel(true);

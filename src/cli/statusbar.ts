@@ -91,14 +91,10 @@ export function initStatusBar(
   _enabled = true;
 
   if (_isTTY) {
-    const scrollBottom = _rows() - 2;
-    _setScroll(1, scrollBottom);
-    // Move cursor to bottom of scroll region so subsequent output scrolls up inside it
-    process.stdout.write(`\x1b[${scrollBottom};1H`);
+    _setScroll(1, _rows() - 2);
     _drawBar();
     process.stdout.on('resize', () => {
-      const newBottom = _rows() - 2;
-      _setScroll(1, newBottom);
+      _setScroll(1, _rows() - 2);
       _drawBar();
     });
   }
