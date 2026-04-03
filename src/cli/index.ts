@@ -1090,6 +1090,34 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       rl.resume();
       rl.prompt(); return;
     }
+    if (input === '/help' || input === '/help ') {
+      console.log(chalk.yellow('\n📖 Available commands:'));
+      console.log(chalk.gray('  /help             — show this message'));
+      console.log(chalk.gray('  /cost             — show session token cost'));
+      console.log(chalk.gray('  /model [name]     — cycle or switch model'));
+      console.log(chalk.gray('  /models           — list all models'));
+      console.log(chalk.gray('  /domain <name>    — switch domain (auto|dev|data|service)'));
+      console.log(chalk.gray('  /agents           — list subagents'));
+      console.log(chalk.gray('  /team             — list teammates'));
+      console.log(chalk.gray('  /inbox            — show lead inbox'));
+      console.log(chalk.gray('  /tasks            — list task board'));
+      console.log(chalk.gray('  /memory           — memory stats & search'));
+      console.log(chalk.gray('  /inspect [path]   — code inspection'));
+      console.log(chalk.gray('  /purify           — auto-fix code issues'));
+      console.log(chalk.gray('  /review           — AI code review'));
+      console.log(chalk.gray('  /spec <desc>      — generate technical spec'));
+      console.log(chalk.gray('  /compact          — compress conversation history'));
+      console.log(chalk.gray('  /tokens           — show context usage'));
+      console.log(chalk.gray('  /history [n]      — show recent prompts'));
+      console.log(chalk.gray('  /image <path>     — attach image to next message'));
+      console.log(chalk.gray('  /hooks            — list lifecycle hooks'));
+      console.log(chalk.gray('  /insights [days]  — usage analytics'));
+      console.log(chalk.gray('  /clear            — clear screen & history'));
+      console.log(chalk.gray('  /init             — create AGENTS.md'));
+      console.log(chalk.gray('  /rules            — show loaded rule files'));
+      console.log(chalk.gray('  /exit             — exit agent\n'));
+      rl.prompt(); return;
+    }
     // Check hook-defined custom slash commands BEFORE sending to LLM
     if (input.startsWith('/') && !input.startsWith('/exit') && !input.startsWith('/help') && !input.startsWith('/cost')) {
       const hookResult = await hookRunner.handleSlashCmd(input).catch(() => ({ handled: false, output: '' }));

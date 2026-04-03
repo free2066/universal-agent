@@ -574,14 +574,23 @@ class SiliconFlowClient extends OpenAIClient {
 // Many models with :free suffix are entirely free
 // Get key: https://openrouter.ai
 // ──────────────────────────────────────────
-class OpenRouterClient extends OpenAIClient {
+//
+// NOTE: This class does NOT extend OpenAIClient because the parent constructor
+// always creates its own OpenAI client without defaultHeaders, and there is no
+// clean way to pass defaultHeaders through super() with the current OpenAI SDK.
+// Using composition avoids the "super() then hack override" anti-pattern.
+class OpenRouterClient implements LLMClient {
+  private client: OpenAI;
+  private model: string;
+
   constructor(model: string) {
+    this.model = model;
     // OpenRouter supports anonymous access — when no key is set we use the
     // string 'anonymous' as a placeholder so the OpenAI SDK still sends the
     // Authorization header (OpenRouter ignores it for anonymous requests).
-    // The required HTTP-Referer + X-Title headers identify our app.
+    // The HTTP-Referer + X-Title headers are required by OpenRouter to identify the app.
     const apiKey = process.env.OPENROUTER_API_KEY || 'anonymous';
-    const client = new OpenAI({
+    this.client = new OpenAI({
       apiKey,
       baseURL: 'https://openrouter.ai/api/v1',
       defaultHeaders: {
@@ -589,8 +598,79 @@ class OpenRouterClient extends OpenAIClient {
         'X-Title': 'universal-agent',
       },
     });
-    super(model, apiKey, 'https://openrouter.ai/api/v1');
-    (this as unknown as { client: OpenAI }).client = client;
+  }
+
+  async chat(options: ChatOptions): Promise<ChatResponse> {
+    const hasTools = (options.tools?.length ?? 0) > 0;
+    const messages = this.convertMessages(options);
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages,
+      ...(hasTools ? {
+        tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
+        tool_choice: 'auto' as const,
+      } : {}),
+    });
+
+    const choice = response.choices[0];
+    if (!choice) throw new Error('No choices returned from OpenRouter');
+    const msg = choice.message;
+
+    if (msg.tool_calls?.length) {
+      return {
+        type: 'tool_calls',
+        content: msg.content || '',
+        toolCalls: msg.tool_calls.map((tc) => ({
+          id: tc.id,
+          name: tc.function.name,
+          arguments: safeParseJSON(tc.function.arguments, tc.function.name),
+        })),
+      };
+    }
+
+    return {
+      type: 'text',
+      content: msg.content ?? '',
+    };
+  }
+
+  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+    const messages = this.convertMessages(options);
+    const stream = await this.client.chat.completions.create({
+      model: this.model,
+      messages,
+      stream: true,
+    });
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content;
+      if (delta) onChunk(delta);
+    }
+  }
+
+  /** Convert universal Message[] to OpenAI chat format */
+  private convertMessages(options: ChatOptions): OpenAI.Chat.ChatCompletionMessageParam[] {
+    const msgs: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+    if (options.systemPrompt) {
+      msgs.push({ role: 'system', content: options.systemPrompt });
+    }
+    for (const m of options.messages) {
+      if (m.role === 'tool') {
+        msgs.push({ role: 'tool', content: String(m.content), tool_call_id: m.toolCallId ?? '' });
+      } else if (m.role === 'assistant' && m.toolCalls?.length) {
+        msgs.push({
+          role: 'assistant',
+          content: m.content as string | null,
+          tool_calls: m.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+          })),
+        });
+      } else {
+        msgs.push({ role: m.role as 'user' | 'assistant', content: m.content as string });
+      }
+    }
+    return msgs;
   }
 }
 

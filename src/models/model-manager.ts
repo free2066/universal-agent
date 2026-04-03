@@ -180,7 +180,7 @@ export class ModelManager {
     mkdirSync(CONFIG_DIR, { recursive: true });
     // Only persist profiles that have a valid provider — filters out any test
     // or placeholder profiles that may have been created by setPointer() during testing.
-    const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'custom']);
+    const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'groq', 'siliconflow', 'openrouter', 'custom']);
     const profilesToSave = Array.from(this.profiles.values())
       .filter(p => validProviders.has(p.provider) && p.modelName.length > 0);
     writeFileSync(CONFIG_FILE, JSON.stringify({
@@ -214,14 +214,17 @@ export class ModelManager {
     // Build the model string the factory expects
     const factoryId = (() => {
       switch (profile.provider) {
-        case 'ollama':   return `ollama:${profile.modelName}`;
-        case 'gemini':   return profile.modelName; // starts with 'gemini'
-        case 'deepseek': return profile.modelName; // starts with 'deepseek'
-        case 'moonshot': return profile.modelName;
-        case 'qwen':     return profile.modelName; // starts with 'qwen'
-        case 'mistral':  return profile.modelName; // starts with 'mistral'/'mixtral'
-        case 'custom':   return `openai-compat:${profile.modelName}`;
-        default:         return profile.modelName; // openai / anthropic
+        case 'ollama':      return `ollama:${profile.modelName}`;
+        case 'gemini':      return profile.modelName; // starts with 'gemini'
+        case 'deepseek':    return profile.modelName; // starts with 'deepseek'
+        case 'moonshot':    return profile.modelName;
+        case 'qwen':        return profile.modelName; // starts with 'qwen'
+        case 'mistral':     return profile.modelName; // starts with 'mistral'/'mixtral'
+        case 'groq':        return `groq:${profile.modelName}`;
+        case 'siliconflow': return `siliconflow:${profile.modelName}`;
+        case 'openrouter':  return `openrouter:${profile.modelName}`;
+        case 'custom':      return `openai-compat:${profile.modelName}`;
+        default:            return profile.modelName; // openai / anthropic
       }
     })();
     // Return cached instance to avoid allocating a new HTTP client per call
@@ -353,6 +356,28 @@ export class ModelManager {
     if (result.found) {
       const pointers = buildPointersFromDetection(result);
       if (pointers) {
+        // Register profiles for dynamically-detected models so getClient() can resolve them.
+        // Without this, the pointer points to a model name that has no profile entry,
+        // causing getClient() to throw "Unknown model" error.
+        for (const m of result.available) {
+          const pointerId = result.source === 'openrouter'
+            ? `openrouter:${m.id}`
+            : m.id;
+          if (!this.profiles.has(pointerId)) {
+            const provider = inferProviderFromModelName(pointerId);
+            this.profiles.set(pointerId, {
+              name: pointerId,
+              provider,
+              modelName: m.id,    // The raw model id without prefix (used by factory)
+              maxTokens: 8192,
+              contextLength: m.contextLength ?? 128000,
+              costPer1kInput: 0,
+              costPer1kOutput: 0,
+              isActive: true,
+            });
+          }
+        }
+
         // Only update pointers that aren't already explicitly set via env vars
         if (!process.env.UAGENT_MODEL && pointers.main) {
           this.pointers.main = pointers.main;
