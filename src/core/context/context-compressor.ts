@@ -16,6 +16,8 @@
  *   AGENT_COMPACT_PCT_OVERRIDE=0.6  — Override threshold fraction (default 0.75)
  */
 
+import { readFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
 import type { Message } from '../../models/types.js';
 import { modelManager } from '../../models/model-manager.js';
 
@@ -300,6 +302,72 @@ export async function autoCompact(
 
   history.splice(0, history.length, summaryMessage, ...toKeep);
   onProgress?.(`\n✅  Compacted ${toCompact.length} turns → 1 structured summary (9 chapters).\n`);
+
+  // ── Post-Compact File Recovery (kstack #15375) ─────────────────────────────
+  // After compacting, re-inject the most recently read files (up to 5 files,
+  // each truncated to 5K tokens = 20K chars) so the agent doesn't lose
+  // file context that was active just before compaction.
+  //
+  // Inspired by Claude Code's post-compact file re-injection:
+  //   "压缩后自动恢复最多5个最近读取的文件 (每个5K tokens)"
+  //
+  // Algorithm:
+  //   1. Scan the compacted turns for Read tool calls
+  //   2. Collect unique file paths (newest first)
+  //   3. For each file: read it from disk and inject as a system note
+  // Non-blocking: file read failures are silently ignored.
+  try {
+    const MAX_RECOVERY_FILES = 5;
+    const MAX_CHARS_PER_FILE = 5_000 * 4; // 5K tokens × 4 chars/token
+
+    // Extract recently read file paths from compacted turns
+    const readFilePaths: string[] = [];
+    const seenPaths = new Set<string>();
+
+    for (let i = toCompact.length - 1; i >= 0 && readFilePaths.length < MAX_RECOVERY_FILES; i--) {
+      const msg = toCompact[i];
+      if (msg.role !== 'assistant' || !msg.toolCalls?.length) continue;
+      for (const tc of msg.toolCalls) {
+        if (tc.name === 'Read' || tc.name === 'read_file' || tc.name === 'readFile') {
+          const filePath = (tc.arguments.file_path ?? tc.arguments.path ?? tc.arguments.filePath) as string | undefined;
+          if (filePath && typeof filePath === 'string' && !seenPaths.has(filePath)) {
+            seenPaths.add(filePath);
+            readFilePaths.push(filePath);
+            if (readFilePaths.length >= MAX_RECOVERY_FILES) break;
+          }
+        }
+      }
+    }
+
+    if (readFilePaths.length > 0) {
+      const recoveryParts: string[] = [];
+      for (const filePath of readFilePaths) {
+        try {
+          const absPath = resolve(process.cwd(), filePath);
+          if (!existsSync(absPath)) continue;
+          const content = readFileSync(absPath, 'utf-8');
+          const truncated = content.length > MAX_CHARS_PER_FILE
+            ? content.slice(0, MAX_CHARS_PER_FILE) + `\n...(truncated at 5K token limit)`
+            : content;
+          recoveryParts.push(`### File: ${filePath}\n\`\`\`\n${truncated}\n\`\`\``);
+        } catch { /* skip unreadable files */ }
+      }
+
+      if (recoveryParts.length > 0) {
+        const recoveryMsg: Message = {
+          role: 'user',
+          content:
+            `[Post-Compact File Recovery — restoring ${recoveryParts.length} recently read files]\n\n` +
+            recoveryParts.join('\n\n'),
+        };
+        // Inject after the summary, before the kept tail
+        history.splice(1, 0, recoveryMsg);
+        onProgress?.(
+          `\n📂 Post-compact file recovery: restored ${recoveryParts.length} file(s) to context.\n`
+        );
+      }
+    }
+  } catch { /* file recovery is non-fatal */ }
 
   return toCompact.length;
 }

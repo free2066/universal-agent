@@ -49,16 +49,101 @@ export const DEFAULT_TOOL_RETRY_CONFIG: ToolRetryConfig = {
 /**
  * Default retry predicate: retry on 5xx / network errors; skip on 4xx client errors.
  * Checks the error message for common HTTP status codes or fetch failure signals.
+ *
+ * Note: 429 (rate-limit) and 529 (overload) are NOT retried here because they
+ * need prolonged back-pressure (30s heartbeat intervals, 6h hard cap).
+ * Use withApiRateLimitRetry() for those cases (kstack #15375: AGENT_UNATTENDED_RETRY).
  */
 export function isRetryableError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  // Explicitly skip 4xx (client errors): bad request, auth, not found, rate-limit
-  // Note: 429 (rate-limit) is technically retryable but needs back-pressure logic;
-  // leaving it as non-retryable here avoids hammering the endpoint.
+  // Skip ALL 4xx (client errors): bad request, auth, not found, rate-limit (429), etc.
   const clientError = /\b4[0-9]{2}\b/.test(msg);
   if (clientError) return false;
+  // Skip 529 (overload — handled by withApiRateLimitRetry instead)
+  if (/\b529\b/.test(msg)) return false;
   // Retry on 5xx, network failure, timeout, ECONNRESET, etc.
   return true;
+}
+
+// ── Rate-limit / Overload Retry (kstack #15375: AGENT_UNATTENDED_RETRY) ───────
+//
+// Claude Code implements a second retry tier for 429/529 API responses that is
+// distinct from normal tool retries:
+//   - 30-second heartbeat intervals (not exponential backoff)
+//   - Indefinite retries until 6-hour hard cap
+//   - Prints heartbeat dots every 30s so CI logs show progress
+//   - Only active when AGENT_UNATTENDED_RETRY=1 (opt-in for CI/batch mode)
+//
+// This mirrors Claude Code's observed behavior: in --print mode with 529 responses
+// the agent would wait in 30s increments, logging "..." to stderr, up to ~6h.
+
+/** Maximum total wait time for rate-limit retry (6 hours, matching Claude Code) */
+const RATE_LIMIT_MAX_WAIT_MS = 6 * 60 * 60 * 1000; // 6h
+
+/** Heartbeat interval — wait and log '.' every 30s (matches Claude Code's 30s cadence) */
+const RATE_LIMIT_HEARTBEAT_MS = 30_000;
+
+/**
+ * Detect 429 (Too Many Requests) or 529 (Overload) from an error.
+ */
+export function isRateLimitError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b(429|529)\b|rate.?limit|too.many.request|overload/i.test(msg);
+}
+
+/**
+ * Execute `fn` with 429/529 rate-limit back-pressure retry.
+ *
+ * Behavior:
+ *   - If AGENT_UNATTENDED_RETRY=1: retry indefinitely up to RATE_LIMIT_MAX_WAIT_MS
+ *   - Otherwise: same as isRetryableError (fail fast on rate-limit)
+ *   - Prints heartbeat '.' every 30s to keep CI logs alive
+ *   - Hard abort after 6 hours total wait (prevents infinite blocking)
+ *
+ * Usage: wrap LLM API calls that may hit 429/529 in unattended/CI mode.
+ *
+ * @param fn - Async function to execute (typically an LLM API call)
+ * @param onHeartbeat - Optional callback for each 30s heartbeat (e.g. log to console)
+ */
+export async function withApiRateLimitRetry<T>(
+  fn: () => Promise<T>,
+  onHeartbeat?: (waitedMs: number) => void,
+): Promise<T> {
+  const unattended = process.env.AGENT_UNATTENDED_RETRY === '1';
+  const startTime = Date.now();
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      return await fn();
+    } catch (err) {
+      // Always rethrow non-rate-limit errors immediately
+      if (!isRateLimitError(err)) throw err;
+
+      // If not in unattended mode, rethrow immediately
+      if (!unattended) throw err;
+
+      const elapsed = Date.now() - startTime;
+
+      // Hard cap: 6 hours total wait
+      if (elapsed >= RATE_LIMIT_MAX_WAIT_MS) {
+        log.error(`Rate-limit retry exceeded 6h hard cap — giving up`);
+        throw err;
+      }
+
+      // Wait 30s (heartbeat interval)
+      const remaining = RATE_LIMIT_MAX_WAIT_MS - elapsed;
+      const wait = Math.min(RATE_LIMIT_HEARTBEAT_MS, remaining);
+
+      log.warn(
+        `Rate-limit/overload error — waiting ${Math.round(wait / 1000)}s ` +
+        `(${Math.round(elapsed / 60000)}min elapsed, 6h max)`,
+      );
+      onHeartbeat?.(elapsed);
+
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
 }
 
 /**

@@ -55,11 +55,16 @@ import {
 } from './tools/agents/worktree-tools.js';
 import { MCPManager } from './mcp-manager.js';
 import { autoCompact, reactiveCompact } from './context/context-compressor.js';
+import {
+  updateSessionMemory,
+  trySessionMemoryCompaction,
+  resetSessionMemory,
+} from './memory/session-memory.js';
 import { addToHistory } from './memory/session-history.js';
 import { getMemoryStore } from './memory/memory-store.js';
 import { createLogger } from './logger.js';
 import { triggerHook, createHookEvent } from './hooks.js';
-import { withToolRetry } from './tool-retry.js';
+import { withToolRetry, withApiRateLimitRetry } from './tool-retry.js';
 import { ModelFallbackChain } from './model-fallback.js';
 import { editContextIfNeeded } from './context/context-editor.js';
 import { selectTools } from './tool-selector.js';
@@ -294,6 +299,8 @@ export class AgentCore {
     this.history = [];
     this.uncertainItems = [];
     this.pendingConfirmation = null;
+    // Reset session memory when conversation is cleared
+    resetSessionMemory();
   }
 
   getHistory(): Message[] {
@@ -430,7 +437,21 @@ export class AgentCore {
 
     this.history.push(userMessage);
 
-    // Auto-compact history if approaching context limit
+    // ── Layer 4: Session Memory Update (non-blocking, <10ms) ───────────────
+    // Update the rolling 10-chapter summary incrementally.
+    // Done BEFORE compaction so the summary is fresh for Layer 4 compaction.
+    updateSessionMemory(this.history);
+
+    // ── Compaction cascade: Layer 4 → Layer 5 ──────────────────────────────
+    // Try cheap Session Memory compaction first (no LLM call).
+    // Only fall back to expensive AutoCompact (LLM) if Layer 4 is not enough.
+    // Inspired by Claude Code's 4-layer compaction hierarchy (kstack #15375).
+    const smCompacted = trySessionMemoryCompaction(this.history, onChunk);
+    if (smCompacted) {
+      await triggerHook(createHookEvent('agent', 'compact', { compacted: -1, layer: 4 }));
+    }
+
+    // Auto-compact history if approaching context limit (Layer 5)
     const compacted = await autoCompact(this.history, onChunk);
     if (compacted > 0) {
       await triggerHook(createHookEvent('agent', 'compact', { compacted }));
@@ -525,9 +546,19 @@ export class AgentCore {
           tools,
           stream: false,
         };
+        // ── API Rate-limit Retry (kstack #15375: AGENT_UNATTENDED_RETRY) ──────────
+        // Wrap LLM calls with 429/529 rate-limit back-pressure retry.
+        // In unattended mode (AGENT_UNATTENDED_RETRY=1): retry every 30s up to 6h.
+        // In normal mode: fail fast (let outer error handling deal with it).
         response = this.fallbackChain
-          ? await this.fallbackChain.call(this._getLLM(), chatOpts)
-          : await this._getLLM().chat(chatOpts);
+          ? await withApiRateLimitRetry(
+              () => this.fallbackChain!.call(this._getLLM(), chatOpts),
+              (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
+            )
+          : await withApiRateLimitRetry(
+              () => this._getLLM().chat(chatOpts),
+              (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
+            );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         // ── Layer 7: Reactive Compact — 413 / context-overflow emergency recovery ──
