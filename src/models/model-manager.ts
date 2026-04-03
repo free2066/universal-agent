@@ -411,7 +411,7 @@ export class ModelManager {
     // If we have a detected-models list (set by autoSelectFreeModel), cycle only those.
     // This prevents /model from cycling into gpt-4.1 / claude when the user hasn't
     // configured those providers.
-    if (this._detectedModels.length > 1) {
+    if (this._detectedModels.length >= 1) {
       const idx = this._detectedModels.indexOf(this.pointers.main);
       const next = this._detectedModels[(idx + 1) % this._detectedModels.length];
       this.pointers.main = next;
