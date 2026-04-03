@@ -557,6 +557,18 @@ export const grepTool: ToolRegistration = {
     // Escape the search path to prevent shell injection (single-quote with escaping)
     const escapedSearchPath = searchPath.replace(/'/g, "'\"'\"'");
 
+    // Input validation: pattern length and complexity guard
+    if (pattern.length > 500) {
+      return `Error: Pattern too long (${pattern.length} chars, max 500). Simplify your regex.`;
+    }
+    if (filePattern && filePattern.length > 200) {
+      return `Error: File pattern too long (${filePattern.length} chars, max 200).`;
+    }
+    // Warn on patterns that are too broad (pure .* with no anchors)
+    if (/^\.[*+]$/.test(pattern)) {
+      return `Error: Pattern "${pattern}" is too broad and would match everything. Provide a more specific search pattern.`;
+    }
+
     // Bug #8: validate regex before passing to grep to give a clear syntax error
     try {
       new RegExp(pattern);
@@ -566,6 +578,7 @@ export const grepTool: ToolRegistration = {
 
     const MAX_GREP_RESULTS = 100;
     const MAX_GREP_LINE_LENGTH = 2000;
+    const GREP_TIMEOUT_MS = 15000;
 
     try {
       // Escape the pattern for shell — use single quotes to avoid most injection
@@ -573,12 +586,13 @@ export const grepTool: ToolRegistration = {
       const cmd = [
         'grep', '-rn', caseFlag, includeFlag,
         '--exclude-dir=node_modules', '--exclude-dir=.git',
+        '--exclude-dir=dist', '--exclude-dir=.next', '--exclude-dir=.cache',
         '-E', `'${escapedPattern}'`,
         `'${escapedSearchPath}'`,
         '2>/dev/null',
       ].filter(Boolean).join(' ');
 
-      const raw = execSync(cmd, { encoding: 'utf-8', maxBuffer: 4 * 1024 * 1024 }).trim();
+      const raw = execSync(cmd, { encoding: 'utf-8', maxBuffer: 4 * 1024 * 1024, timeout: GREP_TIMEOUT_MS }).trim();
       if (!raw) return `No matches found for pattern: ${pattern}`;
 
       // Parse into structured records

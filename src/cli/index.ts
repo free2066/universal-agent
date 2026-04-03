@@ -15,6 +15,7 @@ import { codeInspectorTool } from '../core/tools/code/code-inspector.js';
 import { selfHealTool } from '../core/tools/code/self-heal.js';
 import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui.js';
+import { HookRunner } from '../core/hooks.js';
 
 // Load env
 config({ path: resolve(process.cwd(), '.env') });
@@ -885,6 +886,90 @@ memCmd.command('clear')
     console.log(chalk.green(`✓ Memories cleared${options.type ? ` (type: ${options.type})` : ''}`));
   });
 
+// ── hooks ────────────────────────────────────────────────
+program
+  .command('hooks')
+  .description('Manage lifecycle hooks (.uagent/hooks.json)')
+  .option('--init', 'Create default .uagent/hooks.json with example hooks')
+  .option('--list', 'List all configured hooks')
+  .action((options) => {
+    const runner = new HookRunner(process.cwd());
+    if (options.init) {
+      const result = HookRunner.init(process.cwd());
+      console.log(chalk.green(result));
+      console.log(chalk.gray('  Edit .uagent/hooks.json to customize hook behavior.'));
+      console.log(chalk.gray('  Hooks fire on: pre_prompt | post_response | on_tool_call | on_slash_cmd | on_session_end'));
+      return;
+    }
+    const hooks = runner.listHooks();
+    if (!hooks.length) {
+      console.log(chalk.gray('\nNo hooks configured.'));
+      console.log(chalk.gray('  Run: uagent hooks --init  — create .uagent/hooks.json'));
+      return;
+    }
+    console.log(chalk.yellow('\n🪝 Configured Hooks:\n'));
+    for (const h of hooks) {
+      const status = h.enabled !== false ? chalk.green('✓') : chalk.red('✗');
+      const event = chalk.cyan(h.event.padEnd(18));
+      const type = chalk.gray(`[${h.type}]`.padEnd(10));
+      const desc = h.description ?? (h.command ?? h.command_line ?? '');
+      const extra = h.command ? chalk.gray(` cmd:${h.command}`) : h.tool ? chalk.gray(` tool:${h.tool}`) : '';
+      console.log(`  ${status} ${event} ${type} ${desc}${extra}`);
+    }
+    const customCmds = runner.listSlashCommands();
+    if (customCmds.length > 0) {
+      console.log(chalk.yellow('\n  Custom slash commands:'));
+      for (const c of customCmds) {
+        console.log(`    ${chalk.cyan(c.command.padEnd(16))} ${c.description}`);
+      }
+    }
+    console.log();
+  });
+
+// ── insights ─────────────────────────────────────────────
+program
+  .command('insights')
+  .description('Analyze your uagent usage history and generate a report (inspired by CodeFlicker /insights)')
+  .option('--days <n>', 'Number of days to analyze (default: 30)', '30')
+  .option('--max <n>', 'Max prompts to include in analysis (default: 100)', '100')
+  .option('--cwd-only', 'Only analyze sessions from the current directory')
+  .option('--html', 'Also generate an HTML report')
+  .option('--output <path>', 'Output path for the report (default: ~/.uagent/insights-YYYY-MM-DD.md)')
+  .option('--ai', 'Include AI-powered insights analysis (requires API key)')
+  .action(async (options) => {
+    const days = parseInt(options.days) || 30;
+    const maxPrompts = parseInt(options.max) || 100;
+    const spinner = ora(`Analyzing last ${days} days of usage...`).start();
+    try {
+      const { runInsights } = await import('./insights.js');
+      let llmClient: import('./insights.js').InsightsOptions['llmClient'] = undefined;
+      if (options.ai) {
+        // Provide the LLM client for AI analysis
+        const rawClient = modelManager.getClient('compact');
+        llmClient = rawClient as import('./insights.js').InsightsOptions['llmClient'];
+      }
+      const report = await runInsights({
+        days,
+        maxPrompts,
+        cwdOnly: options.cwdOnly,
+        projectRoot: process.cwd(),
+        outputPath: options.output,
+        html: options.html,
+        llmClient,
+      });
+      spinner.succeed(`Report generated`);
+      console.log('\n' + report.markdown);
+      console.log(chalk.gray(`\n  Full report saved to ~/.uagent/insights-${new Date().toISOString().slice(0, 10)}.md`));
+      if (options.html) {
+        console.log(chalk.gray(`  HTML report: ~/.uagent/insights-${new Date().toISOString().slice(0, 10)}.html`));
+      }
+      console.log(chalk.gray('  Tip: uagent insights --days 90 --ai  — AI-powered analysis\n'));
+    } catch (err) {
+      spinner.fail('Insights failed: ' + (err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+
 // ── init ─────────────────────────────────────────────────
 program
   .command('init')
@@ -896,6 +981,9 @@ program
 
 // ── REPL ─────────────────────────────────────────────────
 async function runREPL(agent: AgentCore, options: { domain: string; verbose: boolean }) {
+  const { readFileSync: fsReadFileSync, existsSync: fsExistsSync } = await import('fs');
+  const hookRunner = new HookRunner(process.cwd());
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -903,7 +991,13 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     prompt: chalk.cyan(`[${options.domain}] `) + chalk.green('❯ '),
   });
 
-  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /agents, /team, /inbox, /tasks, /inspect, /purify, /exit\n'));
+  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /agents, /team, /inbox, /tasks, /inspect, /purify, /image <path>, /hooks, /insights, /exit\n'));
+
+  // Show custom hook slash commands in the welcome line if any
+  const customCmds = hookRunner.listSlashCommands();
+  if (customCmds.length > 0) {
+    console.log(chalk.gray(`  Hook commands: ${customCmds.map((c) => c.command).join(', ')}\n`));
+  }
 
   rl.prompt();
 
@@ -914,9 +1008,108 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     // ── slash commands ──
     if (input === '/exit' || input === '/quit') {
       console.log(chalk.yellow('\nGoodbye! 👋'));
+      // Fire on_session_end hooks
+      await hookRunner.run({ event: 'on_session_end', cwd: process.cwd() }).catch(() => {});
       process.exit(0);
     }
-    if (input === '/help') { printHelp(); rl.prompt(); return; }
+    // /image — multimodal image input (Codeflicker update: image interaction)
+    if (input.startsWith('/image ')) {
+      const imagePath = input.replace('/image ', '').trim();
+      const absPath = resolve(imagePath);
+      if (!fsExistsSync(absPath)) {
+        console.log(chalk.red(`  ✗ Image file not found: ${absPath}`));
+        rl.prompt(); return;
+      }
+      // Read image and encode as base64
+      try {
+        const imageBuffer = fsReadFileSync(absPath);
+        const base64 = imageBuffer.toString('base64');
+        const ext = absPath.split('.').pop()?.toLowerCase() ?? 'png';
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+          gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+        };
+        const mimeType = mimeMap[ext] ?? 'image/png';
+        const dataUrl = `data:${mimeType};base64,${base64}`;
+        console.log(chalk.green(`  ✓ Image loaded: ${absPath} (${(imageBuffer.length / 1024).toFixed(1)}KB)`));
+        console.log(chalk.gray('  Image attached to next message. Now type your question about it:'));
+        // Store image for next message
+        (agent as AgentCore & { _pendingImage?: string })._pendingImage = dataUrl;
+        rl.setPrompt(chalk.magenta(`[image] `) + chalk.green('❯ '));
+      } catch (imgErr) {
+        console.log(chalk.red(`  ✗ Failed to read image: ${imgErr instanceof Error ? imgErr.message : String(imgErr)}`));
+      }
+      rl.prompt(); return;
+    }
+    // /hooks — manage lifecycle hooks
+    if (input === '/hooks' || input === '/hooks list') {
+      hookRunner.reload();
+      const hooks = hookRunner.listHooks();
+      if (!hooks.length) {
+        console.log(chalk.gray('\n  No hooks configured. Run: uagent hooks --init\n'));
+      } else {
+        console.log(chalk.yellow('\n🪝 Hooks:'));
+        for (const h of hooks) {
+          const status = h.enabled !== false ? chalk.green('✓') : chalk.red('✗');
+          console.log(`  ${status} ${chalk.cyan(h.event.padEnd(16))} ${chalk.gray('[' + h.type + ']')} ${h.description ?? ''}`);
+        }
+        console.log();
+      }
+      rl.prompt(); return;
+    }
+    if (input === '/hooks init') {
+      const result = HookRunner.init(process.cwd());
+      console.log(chalk.green('  ' + result));
+      hookRunner.reload();
+      rl.prompt(); return;
+    }
+    if (input === '/hooks reload') {
+      hookRunner.reload();
+      console.log(chalk.green(`  ✓ Reloaded ${hookRunner.listHooks().length} hook(s)`));
+      rl.prompt(); return;
+    }
+    // /insights — usage analytics
+    if (input.startsWith('/insights')) {
+      const parts = input.split(/\s+/);
+      const days = parseInt(parts.find((p) => /^\d+$/.test(p)) ?? '30', 10);
+      rl.pause();
+      process.stdout.write('\n');
+      const spinnerI = ora(`Analyzing last ${days} days of usage...`).start();
+      try {
+        const { runInsights } = await import('./insights.js');
+        const report = await runInsights({ days, projectRoot: process.cwd() });
+        spinnerI.stop();
+        // Show a condensed version in REPL
+        const lines = report.markdown.split('\n');
+        const condensed = lines.slice(0, 60).join('\n');
+        console.log('\n' + condensed);
+        if (lines.length > 60) console.log(chalk.gray(`\n  ... (${lines.length - 60} more lines — full report saved to ~/.uagent/)`));
+      } catch (eI) {
+        spinnerI.fail('Insights failed: ' + (eI instanceof Error ? eI.message : String(eI)));
+      }
+      rl.resume();
+      rl.prompt(); return;
+    }
+    // Check hook-defined custom slash commands BEFORE sending to LLM
+    if (input.startsWith('/') && !input.startsWith('/exit') && !input.startsWith('/help') && !input.startsWith('/cost')) {
+      const hookResult = await hookRunner.handleSlashCmd(input).catch(() => ({ handled: false, output: '' }));
+      if (hookResult.handled) {
+        if (hookResult.output) {
+          // Send hook output to LLM as the prompt
+          rl.pause();
+          process.stdout.write('\n');
+          try {
+            await agent.runStream(hookResult.output, (chunk) => process.stdout.write(chunk));
+            process.stdout.write('\n\n');
+          } catch (err) {
+            console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
+          }
+          rl.resume();
+        }
+        rl.prompt(); return;
+      }
+    }
+    if (input === '/exit' || input === '/quit') { /* already handled above */ }
     if (input === '/cost') {
       const { usageTracker } = await import('../models/usage-tracker.js');
       // Session summary
@@ -1304,7 +1497,38 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     rl.pause();
     process.stdout.write('\n');
     try {
-      await agent.runStream(input, (chunk) => process.stdout.write(chunk));
+      // Run pre_prompt hooks to augment user input
+      const hookCtx = await hookRunner.run({
+        event: 'pre_prompt',
+        prompt: input,
+        cwd: process.cwd(),
+      }).catch(() => ({ proceed: true, value: undefined, injection: undefined }));
+
+      let finalInput = input;
+      if (!hookCtx.proceed) {
+        // Hook blocked this input
+        console.log(chalk.yellow(`  [hook] Blocked: ${hookCtx.value ?? 'no reason given'}`));
+        rl.resume();
+        rl.prompt();
+        return;
+      }
+      if (hookCtx.injection) {
+        // Inject hook content as additional context
+        finalInput = `${input}\n\n---\n${hookCtx.injection}`;
+      }
+
+      // Reset image prompt if one was pending
+      const agentWithImage = agent as AgentCore & { _pendingImage?: string };
+      if (agentWithImage._pendingImage) {
+        const imgDataUrl = agentWithImage._pendingImage;
+        delete agentWithImage._pendingImage;
+        rl.setPrompt(chalk.cyan(`[${options.domain}] `) + chalk.green('❯ '));
+        // Prefix image context to prompt
+        finalInput = `[Image attached — analyze this image]\n${finalInput}\n\n[Image data: ${imgDataUrl.slice(0, 100)}...]`;
+        console.log(chalk.gray('  (Image context attached to this request)'));
+      }
+
+      await agent.runStream(finalInput, (chunk) => process.stdout.write(chunk));
       process.stdout.write('\n\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
