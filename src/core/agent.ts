@@ -27,6 +27,12 @@ import {
 } from './tools/productivity/proxy-tools.js';
 import { curlExecuteTool } from './tools/productivity/curl-tool.js';
 import {
+  githubCreatePRTool,
+  githubListPRsTool,
+  githubMergePRTool,
+} from './tools/productivity/github-pr-tool.js';
+import { autopilotRunTool } from './tools/agents/autopilot-tool.js';
+import {
   terminalSendTool,
   terminalReadTool,
   terminalExecTool,
@@ -230,6 +236,17 @@ export class AgentCore {
       terminalReadTool,
       terminalExecTool,
     ]);
+
+    // GitHub PR tools — create/list/merge PRs via GitHub API (kstack #15380)
+    this.registry.registerMany([
+      githubCreatePRTool,
+      githubListPRsTool,
+      githubMergePRTool,
+    ]);
+
+    // AutopilotRun — 8-stage full-cycle dev automation with progress.md state machine (kstack #15380)
+    // spec → plan → tasks → implement → test-doc → test → review → PR
+    this.registry.register(autopilotRunTool);
 
     // s07 — persistent task board (+ s11 claim)
     this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
