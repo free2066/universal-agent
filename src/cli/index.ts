@@ -227,6 +227,59 @@ program
     await runDebugCheck({ ping: options.ping, json: options.json });
   });
 
+// ── usage ────────────────────────────────────────────────
+program
+  .command('usage')
+  .description('Show token usage statistics and cost summary')
+  .option('--days <n>', 'Number of days to show (default: 7)', '7')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    const { usageTracker } = await import('../models/usage-tracker.js');
+    const days = parseInt(options.days) || 7;
+    if (options.json) {
+      const history = usageTracker.getRawHistory(days);
+      console.log(JSON.stringify(history, null, 2));
+    } else {
+      console.log('\n' + usageTracker.getSummary(days) + '\n');
+    }
+  });
+
+// ── limits ───────────────────────────────────────────────
+program
+  .command('limits')
+  .description('View or set daily usage limits')
+  .option('--tokens <n>', 'Set daily token limit (input+output combined)')
+  .option('--cost <usd>', 'Set daily cost limit in USD (e.g. 1.0)')
+  .option('--warn <pct>', 'Warn when usage reaches this % (default: 80)')
+  .option('--block <pct>', 'Block when usage reaches this % (default: 100)')
+  .option('--reset', 'Clear all daily limits')
+  .action(async (options) => {
+    const { usageTracker } = await import('../models/usage-tracker.js');
+    if (options.reset) {
+      usageTracker.setLimits({ dailyTokenLimit: undefined, dailyCostLimitUSD: undefined });
+      console.log(chalk.green('✓ All daily limits cleared.'));
+      return;
+    }
+    const updates: Record<string, number | undefined> = {};
+    if (options.tokens) updates.dailyTokenLimit = parseInt(options.tokens);
+    if (options.cost)   updates.dailyCostLimitUSD = parseFloat(options.cost);
+    if (options.warn)   updates.warnAtPercent = parseInt(options.warn);
+    if (options.block)  updates.blockAtPercent = parseInt(options.block);
+    if (Object.keys(updates).length > 0) {
+      usageTracker.setLimits(updates);
+      console.log(chalk.green('✓ Limits updated.'));
+    }
+    // Always show current limits
+    const lim = usageTracker.getLimits();
+    console.log(chalk.yellow('\n📏 Daily Limits:'));
+    console.log(`  Tokens: ${lim.dailyTokenLimit ? lim.dailyTokenLimit.toLocaleString() : chalk.gray('not set')}`);
+    console.log(`  Cost:   ${lim.dailyCostLimitUSD ? '$' + lim.dailyCostLimitUSD : chalk.gray('not set')}`);
+    console.log(`  Warn at:  ${lim.warnAtPercent}%`);
+    console.log(`  Block at: ${lim.blockAtPercent}%`);
+    console.log(chalk.gray('\n  Set:   uagent limits --tokens 100000 --cost 1.0'));
+    console.log(chalk.gray('  Reset: uagent limits --reset\n'));
+  });
+
 // ── domains ──────────────────────────────────────────────
 program
   .command('domains')
@@ -718,7 +771,23 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     }
     if (input === '/help') { printHelp(); rl.prompt(); return; }
     if (input === '/cost') {
-      console.log('\n' + modelManager.getCostSummary() + '\n');
+      const { usageTracker } = await import('../models/usage-tracker.js');
+      // Session summary
+      console.log('\n' + modelManager.getCostSummary());
+      // Today's persistent summary
+      const todayUsage = usageTracker.loadTodayUsage();
+      console.log(`\n📅 Today (persisted across sessions):`);
+      console.log(`   Input:    ${todayUsage.totalInputTokens.toLocaleString()} tokens`);
+      console.log(`   Output:   ${todayUsage.totalOutputTokens.toLocaleString()} tokens`);
+      console.log(`   Cost:     $${todayUsage.totalCostUSD.toFixed(4)} USD`);
+      console.log(`   Sessions: ${todayUsage.sessions}`);
+      // Limit check
+      const check = usageTracker.checkLimits();
+      if (check.status !== 'ok' && check.message) {
+        console.log('\n' + check.message);
+      }
+      console.log(chalk.gray('\n  Tip: uagent usage --days 7  — full history'));
+      console.log(chalk.gray('       uagent limits            — view/set limits\n'));
       rl.prompt(); return;
     }
     if (input.startsWith('/model')) {

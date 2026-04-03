@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { stringify as yamlStringify } from 'yaml';
 import { createLLMClient } from './llm-client.js';
 import { detectFreeModes, buildPointersFromDetection, formatDetectionSummary } from './free-model-detector.js';
+import { usageTracker } from './usage-tracker.js';
 import type { LLMClient } from './types.js';
 
 export interface ModelProfile {
@@ -299,10 +300,18 @@ export class ModelManager {
       Array.from(this.profiles.values()).find(p => p.modelName === model);
     const costIn = (inputTokens / 1000) * (profile?.costPer1kInput || 0);
     const costOut = (outputTokens / 1000) * (profile?.costPer1kOutput || 0);
-    this.sessionCost += costIn + costOut;
+    const costUSD = costIn + costOut;
+    this.sessionCost += costUSD;
     this.sessionInputTokens += inputTokens;
     this.sessionOutputTokens += outputTokens;
     this.usageHistory.push({ inputTokens, outputTokens, model, timestamp: Date.now() });
+    // Persist to disk & check daily limits
+    const check = usageTracker.recordCall(inputTokens, outputTokens, model, costUSD);
+    if (check.status === 'warn' && check.message) {
+      process.stderr.write('\n' + check.message + '\n');
+    } else if (check.status === 'block') {
+      throw new Error(check.message ?? 'Daily usage limit reached');
+    }
   }
 
   getCostSummary(): string {
