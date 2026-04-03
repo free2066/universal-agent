@@ -247,24 +247,29 @@ export class MemoryStore {
    *
    * Algorithm:
    *   1. Always include all `pinned` items (they are project-wide rules)
-   *   2. Rank insight/fact items by TF-IDF + time decay via RRF
+   *   2. Rank insight/fact items via hybrid retrieval:
+   *        TF-IDF (sparse) + Semantic Embedding (dense) → 3-way RRF → time decay
+   *      Embedding auto-selects provider: OpenAI/Gemini (if key) → local n-gram (fallback)
    *   3. Always inject most recent 3 `iteration` snapshots (time-sorted, no ranking)
    *   4. Return pinned + top-K ranked + recent iterations
+   *
+   * Now async to support embedding-based semantic retrieval.
    */
-  recall(query: string, options: RecallOptions = {}): MemoryItem[] {
+  async recall(query: string, options: RecallOptions = {}): Promise<MemoryItem[]> {
     const { types, limit = 8 } = options;
 
     // Always load pinned
     const pinned = this.load('pinned');
 
-    // Rank insight/fact by relevance
+    // Rank insight/fact by hybrid relevance (TF-IDF + semantic embedding)
     const rankable: MemoryItem[] = [];
     for (const type of (['insight', 'fact'] as MemoryType[])) {
       if (!types || types.includes(type)) {
         rankable.push(...this.load(type));
       }
     }
-    const ranked = rankMemories(query, rankable, limit).map((r) => r.item);
+    // rankMemories is now async — embedding may call API or local n-gram
+    const ranked = (await rankMemories(query, rankable, limit)).map((r) => r.item);
 
     // Always inject recent iteration snapshots (last 3, time-sorted descending)
     // Inspired by Cowork Forge's "迭代知识记忆" — cross-session project knowledge

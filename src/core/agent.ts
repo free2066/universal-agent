@@ -387,7 +387,7 @@ export class AgentCore {
     // ("迭代知识记忆") so the agent has context from previous sessions.
     try {
       const store = getMemoryStore(process.cwd());
-      const memories = store.recall(prompt);
+      const memories = await store.recall(prompt);
       if (memories.length > 0) {
         // Separate iteration snapshots for dedicated section
         const iterations = memories.filter((m) => m.type === 'iteration');

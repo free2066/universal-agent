@@ -1,16 +1,25 @@
 /**
- * Memory Search Utilities
+ * Memory Search Utilities — Hybrid Retrieval Pipeline
  *
- * Provides keyword-based TF-IDF scoring, Reciprocal Rank Fusion (RRF) merging,
- * and time-decay scoring for the MemoryStore recall pipeline.
+ * Pipeline: TF-IDF (sparse) + Semantic Embedding (dense) → 3-way RRF → Time Decay → MMR
  *
- * Design follows mem9's two-tier retrieval philosophy:
- *   Tier 1: exact tag/keyword match
- *   Tier 2: full-text TF-IDF similarity
- * Results are merged with RRF so both signals contribute to final ranking.
+ * Design:
+ *   Tier 1 (exact):    tag/keyword match  → List A
+ *   Tier 2 (sparse):   TF-IDF full-text   → List B
+ *   Tier 3 (semantic): embedding cosine   → List C
+ *   Merge:             RRF(A, B, C)        → ranked result
+ *   Post:              time decay + MMR dedup
+ *
+ * Semantic tier auto-selects embedding provider:
+ *   OPENAI_API_KEY   → text-embedding-3-small (1536 dim)
+ *   GEMINI_API_KEY   → embedding-001 (768 dim)
+ *   (neither)        → local n-gram hashing (384 dim, <1ms, zero deps)
+ *
+ * Fail-safe: if embedding fails for any reason, falls back silently to 2-way RRF(A, B).
  */
 
 import type { MemoryItem } from './memory-store.js';
+import { cosineSimilarity, embedQuery, embedDocs } from './embedding.js';
 
 // ─── TF-IDF ──────────────────────────────────────────────────────────────────
 
@@ -79,16 +88,17 @@ export function keywordScore(query: string, doc: string): number {
  * Apply temporal decay to a base score.
  *
  * Decay rates (per day):
- *   pinned:  0     (no decay — permanent)
- *   insight: 0.02  (half-life ≈ 35 days)
- *   fact:    0.1   (half-life ≈ 7 days)
+ *   pinned:    0     (no decay — permanent)
+ *   insight:   0.02  (half-life ≈ 35 days)
+ *   fact:      0.1   (half-life ≈ 7 days)
+ *   iteration: 0.01  (half-life ≈ 70 days)
  */
 export function applyDecay(baseScore: number, item: MemoryItem): number {
   const decayRate: Record<MemoryItem['type'], number> = {
     pinned: 0,
     insight: 0.02,
     fact: 0.1,
-    iteration: 0.01,  // iteration snapshots decay very slowly (half-life ≈ 70 days)
+    iteration: 0.01,
   };
   const rate = decayRate[item.type] ?? 0.05;
   const daysSince = (Date.now() - item.updatedAt) / (1000 * 60 * 60 * 24);
@@ -98,7 +108,7 @@ export function applyDecay(baseScore: number, item: MemoryItem): number {
 // ─── Reciprocal Rank Fusion ───────────────────────────────────────────────────
 
 /**
- * Merge two ranked lists using Reciprocal Rank Fusion (RRF).
+ * Merge multiple ranked lists using Reciprocal Rank Fusion (RRF).
  *
  * RRF formula: score(d) = Σ 1 / (k + rank(d))
  * k = 60 is the standard constant (Cormack et al. 2009).
@@ -124,6 +134,39 @@ export function rrfMerge(
     .sort((a, b) => b.score - a.score);
 }
 
+// ─── Semantic Ranking (List C) ────────────────────────────────────────────────
+
+/**
+ * Compute cosine similarity rankings for all items against the query embedding.
+ * Returns item IDs sorted by cosine similarity (highest first).
+ *
+ * Fails silently: returns empty list if embedding is unavailable.
+ */
+async function semanticRank(
+  query: string,
+  items: MemoryItem[],
+): Promise<string[]> {
+  if (items.length === 0) return [];
+
+  // Embed query
+  const queryVec = await embedQuery(query);
+  if (!queryVec) return []; // embedding unavailable → silent fallback
+
+  // Embed all items (batch)
+  const docTexts = items.map((m) => `${m.tags.join(' ')} ${m.content}`);
+  const docVecs = await embedDocs(docTexts);
+  if (!docVecs) return []; // embedding unavailable → silent fallback
+
+  // Compute cosine similarities and rank
+  return items
+    .map((m, i) => ({
+      id: m.id,
+      sim: cosineSimilarity(queryVec, docVecs[i] ?? []),
+    }))
+    .sort((a, b) => b.sim - a.sim)
+    .map((r) => r.id);
+}
+
 // ─── Main Ranking Function ────────────────────────────────────────────────────
 
 export interface RankedMemory {
@@ -132,25 +175,31 @@ export interface RankedMemory {
 }
 
 /**
- * Rank a list of memory items against a query string.
+ * Rank memory items against a query using hybrid retrieval.
  *
- * Pipeline:
- *   1. Tag/keyword exact match → ranked list A
- *   2. TF-IDF full-text match  → ranked list B
- *   3. RRF merge A + B
- *   4. Apply per-item time decay
- *   5. Return top-K results
+ * Pipeline (3-way RRF):
+ *   List A: Tag/keyword exact match    (always runs, <1ms)
+ *   List B: TF-IDF full-text match     (always runs, <1ms)
+ *   List C: Semantic embedding cosine  (async, auto-selected provider)
+ *             → OpenAI / Gemini embedding (if API key available)
+ *             → Local n-gram (if no API key, <1ms, zero deps)
+ *   Merge:  RRF(A, B, C)
+ *   Post:   time decay + top-K
+ *
+ * @param query  Search query string
+ * @param items  Candidate memory items
+ * @param topK   Maximum results to return (default 10)
  */
-export function rankMemories(
+export async function rankMemories(
   query: string,
   items: MemoryItem[],
   topK = 10,
-): RankedMemory[] {
+): Promise<RankedMemory[]> {
   if (items.length === 0) return [];
 
   const corpus = items.map((m) => m.content);
 
-  // ── List A: tag / keyword exact match ──
+  // ── List A: tag / keyword exact match ──────────────────────────────────────
   const listA = items
     .map((m, i) => {
       const tagHit = m.tags.some((t) =>
@@ -163,16 +212,22 @@ export function rankMemories(
     .sort((a, b) => b.score - a.score)
     .map((r) => items[r.idx].id);
 
-  // ── List B: TF-IDF full-text ──
+  // ── List B: TF-IDF full-text ───────────────────────────────────────────────
   const listB = items
     .map((m, i) => ({ idx: i, score: tfidfScore(query, m.content, corpus) }))
     .sort((a, b) => b.score - a.score)
     .map((r) => items[r.idx].id);
 
-  // ── RRF merge ──
-  const merged = rrfMerge([listA, listB]);
+  // ── List C: Semantic embedding cosine (async, fail-safe) ───────────────────
+  // Runs concurrently with A and B (both are sync, so effectively parallel).
+  const listC = await semanticRank(query, items);
 
-  // ── Apply time decay & return top-K ──
+  // ── 3-way RRF merge ────────────────────────────────────────────────────────
+  // If List C is empty (embedding failed), falls back to 2-way RRF automatically.
+  const lists = listC.length > 0 ? [listA, listB, listC] : [listA, listB];
+  const merged = rrfMerge(lists);
+
+  // ── Apply time decay & return top-K ───────────────────────────────────────
   const idToItem = new Map(items.map((m) => [m.id, m]));
 
   return merged

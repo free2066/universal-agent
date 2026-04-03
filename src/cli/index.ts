@@ -828,7 +828,7 @@ memCmd.command('search <query>')
     const { getMemoryStore } = await import('../core/memory/memory-store.js');
     const store = getMemoryStore(process.cwd());
     const limit = parseInt(options.limit || '5', 10);
-    const results = store.recall(query, { limit });
+    const results = await store.recall(query, { limit });
     if (!results.length) {
       console.log(chalk.gray('\n  No relevant memories found.\n'));
       return;
