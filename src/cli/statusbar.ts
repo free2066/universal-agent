@@ -4,23 +4,21 @@
  * Layout (single line at very bottom of terminal):
  *   [model | thinking: low] | project-name | 1.2K | 76% | ID a1b2c3d4
  *
- * Strategy:
- *   The status bar occupies the LAST row of the terminal exclusively.
- *   All other content (readline prompt, agent output) stays in rows 1..(rows-1).
+ * ── Implementation strategy ──────────────────────────────────────────────────
  *
- *   We intercept process.stdout.write:
- *     1. Before each write  → erase the status bar line (last row)
- *     2. Perform the write normally
- *     3. After each write   → redraw the status bar on the last row
+ * We use the ANSI "Set Scrolling Region" escape to permanently reserve the
+ * last row of the terminal for the status bar:
  *
- *   Additionally, on init we print a blank line to push the readline prompt
- *   UP by one row, so it never sits on top of the status bar.
+ *   \x1b[1;{rows-1}r   ← limit scroll region to rows 1 … (rows-1)
  *
- * Thinking levels:
- *   false / 'none'   → not shown
- *   'low'            → dim
- *   'medium'         → yellow
- *   'high'           → magenta
+ * After this, ALL readline output, agent output, spinners etc. can only
+ * scroll within the top (rows-1) rows.  The last row is untouched by the
+ * kernel scroll and stays as our status bar forever.
+ *
+ * On resize we recalculate the scroll region and redraw.
+ * On exit we restore the full scroll region (\x1b[r) and clear the bar.
+ *
+ * This is the same technique used by vim, tmux, htop, etc.
  */
 
 import chalk from 'chalk';
@@ -47,9 +45,6 @@ let _state: StatusBarState = {
 };
 
 let _enabled = false;
-let _patched = false;
-let _inBarOp = false; // prevent re-entrant bar writes
-let _origWrite: ((chunk: Uint8Array | string, enc?: unknown, cb?: unknown) => boolean);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -60,73 +55,58 @@ export function initStatusBar(initialState: Partial<StatusBarState>): void {
   _enabled = !!(process.stdout.isTTY);
   if (!_enabled) return;
 
-  _patchStdout();
-  process.stdout.on('resize', () => {
-    if (_enabled) _rawDrawBar();
-  });
+  _applyScrollRegion();
+  _drawBar();
 
-  // Push cursor up by one line so readline prompt is NOT on the last row.
-  // The last row is reserved for the status bar.
-  _origWrite('\n');
-  _rawDrawBar();
+  process.stdout.on('resize', () => {
+    if (!_enabled) return;
+    _applyScrollRegion();
+    _drawBar();
+  });
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   _state = { ..._state, ...patch };
-  if (_enabled) _rawDrawBar();
+  if (_enabled) _drawBar();
 }
 
 export function clearStatusBar(): void {
   if (!_enabled) return;
   _enabled = false;
-  _rawEraseBar();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// stdout patching
-// ─────────────────────────────────────────────────────────────────────────────
-
-function _patchStdout(): void {
-  if (_patched) return;
-  _patched = true;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  _origWrite = (process.stdout.write as any).bind(process.stdout);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (process.stdout as any).write = function (
-    chunk: Uint8Array | string,
-    enc?: unknown,
-    cb?: unknown,
-  ): boolean {
-    if (_inBarOp || !_enabled) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return _origWrite(chunk, enc as any, cb as any);
-    }
-    _inBarOp = true;
-    _rawEraseBar();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r = _origWrite(chunk, enc as any, cb as any);
-    _rawDrawBar();
-    _inBarOp = false;
-    return r;
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Low-level bar operations (use _origWrite to avoid recursion)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function _rawEraseBar(): void {
   const rows = process.stdout.rows || 24;
-  _origWrite(
-    `\x1b7` +            // save cursor
-    `\x1b[${rows};1H` +  // move to last row col 1
-    `\x1b[2K` +          // erase entire line
-    `\x1b8`,             // restore cursor
+  process.stdout.write(
+    `\x1b[r` +              // restore full scroll region
+    `\x1b7` +               // save cursor
+    `\x1b[${rows};1H` +     // go to last row
+    `\x1b[2K` +             // erase line
+    `\x1b8`,                // restore cursor
   );
 }
 
-function _rawDrawBar(): void {
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Set the terminal scroll region to rows 1…(rows-1) so that normal output
+ * can never overwrite the last row (our status bar).
+ *
+ * Also moves the cursor one line up if it is currently on the last row,
+ * so readline won't try to write its prompt there.
+ */
+function _applyScrollRegion(): void {
+  const rows = process.stdout.rows || 24;
+  const scrollBottom = Math.max(1, rows - 1);
+
+  process.stdout.write(
+    `\x1b[1;${scrollBottom}r` + // set scroll region: row 1 to row (rows-1)
+    `\x1b7` +                   // save cursor
+    `\x1b[${scrollBottom};1H` + // move cursor to last line of scroll region
+    `\x1b8`,                    // restore cursor
+  );
+}
+
+function _drawBar(): void {
   if (!_enabled) return;
   const cols = process.stdout.columns || 80;
   const rows = process.stdout.rows    || 24;
@@ -169,17 +149,18 @@ function _rawDrawBar(): void {
   const pad  = Math.max(0, cols - plainLen);
   const line = colored + ' '.repeat(pad);
 
-  _origWrite(
+  // Draw on the LAST row (outside the scroll region — never overwritten)
+  process.stdout.write(
     `\x1b7` +            // save cursor
-    `\x1b[${rows};1H` +  // move to LAST row col 1
+    `\x1b[${rows};1H` +  // jump to last row col 1
     `\x1b[2K` +          // erase line
     line +
-    `\x1b8`,             // restore cursor (back to input area)
+    `\x1b8`,             // restore cursor (back inside scroll region)
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// Pure helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _thinkingLabel(t: ThinkingLevel): string {
