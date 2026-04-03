@@ -1,16 +1,21 @@
 /**
- * statusbar.ts
+ * statusbar.ts — Fixed bottom status bar via ANSI scroll region (TTY only)
  *
- * Status bar is printed as a block between the AI response and the next prompt:
+ * When running in a real TTY (isTTY = true):
+ *   - Reserve the last 2 rows by setting scroll region to [1 .. rows-2]
+ *   - Draw separator + status on the last 2 rows
+ *   - All readline output stays inside the scroll region → never touches the bar
+ *   - On resize, redraw the bar
+ *   - On exit, restore full scroll region and clear the bar
  *
- *   ❯ your input
- *   ...AI response...
- *   ──────────────────────────────────────────────────────
- *    MiMo-V2-Pro │ project │ 34 │ 0% │  ID  a1b2c3d4
- *   ❯ _
+ *   Visual result (status bar is ALWAYS at the bottom, unaffected by typing):
  *
- * No cursor tricks — printStatusBar() just writes two lines normally before
- * rl.prompt() is called.  readline always owns the ❯ line cleanly.
+ *     [auto] ❯ your input here
+ *     ──────────────────────────────────────────────────────────
+ *      MiMo-V2-Pro │ project │ 34 │ 0% │  ID  a1b2c3d4
+ *
+ * Non-TTY fallback (pipes / CI):
+ *   Status line is embedded as the first line of the prompt string.
  */
 
 import chalk from 'chalk';
@@ -37,7 +42,37 @@ let _state: StatusBarState = {
 };
 
 let _enabled = false;
+let _isTTY   = false;
 let _onUpdate: (() => void) | null = null;
+
+function _rows() { return process.stdout.rows  ?? 24; }
+function _cols() { return process.stdout.columns ?? 80; }
+
+// ─── ANSI helpers ─────────────────────────────────────────────────────────────
+
+/** Set terminal scroll region to rows [top..bottom] (1-indexed). */
+function _setScroll(top: number, bottom: number) {
+  process.stdout.write(`\x1b[${top};${bottom}r`);
+}
+
+/** Draw separator + status on the last 2 rows without disturbing the cursor. */
+function _drawBar() {
+  const rows = _rows();
+  const cols = _cols();
+  const sep  = chalk.dim('─'.repeat(cols));
+  const info = _statusLine();
+
+  process.stdout.write(
+    '\x1b[?25l'          +   // hide cursor (no flicker)
+    '\x1b[s'             +   // save cursor position
+    `\x1b[${rows - 1};1H` +  // move to second-to-last row
+    '\x1b[2K' + sep      +   // clear + draw separator
+    `\x1b[${rows};1H`   +   // move to last row
+    '\x1b[2K' + info     +   // clear + draw status
+    '\x1b[u'             +   // restore cursor position
+    '\x1b[?25h',             // show cursor
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
@@ -49,35 +84,58 @@ export function initStatusBar(
 ): void {
   _state = { ..._state, ...initialState };
   if (onUpdate !== undefined) _onUpdate = onUpdate;
+
+  if (_enabled) { _drawBar(); return; }
+
+  _isTTY   = Boolean(process.stdout.isTTY);
   _enabled = true;
+
+  if (_isTTY) {
+    _setScroll(1, _rows() - 2);
+    _drawBar();
+    process.stdout.on('resize', () => {
+      _setScroll(1, _rows() - 2);
+      _drawBar();
+    });
+  }
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   _state = { ..._state, ...patch };
-  if (_enabled && _onUpdate) {
+  if (!_enabled) return;
+  if (_isTTY) _drawBar();
+  if (_onUpdate) {
     const onlyThinking = Object.keys(patch).length === 1 && 'isThinking' in patch;
     if (!onlyThinking) _onUpdate();
   }
 }
 
 export function clearStatusBar(): void {
+  if (_isTTY && _enabled) {
+    const rows = _rows();
+    process.stdout.write(
+      '\x1b[s'               +
+      `\x1b[${rows - 1};1H`  +  '\x1b[2K' +
+      `\x1b[${rows};1H`      +  '\x1b[2K' +
+      '\x1b[u'               +
+      `\x1b[1;${rows}r`,         // restore full scroll region
+    );
+  }
   _enabled = false;
 }
 
-/**
- * Print separator + status line.
- * Call this BEFORE rl.prompt() so the status appears above the new ❯ line.
- */
-export function printStatusBar(): void {
-  if (!_enabled) return;
-  const cols = process.stdout.columns ?? process.stderr.columns ?? 80;
-  const sep  = chalk.dim('─'.repeat(cols));
-  process.stdout.write(`${sep}\n${_statusLine()}\n`);
-}
+/** No-op in TTY mode (bar drawn independently). In non-TTY, also no-op since
+ *  status is embedded in the prompt string via buildStatusPrompt. */
+export function printStatusBar(): void {}
 
-/** Plain single-line ❯ prompt — no status embedded. */
+/**
+ * In TTY mode   → plain ❯ prompt (status bar drawn on reserved bottom rows).
+ * In non-TTY    → status line \n ❯ prompt (embedded fallback).
+ */
 export function buildStatusPrompt(domain: string, _model?: string): string {
-  return `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
+  const inputLine = `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
+  if (_isTTY || !_enabled) return inputLine;
+  return _statusLine() + '\n' + inputLine;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +162,6 @@ function _statusLine(): string {
     _ctxColor(pctCapped)(`${pctCapped}%`),
     chalk.bgHex('#7c3aed').white(' ID ') + ' ' + chalk.dim(idPart),
   ];
-
   return chalk.dim(' ') + parts.join(sep);
 }
 
