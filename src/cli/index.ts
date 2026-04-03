@@ -1529,8 +1529,11 @@ async function runREPL(
       } else {
         const m = parts[1];
         agent.setModel(m);
-        rl.setPrompt(makePrompt(options.domain, m));
-        process.stdout.write(chalk.green(`  ✓ Model → ${m}`) + '\n\n');
+        modelManager.setPointer('main', m);
+        const _newProfile2 = modelManager.listProfiles().find(p => p.name === m);
+        updateStatusBar({ model: getModelDisplayName(m), contextLength: _newProfile2?.contextLength ?? 128000 });
+        rl.setPrompt(makePrompt(options.domain, getModelDisplayName(m)));
+        process.stdout.write(chalk.green(`  ✓ Model → ${getModelDisplayName(m)}`) + '\n\n');
       }
       rl.prompt(); printStatusBar(); return;
     }

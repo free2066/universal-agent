@@ -103,12 +103,8 @@ export function printStatusBar(): void {
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function _inputLine(domain: string, model?: string): string {
-  const domainTag = chalk.dim(`[${domain}]`);
-  const modelTag  = model
-    ? chalk.dim(` ${(model.split('/').pop() ?? model).slice(0, 22)}`)
-    : '';
-  return `${domainTag}${modelTag} ${chalk.bold.green('❯')} `;
+function _inputLine(_domain: string, _model?: string): string {
+  return `${chalk.bold.green('❯')} `;
 }
 
 function _statusLine(): string {
