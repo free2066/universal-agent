@@ -271,9 +271,13 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
   const wqKey = process.env.WQ_API_KEY;
   const wqModel = process.env.UAGENT_MODEL;
   const wqBase = process.env.OPENAI_BASE_URL;
-  // WQ_MODELS 支持逗号分隔多个万擎 endpoint（/model 循环切换）
+  // WQ_MODELS 支持逗号分隔多个万擎 endpoint，格式：ep-xxx 或 ep-xxx:显示名称
   const wqModelsRaw = process.env.WQ_MODELS || '';
-  const extraModels = wqModelsRaw.split(',').map(s => s.trim()).filter(s => s && !s.startsWith('ep-xxxxxx'));
+  // 解析：只取冒号前的 ep-xxx 部分作为 ID，冒号后是可选的显示名称（供 picker 使用）
+  const extraModels = wqModelsRaw
+    .split(',')
+    .map(s => s.trim().split(':')[0].trim())   // 只取 ID 部分，去掉 :显示名称
+    .filter(s => s && !s.startsWith('ep-xxxxxx') && (s.startsWith('ep-') || s.startsWith('api-')));
 
   // 万擎识别条件：有 WQ_API_KEY，且 UAGENT_MODEL 已填（不是占位符），或者 OPENAI_BASE_URL 指向万擎
   const isWanqing = wqKey && (
