@@ -89,6 +89,10 @@ export interface AgentOptions {
   stream: boolean;
   verbose: boolean;
   safeMode?: boolean;
+  /** Override system prompt entirely */
+  systemPromptOverride?: string;
+  /** Append extra text to the system prompt */
+  appendSystemPrompt?: string;
 }
 
 export class AgentCore {
@@ -109,6 +113,8 @@ export class AgentCore {
    * loading in parallel sub-agents that share the same context.
    */
   private _systemPromptOverride: string | null = null;
+  /** Appended text for --append-system-prompt option */
+  private _appendSystemPrompt: string | null = null;
   /** Accumulated [UNCERTAIN] items across the session (kstack article #15310 confidence mechanism) */
   private uncertainItems: string[] = [];
   /**
@@ -139,7 +145,8 @@ export class AgentCore {
     this.currentDomain = options.domain;
     this.verbose = options.verbose;
     this.safeMode = options.safeMode ?? false;
-
+    if (options.systemPromptOverride) this._systemPromptOverride = options.systemPromptOverride;
+    if (options.appendSystemPrompt) this._appendSystemPrompt = options.appendSystemPrompt;
     if (this.safeMode) process.env.AGENT_SAFE_MODE = '1';
 
     // Set model on manager.
@@ -416,6 +423,7 @@ export class AgentCore {
     // the LLM provider's KV-cache (kstack article #15343 shared prompt cache insight).
     const baseSystemPrompt = this.router.getSystemPrompt(domain);
     let systemPrompt = this._systemPromptOverride ?? buildSystemPromptWithContext(baseSystemPrompt);
+    if (this._appendSystemPrompt) systemPrompt += `\n\n${this._appendSystemPrompt}`;
 
     // ── Memory recall: inject relevant long-term memories into system prompt ──
     // Following mem9's design: pinned memories are always included;

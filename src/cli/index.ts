@@ -42,41 +42,74 @@ program
   .description(pkg.description)
   .version(pkg.version);
 
-// ── chat (default) ──────────────────────────────────────
+// ── Default command: uagent [prompt] (aligns with `flickcli [prompt]`) ─────────
 program
   .command('chat', { isDefault: true })
   .description('Start interactive agent session')
+  .argument('[prompt]', 'Initial prompt \u2014 starts interactive mode (or -q for one-shot)')
   .option('-d, --domain <domain>', 'Domain (data|dev|service|auto)', 'auto')
-  .option('-m, --model <model>', 'Model to use', '')
+  .option('-m, --model <model>', 'Model to use')
+  .option('-q, --quiet', 'Non-interactive: print response and exit (pipe-friendly)')
+  .option('-c, --continue', 'Continue from last session snapshot')
   .option('--safe', 'Enable safe mode (blocks dangerous commands)', false)
   .option('-v, --verbose', 'Show tool call details')
-  .action(async (options) => {
+  .option('--system-prompt <text>', 'Override system prompt')
+  .option('--append-system-prompt <text>', 'Append text to the system prompt')
+  .option('--output-format <fmt>', 'Output format: text | stream-json | json', 'text')
+  .option('--language <lang>', 'Response language (e.g. Chinese, English)')
+  .option('--cwd <path>', 'Set working directory')
+  .option('--approval-mode <mode>', 'Approval mode: default | autoEdit | yolo', 'default')
+  .action(async (promptArg: string | undefined, options: {
+    domain: string; model?: string; quiet?: boolean; continue?: boolean;
+    safe: boolean; verbose?: boolean; systemPrompt?: string;
+    appendSystemPrompt?: string; outputFormat?: string;
+    language?: string; cwd?: string; approvalMode?: string;
+  }) => {
+    if (options.cwd) process.chdir(options.cwd);
     validateDomain(options.domain);
-    printBanner();
-    // If a new version was pulled and compiled above, show the restart banner now.
-    if (_hasUpdate) printUpdateBanner();
 
-    // Auto-detect free models if no explicit model specified
-    let resolvedModel = options.model;
+    let resolvedModel = options.model ?? '';
     if (!resolvedModel) {
-      const summary = await modelManager.autoSelectFreeModel(false);
+      await modelManager.autoSelectFreeModel(options.quiet ?? false);
       resolvedModel = modelManager.getCurrentModel('main');
-      // Print summary (only first line — the selected model)
-      const firstLine = summary.split('\n')[0];
-      console.log(chalk.cyan(`\n${firstLine}\n`));
     } else {
       validateModel(resolvedModel);
     }
 
+    // --quiet (-q): one-shot non-interactive mode
+    if (options.quiet && promptArg) {
+      const agent = new AgentCore({
+        domain: options.domain, model: resolvedModel,
+        stream: true, verbose: false, safeMode: options.safe,
+        systemPromptOverride: options.systemPrompt,
+        appendSystemPrompt: options.appendSystemPrompt,
+      });
+      await agent.initMCP().catch(() => {});
+      let finalPrompt = promptArg;
+      if (options.language) finalPrompt += `\n\nRespond in ${options.language}.`;
+      await agent.runStream(finalPrompt, (chunk) => process.stdout.write(chunk));
+      process.stdout.write('\n');
+      process.exit(0);
+    }
+
+    // Interactive mode
+    printBanner();
+    if (_hasUpdate) printUpdateBanner();
+    const summary = await modelManager.autoSelectFreeModel(true);
+    const firstLine = summary.split('\n')[0];
+    if (firstLine) console.log(chalk.cyan(`\n${firstLine}\n`));
+
     const agent = new AgentCore({
-      domain: options.domain,
-      model: resolvedModel,
-      stream: true,
-      verbose: options.verbose,
-      safeMode: options.safe,
+      domain: options.domain, model: resolvedModel,
+      stream: true, verbose: options.verbose ?? false, safeMode: options.safe,
+      systemPromptOverride: options.systemPrompt,
+      appendSystemPrompt: options.appendSystemPrompt,
     });
     await agent.initMCP().catch(() => {});
-    await runREPL(agent, options);
+    await runREPL(agent, options, {
+      initialPrompt: promptArg,
+      continueSession: options.continue ?? false,
+    });
   });
 
 // ── run ──────────────────────────────────────────────────
@@ -990,8 +1023,50 @@ program
     console.log(chalk.green(result));
   });
 
+// ── commit ─────────────────────────────────────────────── (aligns with flickcli commit)
+program
+  .command('commit')
+  .description('Generate and commit git changes with AI-generated message')
+  .option('-s, --stage', 'Stage all changes (git add -A) before generating')
+  .option('-c, --commit', 'Auto-commit without confirmation')
+  .option('--push', 'Push after commit')
+  .option('-n, --no-verify', 'Skip pre-commit hooks (--no-verify)')
+  .option('-m, --model <model>', 'Model to use')
+  .option('--language <lang>', 'Commit message language (e.g. Chinese, English)')
+  .option('--copy', 'Copy message to clipboard')
+  .option('--follow-style', 'Infer commit style from recent commits')
+  .action(async (opts) => {
+    const { runCommit } = await import('./commit.js');
+    await runCommit({
+      stage: opts.stage,
+      commit: opts.commit,
+      push: opts.push,
+      noVerify: opts.noVerify === false,
+      model: opts.model,
+      language: opts.language,
+      copy: opts.copy,
+      followStyle: opts.followStyle,
+    });
+  });
+
+// ── log ────────────────────────────────────────────────── (aligns with flickcli log)
+program
+  .command('log')
+  .description('Show session history')
+  .option('-n <count>', 'Number of sessions to show (default: 10)', '10')
+  .option('--json', 'Output as JSON')
+  .option('--id <id>', 'Filter by session ID')
+  .action(async (opts) => {
+    const { runLog } = await import('./log.js');
+    runLog({ n: opts.n, json: opts.json, id: opts.id });
+  });
+
 // ── REPL ─────────────────────────────────────────────────
-async function runREPL(agent: AgentCore, options: { domain: string; verbose: boolean }) {
+async function runREPL(
+  agent: AgentCore,
+  options: { domain: string; verbose?: boolean },
+  extra: { initialPrompt?: string; continueSession?: boolean } = {},
+) {
   const { readFileSync: fsReadFileSync, existsSync: fsExistsSync } = await import('fs');
   const hookRunner = new HookRunner(process.cwd());
   const { loadLastSnapshot, saveSnapshot, formatAge } = await import('../core/memory/session-snapshot.js');
@@ -1031,7 +1106,14 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
 
   // ── Welcome line (CodeFlicker style: short, with examples) ─────────────
   const lastSnap = loadLastSnapshot();
-  if (lastSnap && lastSnap.messages.length >= 2) {
+
+  // --continue (-c): restore last session automatically
+  if (extra.continueSession && lastSnap && lastSnap.messages.length >= 2) {
+    agent.setHistory(lastSnap.messages);
+    process.stdout.write(
+      chalk.green(`  ✓ Resumed session from ${formatAge(lastSnap.savedAt)} (${lastSnap.messages.length} messages)`) + '\n',
+    );
+  } else if (lastSnap && lastSnap.messages.length >= 2) {
     process.stdout.write(
       chalk.dim(`  Session from ${formatAge(lastSnap.savedAt)} available`) +
       chalk.dim(` · /resume to restore`) + '\n',
@@ -1052,6 +1134,12 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
   const customCmds = hookRunner.listSlashCommands();
   if (customCmds.length > 0) {
     process.stdout.write(chalk.dim(`  Custom: ${customCmds.map((c) => c.command).join('  ')}\n\n`));
+  }
+
+  // ── initialPrompt: send first message automatically ─────────────────────
+  if (extra.initialPrompt) {
+    // Simulate a line input so the REPL processes it naturally
+    setTimeout(() => rl.emit('line', extra.initialPrompt!), 100);
   }
 
   rl.prompt();
