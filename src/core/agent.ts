@@ -26,6 +26,12 @@ import {
   proxyCapturesTool, proxyMockTool, proxyMockListTool, proxyMockClearTool, proxyClearTool,
 } from './tools/productivity/proxy-tools.js';
 import { curlExecuteTool } from './tools/productivity/curl-tool.js';
+import {
+  terminalSendTool,
+  terminalReadTool,
+  terminalExecTool,
+  terminalListTool,
+} from './tools/productivity/terminal-ipc-tool.js';
 import { redisProbeTool } from './tools/productivity/redis-probe.js';
 import { databaseQueryTool } from './tools/productivity/database-query.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
@@ -215,6 +221,15 @@ export class AgentCore {
     this.registry.register(curlExecuteTool);
     this.registry.register(redisProbeTool);
     this.registry.register(databaseQueryTool);
+
+    // Terminal IPC tools — borrow existing terminal sessions for remote access (kstack #15377)
+    // Supports WezTerm / tmux / Kitty / iTerm2 backends (auto-detected)
+    this.registry.registerMany([
+      terminalListTool,
+      terminalSendTool,
+      terminalReadTool,
+      terminalExecTool,
+    ]);
 
     // s07 — persistent task board (+ s11 claim)
     this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
