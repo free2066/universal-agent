@@ -33,11 +33,23 @@ export interface ParameterSchema {
   required?: string[];
 }
 
+/** Claude extended-thinking budget levels */
+export type ThinkingLevel = 'low' | 'medium' | 'high';
+
+/** Budget tokens per level (aligns with Anthropic docs) */
+export const THINKING_BUDGETS: Record<ThinkingLevel, number> = {
+  low:    1_024,
+  medium: 8_000,
+  high:   16_000,
+};
+
 export interface ChatOptions {
   systemPrompt: string;
   messages: Message[];
   tools?: ToolDefinition[];
   stream?: boolean;
+  /** Claude extended-thinking level (only applied for claude-* models) */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /**

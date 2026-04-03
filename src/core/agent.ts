@@ -93,6 +93,8 @@ export interface AgentOptions {
   systemPromptOverride?: string;
   /** Append extra text to the system prompt */
   appendSystemPrompt?: string;
+  /** Claude extended-thinking level: 'low' | 'medium' | 'high' */
+  thinkingLevel?: 'low' | 'medium' | 'high';
 }
 
 export class AgentCore {
@@ -115,6 +117,8 @@ export class AgentCore {
   private _systemPromptOverride: string | null = null;
   /** Appended text for --append-system-prompt option */
   private _appendSystemPrompt: string | null = null;
+  /** Extended-thinking level for Claude models ('low' | 'medium' | 'high') */
+  private _thinkingLevel: 'low' | 'medium' | 'high' | undefined = undefined;
   /** Accumulated [UNCERTAIN] items across the session (kstack article #15310 confidence mechanism) */
   private uncertainItems: string[] = [];
   /**
@@ -147,6 +151,8 @@ export class AgentCore {
     this.safeMode = options.safeMode ?? false;
     if (options.systemPromptOverride) this._systemPromptOverride = options.systemPromptOverride;
     if (options.appendSystemPrompt) this._appendSystemPrompt = options.appendSystemPrompt;
+    if (options.thinkingLevel) this._thinkingLevel = options.thinkingLevel;
+    if (options.thinkingLevel) this._thinkingLevel = options.thinkingLevel;
     if (this.safeMode) process.env.AGENT_SAFE_MODE = '1';
 
     // Set model on manager.
@@ -590,6 +596,7 @@ export class AgentCore {
           messages: this.history,
           tools,
           stream: false,
+          thinkingLevel: this._thinkingLevel,
         };
         // ── API Rate-limit Retry (kstack #15375: AGENT_UNATTENDED_RETRY) ──────────
         // Wrap LLM calls with 429/529 rate-limit back-pressure retry.

@@ -5,6 +5,8 @@ import type {
   ChatOptions,
   ChatResponse,
   Message,
+  ThinkingLevel,
+  THINKING_BUDGETS,
 } from './types.js';
 
 // ──────────────────────────────────────────
@@ -234,16 +236,22 @@ class AnthropicClient implements LLMClient {
   async chat(options: ChatOptions): Promise<ChatResponse> {
     const messages = this.convertMessages(options.messages);
     const hasTools = (options.tools?.length ?? 0) > 0;
-    // Respect profile.maxTokens when available (falls back to 8192 for compatibility).
-    // modelManager may not be available here (llm-client has no hard dep on it), so we
-    // read from the environment variable ANTHROPIC_MAX_TOKENS as a soft override.
     const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
+    const thinking = options.thinkingLevel;
+    const budgets: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
+    const budgetTokens = thinking ? budgets[thinking] ?? 1024 : undefined;
+    // Extended thinking requires a higher max_tokens (must exceed budget_tokens)
+    const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
-    const response = await this.client.messages.create({
+    const msg = await this.client.messages.create({
       model: this.model,
-      max_tokens: maxTokens,
+      max_tokens: effectiveMax,
       system: options.systemPrompt,
       messages,
+      ...(budgetTokens ? {
+        thinking: { type: 'enabled', budget_tokens: budgetTokens },
+        betas: ['interleaved-thinking-2025-05-14'],
+      } : {}),
       ...(hasTools ? {
         tools: options.tools!.map((t) => ({
           name: t.name,
@@ -251,10 +259,10 @@ class AnthropicClient implements LLMClient {
           input_schema: t.parameters as Anthropic.Tool['input_schema'],
         })),
       } : {}),
-    });
+    } as Parameters<typeof this.client.messages.create>[0]) as Anthropic.Message;
 
-    const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use') as Anthropic.ToolUseBlock[];
-    const textBlocks = response.content.filter((b) => b.type === 'text') as Anthropic.TextBlock[];
+    const toolUseBlocks = msg.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+    const textBlocks    = msg.content.filter((b): b is Anthropic.TextBlock    => b.type === 'text');
 
     if (toolUseBlocks.length) {
       return {
@@ -274,16 +282,26 @@ class AnthropicClient implements LLMClient {
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
     const messages = this.convertMessages(options.messages);
     const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
+    const thinking = options.thinkingLevel;
+    const budgets: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
+    const budgetTokens = thinking ? budgets[thinking] ?? 1024 : undefined;
+    const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
+
     const stream = this.client.messages.stream({
       model: this.model,
-      max_tokens: maxTokens,
+      max_tokens: effectiveMax,
       system: options.systemPrompt,
       messages,
-    });
+      ...(budgetTokens ? {
+        thinking: { type: 'enabled', budget_tokens: budgetTokens },
+        betas: ['interleaved-thinking-2025-05-14'],
+      } : {}),
+    } as Parameters<typeof this.client.messages.stream>[0]);
     for await (const event of stream) {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
         onChunk(event.delta.text);
       }
+      // thinking_delta — we don't stream it to user, but it still counts toward context
     }
   }
 

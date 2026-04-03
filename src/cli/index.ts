@@ -23,7 +23,7 @@ import { codeInspectorTool } from '../core/tools/code/code-inspector.js';
 import { selfHealTool } from '../core/tools/code/self-heal.js';
 import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui.js';
-import { initStatusBar, updateStatusBar, clearStatusBar } from './statusbar.js';
+import { initStatusBar, updateStatusBar, clearStatusBar, type ThinkingLevel } from './statusbar.js';
 import { HookRunner } from '../core/hooks.js';
 
 // Load env — ~/.uagent/.env is the primary config store (override: true so it
@@ -55,6 +55,7 @@ program
   .option('-v, --verbose', 'Show tool call details')
   .option('--system-prompt <text>', 'Override system prompt')
   .option('--append-system-prompt <text>', 'Append text to the system prompt')
+  .option('--thinking <level>', 'Claude extended-thinking level: low | medium | high')
   .option('--output-format <fmt>', 'Output format: text | stream-json | json', 'text')
   .option('--language <lang>', 'Response language (e.g. Chinese, English)')
   .option('--cwd <path>', 'Set working directory')
@@ -62,7 +63,7 @@ program
   .action(async (promptArg: string | undefined, options: {
     domain: string; model?: string; quiet?: boolean; continue?: boolean;
     safe: boolean; verbose?: boolean; systemPrompt?: string;
-    appendSystemPrompt?: string; outputFormat?: string;
+    appendSystemPrompt?: string; thinking?: string; outputFormat?: string;
     language?: string; cwd?: string; approvalMode?: string;
   }) => {
     if (options.cwd) process.chdir(options.cwd);
@@ -83,6 +84,7 @@ program
         stream: true, verbose: false, safeMode: options.safe,
         systemPromptOverride: options.systemPrompt,
         appendSystemPrompt: options.appendSystemPrompt,
+        thinkingLevel: options.thinking as 'low' | 'medium' | 'high' | undefined,
       });
       await agent.initMCP().catch(() => {});
       let finalPrompt = promptArg;
@@ -104,6 +106,7 @@ program
       stream: true, verbose: options.verbose ?? false, safeMode: options.safe,
       systemPromptOverride: options.systemPrompt,
       appendSystemPrompt: options.appendSystemPrompt,
+      thinkingLevel: options.thinking as 'low' | 'medium' | 'high' | undefined,
     });
     await agent.initMCP().catch(() => {});
     await runREPL(agent, options, {
@@ -1201,7 +1204,7 @@ async function runREPL(
     sessionId: SHORT_ID,
     estimatedTokens: 0,
     contextLength: 128000,
-    isThinking: false,
+    isThinking: 'none' as const,
   });
 
   // CodeFlicker-style prompt: dim domain tag + bold ❯
@@ -1847,7 +1850,7 @@ async function runREPL(
       const spinnerFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
       let spinIdx = 0;
       let firstChunk = true;
-      updateStatusBar({ isThinking: true });
+      updateStatusBar({ isThinking: 'low' });
       const spinTimer = setInterval(() => {
         process.stdout.write(`\r${chalk.cyan(spinnerFrames[spinIdx++ % spinnerFrames.length])} ${chalk.dim('Thinking...')}`);
       }, 120);
