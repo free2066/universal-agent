@@ -17,6 +17,14 @@ import { readDocTool, docSearchTool, fetchDocTool } from './tools/productivity/d
 import { scriptSaveTool, scriptRunTool, scriptListTool } from './tools/productivity/script-tools.js';
 import { testRunnerTool } from './tools/productivity/test-runner.js';
 import { envProbeTool } from './tools/productivity/env-probe.js';
+import {
+  wsServerStartTool, wsServerStopTool, wsServerStatusTool,
+  wsBroadcastTool, wsInboxTool, wsMockInjectTool,
+} from './tools/productivity/ws-mcp-server.js';
+import {
+  proxyStartTool, proxyStopTool, proxyStatusTool,
+  proxyCapturesTool, proxyMockTool, proxyMockListTool, proxyMockClearTool, proxyClearTool,
+} from './tools/productivity/proxy-tools.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
 import { backgroundRunTool, checkBackgroundTool } from './tools/productivity/background-tools.js';
 import { backgroundManager } from './background-manager.js';
@@ -182,6 +190,18 @@ export class AgentCore {
 
     // EnvProbe — system environment sensing: ports, processes, system info, deps (kstack #15370)
     this.registry.register(envProbeTool);
+
+    // WebSocket MCP Server — long-connection tools (kstack #15370: 长链接 MCP)
+    this.registry.registerMany([
+      wsServerStartTool, wsServerStopTool, wsServerStatusTool,
+      wsBroadcastTool, wsInboxTool, wsMockInjectTool,
+    ]);
+
+    // HTTP Proxy / Traffic Capture — packet capture + mock tools (kstack #15370: 抓包 MCP)
+    this.registry.registerMany([
+      proxyStartTool, proxyStopTool, proxyStatusTool,
+      proxyCapturesTool, proxyMockTool, proxyMockListTool, proxyMockClearTool, proxyClearTool,
+    ]);
 
     // s07 — persistent task board (+ s11 claim)
     this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
