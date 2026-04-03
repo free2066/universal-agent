@@ -339,6 +339,11 @@ export class AgentCore {
     return [...this.history];
   }
 
+  /** Restore a saved session — replaces current (empty) history with saved messages. */
+  setHistory(messages: Message[]): void {
+    this.history = [...messages];
+  }
+
   async run(prompt: string, filePath?: string): Promise<string> {
     const chunks: string[] = [];
     await this.runStream(prompt, (chunk) => chunks.push(chunk), filePath);

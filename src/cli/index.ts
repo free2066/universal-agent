@@ -990,15 +990,33 @@ program
 async function runREPL(agent: AgentCore, options: { domain: string; verbose: boolean }) {
   const { readFileSync: fsReadFileSync, existsSync: fsExistsSync } = await import('fs');
   const hookRunner = new HookRunner(process.cwd());
+  const { loadLastSnapshot, saveSnapshot, formatAge } = await import('../core/memory/session-snapshot.js');
+
+  // Unique session ID for this run (used for snapshot file name)
+  const SESSION_ID = `session-${Date.now()}`;
+
+  const makePrompt = (domain: string, model?: string) =>
+    chalk.bgCyan.black(` ${domain} `) +
+    (model ? chalk.gray(` ${model.split('/').pop()?.slice(0, 20) ?? model} `) : ' ') +
+    chalk.bold.green('›') + ' ';
 
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
-    prompt: chalk.cyan(`[${options.domain}] `) + chalk.green('❯ '),
+    prompt: makePrompt(options.domain),
   });
 
-  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /agents, /team, /inbox, /tasks, /inspect, /purify, /image <path>, /hooks, /insights, /exit\n'));
+  // ── Session resume hint ──────────────────────────────────────────────────
+  const lastSnap = loadLastSnapshot();
+  if (lastSnap && lastSnap.messages.length >= 2) {
+    process.stdout.write(
+      chalk.cyan(`  💾 上次会话 (${formatAge(lastSnap.savedAt)}, ${lastSnap.messages.length} 条消息)`) +
+      chalk.gray(` — 输入 /resume 恢复\n\n`),
+    );
+  }
+
+  console.log(chalk.gray('Type your request, or /help, /cost, /model <name>, /domain <name>, /resume, /agents, /team, /inbox, /tasks, /inspect, /purify, /image <path>, /hooks, /insights, /exit\n'));
 
   // Show custom hook slash commands in the welcome line if any
   const customCmds = hookRunner.listSlashCommands();
@@ -1017,6 +1035,8 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       console.log(chalk.yellow('\nGoodbye! 👋'));
       // Fire on_session_end hooks
       await hookRunner.run({ event: 'on_session_end', cwd: process.cwd() }).catch(() => {});
+      const h = agent.getHistory();
+      if (h.length >= 2) saveSnapshot(SESSION_ID, h);
       process.exit(0);
     }
     // /image — multimodal image input (Codeflicker update: image interaction)
@@ -1165,18 +1185,28 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       console.log(chalk.gray('       uagent limits            — view/set limits\n'));
       rl.prompt(); return;
     }
+    if (input === '/resume') {
+      const snap = loadLastSnapshot();
+      if (snap && snap.messages.length >= 2) {
+        agent.setHistory(snap.messages);
+        console.log(chalk.green(`✓ 已恢复上次会话 (${snap.messages.length} 条消息, ${formatAge(snap.savedAt)})\n`));
+      } else {
+        console.log(chalk.gray('  没有可恢复的会话快照\n'));
+      }
+      rl.prompt(); return;
+    }
     if (input.startsWith('/model')) {
       const parts = input.split(/\s+/);
       if (parts.length === 1) {
         // Cycle
         const next = modelManager.cycleMainModel();
         agent.setModel(next);
-        rl.setPrompt(chalk.cyan(`[${options.domain}|${next}] `) + chalk.green('❯ '));
+        rl.setPrompt(makePrompt(options.domain, next));
         console.log(chalk.green(`✓ Model → ${next}`));
       } else {
         const m = parts[1];
         agent.setModel(m);
-        rl.setPrompt(chalk.cyan(`[${options.domain}|${m}] `) + chalk.green('❯ '));
+        rl.setPrompt(makePrompt(options.domain, m));
         console.log(chalk.green(`✓ Model → ${m}`));
       }
       rl.prompt(); return;
@@ -1185,7 +1215,7 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       const domain = input.replace('/domain ', '').trim();
       agent.setDomain(domain);
       options.domain = domain;
-      rl.setPrompt(chalk.cyan(`[${domain}] `) + chalk.green('❯ '));
+      rl.setPrompt(makePrompt(domain));
       console.log(chalk.green(`✓ Domain → ${domain}`));
       rl.prompt(); return;
     }
@@ -1557,14 +1587,31 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
       if (agentWithImage._pendingImage) {
         const imgDataUrl = agentWithImage._pendingImage;
         delete agentWithImage._pendingImage;
-        rl.setPrompt(chalk.cyan(`[${options.domain}] `) + chalk.green('❯ '));
+        rl.setPrompt(makePrompt(options.domain));
         // Prefix image context to prompt
         finalInput = `[Image attached — analyze this image]\n${finalInput}\n\n[Image data: ${imgDataUrl.slice(0, 100)}...]`;
         console.log(chalk.gray('  (Image context attached to this request)'));
       }
 
-      await agent.runStream(finalInput, (chunk) => process.stdout.write(chunk));
-      process.stdout.write('\n\n');
+      // ── Thinking spinner ──────────────────────────────────────────────
+      const spinnerFrames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+      let spinIdx = 0;
+      let firstChunk = true;
+      const spinTimer = setInterval(() => {
+        process.stdout.write(`\r${chalk.cyan(spinnerFrames[spinIdx++ % spinnerFrames.length])} ${chalk.gray('Thinking...')}`);
+      }, 120);
+
+      process.stdout.write(chalk.gray('\n' + '─'.repeat(56) + '\n'));
+      await agent.runStream(finalInput, (chunk) => {
+        if (firstChunk) {
+          clearInterval(spinTimer);
+          process.stdout.write('\r' + ' '.repeat(20) + '\r');
+          firstChunk = false;
+        }
+        process.stdout.write(chunk);
+      });
+      clearInterval(spinTimer);
+      process.stdout.write('\n' + chalk.gray('─'.repeat(56)) + '\n\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isAuthError =
@@ -1606,6 +1653,10 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     // This is fire-and-forget — we catch all errors so exit is never blocked.
     // Only runs if the session has ≥ 4 turns (too short to be useful).
     const history = agent.getHistory();
+    // Save session snapshot for /resume next time
+    if (history.length >= 2) {
+      try { saveSnapshot(SESSION_ID, history); } catch { /* non-fatal */ }
+    }
     if (history.length >= 4) {
       (async () => {
         try {

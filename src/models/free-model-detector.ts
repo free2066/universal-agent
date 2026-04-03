@@ -271,30 +271,36 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
   const wqKey = process.env.WQ_API_KEY;
   const wqModel = process.env.UAGENT_MODEL;
   const wqBase = process.env.OPENAI_BASE_URL;
+  // WQ_MODELS 支持逗号分隔多个万擎 endpoint（/model 循环切换）
+  const wqModelsRaw = process.env.WQ_MODELS || '';
+  const extraModels = wqModelsRaw.split(',').map(s => s.trim()).filter(s => s && !s.startsWith('ep-xxxxxx'));
+
   // 万擎识别条件：有 WQ_API_KEY，且 UAGENT_MODEL 已填（不是占位符），或者 OPENAI_BASE_URL 指向万擎
   const isWanqing = wqKey && (
     (wqModel && !wqModel.startsWith('ep-xxxxxx')) ||
     (wqBase && (wqBase.includes('wanqing') || wqBase.includes('wanqing.internal')))
   );
   if (isWanqing) {
-    const modelId = wqModel && !wqModel.startsWith('ep-xxxxxx') ? wqModel : 'wanqing-default';
-    if (!silent) process.stdout.write(`✅ Using 万擎 (Wanqing) internal API: ${modelId}\n`);
-    const model: RankedFreeModel = {
-      id: modelId,
-      name: `万擎: ${modelId}`,
-      score: 100,
+    const primaryId = wqModel && !wqModel.startsWith('ep-xxxxxx') ? wqModel : 'wanqing-default';
+    // 合并主模型 + WQ_MODELS 里的额外模型，去重
+    const allIds = [primaryId, ...extraModels.filter(id => id !== primaryId)];
+    if (!silent) process.stdout.write(`✅ Using 万擎 (Wanqing) internal API: ${primaryId}${allIds.length > 1 ? ` (+${allIds.length - 1} more)` : ''}\n`);
+    const models: RankedFreeModel[] = allIds.map((id, i) => ({
+      id,
+      name: `万擎: ${id}`,
+      score: 100 - i,   // 第一个得分最高，作为默认
       contextLength: 128000,
       supportsTools: true,
       isFree: true,
-    };
+    }));
     return {
       found: true,
-      best: model,
-      bestQuick: model,
-      available: [model],
+      best: models[0],
+      bestQuick: models[0],
+      available: models,
       source: 'wanqing',
       anonymous: false,
-      totalFreeModels: 1,
+      totalFreeModels: models.length,
     };
   }
 

@@ -192,6 +192,6 @@ export async function selectTools(
     ...candidates.filter((t) => selectedNames!.has(t.name)),
   ];
 
-  log.info(`Tool selection: ${tools.length} → ${selected.length} tools`);
+  log.debug(`Tool selection: ${tools.length} → ${selected.length} tools`);
   return selected;
 }
