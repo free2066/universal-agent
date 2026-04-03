@@ -1201,11 +1201,50 @@ async function runREPL(agent: AgentCore, options: { domain: string; verbose: boo
     if (input.startsWith('/model')) {
       const parts = input.split(/\s+/);
       if (parts.length === 1) {
-        // Cycle
-        const next = modelManager.cycleMainModel();
-        agent.setModel(next);
-        rl.setPrompt(makePrompt(options.domain, next));
-        console.log(chalk.green(`✓ Model → ${next}`));
+        // Interactive model picker
+        rl.pause();
+        const { showModelPicker, friendlyName } = await import('./model-picker.js');
+
+        const profiles = modelManager.listProfiles();
+        const currentModel = modelManager.getCurrentModel('main');
+
+        // 解析 WQ_MODELS 里的自定义显示名 (格式: ep-xxx:显示名称,ep-yyy:另一个名称)
+        const wqNameMap: Record<string, string> = {};
+        (process.env.WQ_MODELS || '').split(',').forEach(entry => {
+          const [id, ...nameParts] = entry.trim().split(':');
+          if (nameParts.length > 0 && id && !id.startsWith('ep-xxxxxx')) {
+            wqNameMap[id.trim()] = nameParts.join(':').trim();
+          }
+        });
+
+        // Infer friendly provider name from model ID
+        const providerLabel = (id: string) => {
+          if (id.startsWith('ep-') || id.startsWith('api-')) return '万擎';
+          if (id.startsWith('openrouter:')) return 'OpenRouter';
+          if (id.startsWith('groq:')) return 'Groq';
+          if (id.startsWith('gemini')) return 'Gemini';
+          if (id.startsWith('claude')) return 'Anthropic';
+          if (id.startsWith('gpt') || id.startsWith('o1') || id.startsWith('o3') || id.startsWith('o4')) return 'OpenAI';
+          if (id.startsWith('deepseek')) return 'DeepSeek';
+          if (id.startsWith('qwen')) return 'Qwen';
+          return 'Other';
+        };
+
+        const items = profiles.map(p => ({
+          id: p.name,
+          // 优先用 WQ_MODELS 里的自定义名，否则用内置映射，最后 fallback 到 ID
+          label: wqNameMap[p.name] ?? friendlyName(p.name),
+          provider: providerLabel(p.name),
+          detail: p.modelName ?? p.name,
+        }));
+
+        const selected = await showModelPicker(items, currentModel, [currentModel]);
+        if (selected) {
+          agent.setModel(selected);
+          rl.setPrompt(makePrompt(options.domain, selected));
+          process.stdout.write(chalk.green(`✓ Model → ${selected}\n\n`));
+        }
+        rl.resume();
       } else {
         const m = parts[1];
         agent.setModel(m);
