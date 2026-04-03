@@ -1,24 +1,17 @@
 /**
- * statusbar.ts — Bottom-pinned status bar, CodeFlicker-style
+ * statusbar.ts — Status info embedded in readline prompt (reliable approach)
  *
- * Layout (single line at very bottom of terminal):
- *   [model | thinking: low] | project-name | 1.2K | 76% | ID a1b2c3d4
+ * Instead of fighting readline with ANSI cursor tricks, we expose a function
+ * that builds the prompt string containing the status info. The caller
+ * (index.ts) calls rl.setPrompt(buildPrompt(...)) + rl.prompt() whenever
+ * state changes.  This way the status is always shown at the input line,
+ * which readline already manages correctly.
  *
- * ── Implementation strategy ──────────────────────────────────────────────────
+ * Visual layout (the prompt itself):
+ *   [GLM-5] | kwaibi | 1.2K | 76% | ID a1b2c3d4
+ *   [auto] ❯
  *
- * We use the ANSI "Set Scrolling Region" escape to permanently reserve the
- * last row of the terminal for the status bar:
- *
- *   \x1b[1;{rows-1}r   ← limit scroll region to rows 1 … (rows-1)
- *
- * After this, ALL readline output, agent output, spinners etc. can only
- * scroll within the top (rows-1) rows.  The last row is untouched by the
- * kernel scroll and stays as our status bar forever.
- *
- * On resize we recalculate the scroll region and redraw.
- * On exit we restore the full scroll region (\x1b[r) and clear the bar.
- *
- * This is the same technique used by vim, tmux, htop, etc.
+ * The status line is printed ABOVE the ❯ cursor line as part of the prompt.
  */
 
 import chalk from 'chalk';
@@ -45,84 +38,71 @@ let _state: StatusBarState = {
 };
 
 let _enabled = false;
+/** Called by index.ts whenever the prompt needs to be refreshed */
+let _onUpdate: (() => void) | null = null;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function initStatusBar(initialState: Partial<StatusBarState>): void {
+/** Call once at startup. onUpdate is called whenever state changes so the
+ *  caller can do rl.setPrompt(buildStatusPrompt(...)) + rl.prompt() */
+export function initStatusBar(
+  initialState: Partial<StatusBarState>,
+  onUpdate?: () => void,
+): void {
   _state = { ..._state, ...initialState };
-  _enabled = !!(process.stdout.isTTY);
-  if (!_enabled) return;
-
-  _applyScrollRegion();
-  _drawBar();
-
-  process.stdout.on('resize', () => {
-    if (!_enabled) return;
-    _applyScrollRegion();
-    _drawBar();
-  });
+  _enabled = true; // always enabled — no TTY tricks needed
+  _onUpdate = onUpdate ?? null;
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   _state = { ..._state, ...patch };
-  if (_enabled) _drawBar();
+  if (_enabled && _onUpdate) _onUpdate();
 }
 
+/** No-op — kept for API compatibility */
 export function clearStatusBar(): void {
-  if (!_enabled) return;
   _enabled = false;
-  const rows = process.stdout.rows || 24;
-  process.stdout.write(
-    `\x1b[r` +              // restore full scroll region
-    `\x1b7` +               // save cursor
-    `\x1b[${rows};1H` +     // go to last row
-    `\x1b[2K` +             // erase line
-    `\x1b8`,                // restore cursor
-  );
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Internal
-// ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Set the terminal scroll region to rows 1…(rows-1) so that normal output
- * can never overwrite the last row (our status bar).
+ * Build the full readline prompt string that contains both the status line
+ * and the input chevron.  Use this with rl.setPrompt().
  *
- * Also moves the cursor one line up if it is currently on the last row,
- * so readline won't try to write its prompt there.
+ * Example output (two lines joined by \n):
+ *   \x1b[2m [GLM-5] | project | 1.2K | 0% | ID abc12345\x1b[0m
+ *   \x1b[2m[auto]\x1b[0m \x1b[1;32m❯\x1b[0m 
  */
-function _applyScrollRegion(): void {
-  const rows = process.stdout.rows || 24;
-  const scrollBottom = Math.max(1, rows - 1);
+export function buildStatusPrompt(domain: string, model?: string): string {
+  if (!_enabled) return _plainPrompt(domain, model);
 
-  process.stdout.write(
-    `\x1b[1;${scrollBottom}r` + // set scroll region: row 1 to row (rows-1)
-    `\x1b7` +                   // save cursor
-    `\x1b[${scrollBottom};1H` + // move cursor to last line of scroll region
-    `\x1b8`,                    // restore cursor
-  );
+  const statusLine = _buildStatusLine();
+  const inputLine  = _plainPrompt(domain, model);
+  return statusLine + '\n' + inputLine;
 }
 
-function _drawBar(): void {
-  if (!_enabled) return;
-  const cols = process.stdout.columns || 80;
-  const rows = process.stdout.rows    || 24;
+/** Just the ❯ line, no status */
+function _plainPrompt(domain: string, model?: string): string {
+  const domainTag = chalk.dim(`[${domain}]`);
+  const modelTag  = model
+    ? chalk.dim(` ${(model.split('/').pop() ?? model).slice(0, 22)}`)
+    : '';
+  return `${domainTag}${modelTag} ${chalk.bold.green('❯')} `;
+}
 
+function _buildStatusLine(): string {
   const pct = _state.contextLength > 0
     ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
     : 0;
-  const pctCapped = Math.min(pct, 100);
-
+  const pctCapped   = Math.min(pct, 100);
   const projectName = basename(process.cwd());
   const modelShort  = (_state.model.split('/').pop() ?? _state.model).slice(0, 28);
   const tokensPart  = _fmtTokens(_state.estimatedTokens);
   const pctPart     = `${pctCapped}%`;
   const idPart      = _state.sessionId.slice(0, 8);
 
-  const colored =
+  return (
     chalk.dim(' [') +
     chalk.white(modelShort) +
     _thinkingLabel(_state.isThinking) +
@@ -135,32 +115,12 @@ function _drawBar(): void {
     chalk.dim(' | ') +
     chalk.bgHex('#7c3aed').white(' ID ') +
     ' ' +
-    chalk.dim(idPart) +
-    ' ';
-
-  const plainLen =
-    2 + modelShort.length +
-    _thinkingLabelPlain(_state.isThinking).length +
-    4 + projectName.length +
-    3 + tokensPart.length +
-    3 + pctPart.length +
-    3 + 4 + 1 + idPart.length + 1;
-
-  const pad  = Math.max(0, cols - plainLen);
-  const line = colored + ' '.repeat(pad);
-
-  // Draw on the LAST row (outside the scroll region — never overwritten)
-  process.stdout.write(
-    `\x1b7` +            // save cursor
-    `\x1b[${rows};1H` +  // jump to last row col 1
-    `\x1b[2K` +          // erase line
-    line +
-    `\x1b8`,             // restore cursor (back inside scroll region)
+    chalk.dim(idPart)
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pure helpers
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 function _thinkingLabel(t: ThinkingLevel): string {
@@ -168,14 +128,6 @@ function _thinkingLabel(t: ThinkingLevel): string {
   if (t === true  || t === 'low')  return chalk.dim(' | thinking: ') + chalk.dim('low');
   if (t === 'medium')              return chalk.dim(' | thinking: ') + chalk.yellow('medium');
   if (t === 'high')                return chalk.dim(' | thinking: ') + chalk.magenta('high');
-  return '';
-}
-
-function _thinkingLabelPlain(t: ThinkingLevel): string {
-  if (t === false || t === 'none') return '';
-  if (t === true  || t === 'low')  return ' | thinking: low';
-  if (t === 'medium')              return ' | thinking: medium';
-  if (t === 'high')                return ' | thinking: high';
   return '';
 }
 

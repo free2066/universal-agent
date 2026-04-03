@@ -23,7 +23,7 @@ import { codeInspectorTool } from '../core/tools/code/code-inspector.js';
 import { selfHealTool } from '../core/tools/code/self-heal.js';
 import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui.js';
-import { initStatusBar, updateStatusBar, clearStatusBar, type ThinkingLevel } from './statusbar.js';
+import { initStatusBar, updateStatusBar, clearStatusBar, buildStatusPrompt, type ThinkingLevel } from './statusbar.js';
 import { HookRunner } from '../core/hooks.js';
 
 // Load env — ~/.uagent/.env is the primary config store (override: true so it
@@ -1165,24 +1165,22 @@ async function runREPL(
   // Short 8-char ID for display (last 8 hex chars of timestamp)
   const SHORT_ID = Date.now().toString(16).slice(-8);
 
-  // ── Status bar init ────────────────────────────────────────────────────
+  // ── Status bar + prompt setup ────────────────────────────────────────────
   const { estimateHistoryTokens } = await import('../core/context/context-compressor.js').catch(() => ({ estimateHistoryTokens: () => 0 }));
   const currentModel = modelManager.getCurrentModel('main');
   const { friendlyName } = await import('./model-picker.js');
-  // ── 从 WQ_MODELS 解析自定义显示名（格式: ep-xxx:显示名,ep-yyy:名称）──────────
+  // 解析 WQ_MODELS 里的自定义显示名 (格式: ep-xxx:显示名,ep-yyy:名称)
   const _wqNameMap: Record<string, string> = {};
   (process.env.WQ_MODELS || '').split(',').forEach(entry => {
     const [id, ...nameParts] = entry.trim().split(':');
-    if (nameParts.length > 0 && id && !id.startsWith('ep-xxxxxx')) {
+    if (nameParts.length > 0 && id) {
       _wqNameMap[id.trim()] = nameParts.join(':').trim();
     }
   });
   const getModelDisplayName = (modelId: string) =>
     _wqNameMap[modelId] ?? friendlyName(modelId);
-  // ── 从 profile 读取真实 context window，否则 fallback 128K ─────────────────
   const _startProfile = modelManager.listProfiles().find(p => p.name === currentModel);
   const _startContextLen = _startProfile?.contextLength ?? 128000;
-  // 初始 token 估算（恢复会话时有历史记录，需算出来）
   const _initialTokens = (() => {
     try {
       const h = agent.getHistory();
@@ -1191,9 +1189,9 @@ async function runREPL(
         : 0;
     } catch { return 0; }
   })();
-  // 状态栏在 rl.prompt() 之后再 init，确保在所有欢迎文本之后渲染
-  // （defer 到微任务，避免被 readline 初始 prompt 覆盖）
-  const _doInitStatusBar = () => initStatusBar({
+
+  // Initialize statusbar state (no ANSI tricks — status is embedded in prompt)
+  initStatusBar({
     model: getModelDisplayName(currentModel),
     domain: options.domain,
     sessionId: SHORT_ID,
@@ -1202,19 +1200,20 @@ async function runREPL(
     isThinking: 'none' as const,
   });
 
-  // CodeFlicker-style prompt: dim domain tag + bold ❯
-  const makePrompt = (domain: string, model?: string) => {
-    const domainTag = chalk.dim(`[${domain}]`);
-    const modelTag = model
-      ? chalk.dim(` ${model.split('/').pop()?.slice(0, 22) ?? model}`) : '';
-    return `${domainTag}${modelTag} ${chalk.bold.green('❯')} `;
-  };
+  // makePrompt: builds the two-line prompt (status line + ❯ line)
+  const makePrompt = (domain: string, model?: string) =>
+    buildStatusPrompt(domain, model ?? getModelDisplayName(currentModel));
 
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
     prompt: makePrompt(options.domain),
+  });
+
+  // Whenever status changes, refresh the prompt (takes effect on next rl.prompt())
+  initStatusBar({}, () => {
+    rl.setPrompt(makePrompt(options.domain));
   });
 
   // ── Welcome line (CodeFlicker style: short, with examples) ─────────────
@@ -1256,10 +1255,6 @@ async function runREPL(
   }
 
   rl.prompt();
-  // 状态栏在 rl.prompt() 之后初始化：
-  // scroll region 方案不需要抢在前面，initStatusBar 会设置滚动区域，
-  // 最后一行天然不参与滚动，readline 无论怎么输出都不会覆盖状态栏。
-  _doInitStatusBar();
 
   rl.on('line', async (line) => {
     const input = line.trim();
@@ -1450,16 +1445,11 @@ async function runREPL(
         const selected = await showModelPicker(items, currentModel, [currentModel]);
         if (selected) {
           agent.setModel(selected);
-          rl.setPrompt(makePrompt(options.domain, selected));
-          // 持久化：下次启动仍使用该模型
           modelManager.setPointer('main', selected);
-          // 更新状态栏显示名，同步读取新模型的 context window
           const _newProfile = modelManager.listProfiles().find(p => p.name === selected);
           const _newCtxLen = _newProfile?.contextLength ?? 128000;
-          updateStatusBar({
-            model: getModelDisplayName(selected),
-            contextLength: _newCtxLen,
-          });
+          updateStatusBar({ model: getModelDisplayName(selected), contextLength: _newCtxLen });
+          rl.setPrompt(makePrompt(options.domain, getModelDisplayName(selected)));
           process.stdout.write(chalk.green(`  ✓ Model → ${getModelDisplayName(selected)} (${selected})`) + '\n\n');
         }
         rl.resume();
@@ -1474,6 +1464,7 @@ async function runREPL(
     if (input.startsWith('/domain ')) {
       const domain = input.replace('/domain ', '').trim();
       agent.setDomain(domain);
+      options.domain = domain;
       options.domain = domain;
       rl.setPrompt(makePrompt(domain));
       process.stdout.write(chalk.green(`  ✓ Domain → ${domain}`) + '\n\n');
@@ -1858,6 +1849,7 @@ async function runREPL(
       let spinIdx = 0;
       let firstChunk = true;
       updateStatusBar({ isThinking: 'low' });
+      rl.setPrompt(makePrompt(options.domain));
       const spinTimer = setInterval(() => {
         process.stdout.write(`\r${chalk.cyan(spinnerFrames[spinIdx++ % spinnerFrames.length])} ${chalk.dim('Thinking...')}`);
       }, 120);
@@ -1877,7 +1869,8 @@ async function runREPL(
         const h = agent.getHistory();
         const est = typeof estimateHistoryTokens === 'function' ? (estimateHistoryTokens as (h: unknown[]) => number)(h) : 0;
         updateStatusBar({ isThinking: 'none', estimatedTokens: est });
-      } catch { updateStatusBar({ isThinking: 'none' }); }
+        rl.setPrompt(makePrompt(options.domain));
+      } catch { updateStatusBar({ isThinking: 'none' }); rl.setPrompt(makePrompt(options.domain)); }
       process.stdout.write('\n\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
