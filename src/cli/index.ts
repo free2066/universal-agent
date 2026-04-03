@@ -645,35 +645,6 @@ mcpCmd.command('get <name>').description('Show detailed config for a specific MC
   console.log();
 });
 
-mcpCmd.command('get <name>').description('Show detailed config for a specific MCP server').action((name) => {
-  const mgr = new MCPManager();
-  const servers = mgr.listServers();
-  const s = servers.find((sv) => sv.name === name);
-  if (!s) {
-    console.error(chalk.red(`\n✗ Server "${name}" not found.`));
-    console.log(chalk.gray('  Run: uagent mcp list  — to see configured servers'));
-    process.exit(1);
-  }
-  console.log(chalk.yellow(`\n🔌 MCP Server: ${s.name}\n`));
-  console.log(`  Status:  ${s.enabled ? chalk.green('enabled') : chalk.red('disabled')}`);
-  console.log(`  Type:    ${chalk.cyan(s.type)}`);
-  if (s.command) console.log(`  Command: ${chalk.white(s.command)}`);
-  if (s.args?.length) console.log(`  Args:    ${s.args.join(' ')}`);
-  if (s.url) console.log(`  URL:     ${chalk.white(s.url)}`);
-  if (s.description) console.log(`  Desc:    ${chalk.gray(s.description)}`);
-  if (s.env && Object.keys(s.env).length > 0) {
-    console.log(`  Env:`);
-    for (const [k, v] of Object.entries(s.env)) {
-      const masked = /key|token|secret|pass/i.test(k) ? v.slice(0, 4) + '****' : v;
-      console.log(`    ${chalk.gray(k + '=')}${masked}`);
-    }
-  }
-  console.log();
-  console.log(chalk.gray('  uagent mcp test ' + name + '  — test connection'));
-  console.log(chalk.gray('  uagent mcp enable ' + name + ' / disable ' + name + '  — toggle'));
-  console.log();
-});
-
 mcpCmd.command('test [name]')
   .description('Test MCP server connection(s). Omit name to test all enabled servers.')
   .action(async (name?: string) => {
