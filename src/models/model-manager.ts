@@ -58,6 +58,7 @@ function inferProviderFromModelName(modelName: string): ModelProfile['provider']
 
 export class ModelManager {
   private profiles: Map<string, ModelProfile> = new Map();
+  private _userSelectedMain = false;
   private pointers: ModelPointers = {
     // Default to free-tier models. Override via `uagent models set main <model>` or env vars.
     // Free options (no credit card needed):
@@ -162,15 +163,12 @@ export class ModelManager {
         }
       }
       if (data.pointers) {
-        // Only merge recognised pointer keys — silently drop any stale / invalid keys
-        // that may have been written by older versions (fix f2).
-        // Also verify the pointer value resolves to a known profile (fix: stale pointer cleanup).
         const validKeys = new Set<string>(['main', 'task', 'compact', 'quick']);
         for (const [k, v] of Object.entries(data.pointers)) {
-          if (validKeys.has(k) && typeof v === 'string' && this.profiles.has(v)) {
+          if (validKeys.has(k) && typeof v === 'string' && v.length > 0) {
             (this.pointers as unknown as Record<string, string>)[k] = v;
+            if (k === 'main') this._userSelectedMain = true;
           }
-          // Silently skip invalid/stale pointer values — defaults (set in constructor) remain
         }
       }
     } catch { /* ignore */ }
@@ -259,6 +257,7 @@ export class ModelManager {
       });
     }
     this.pointers[pointer] = modelName;
+    if (pointer === 'main') this._userSelectedMain = true;
     // Invalidate cached client for this pointer so next getClient() creates a fresh one.
     this.clientCache.clear();
     this.saveToDisk();
@@ -382,7 +381,7 @@ export class ModelManager {
         // 万擎 source: always override pointers — UAGENT_MODEL IS the wanqing config,
         // not a reason to skip updating. For other sources, respect explicit env vars.
         const isWanqing = result.source === 'wanqing';
-        if ((isWanqing || !process.env.UAGENT_MODEL) && pointers.main) {
+        if ((isWanqing || !process.env.UAGENT_MODEL) && pointers.main && !this._userSelectedMain) {
           this.pointers.main = pointers.main;
           this.pointers.task = pointers.task ?? pointers.main;
         }
