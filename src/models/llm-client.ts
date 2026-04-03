@@ -5,9 +5,12 @@ import type {
   ChatOptions,
   ChatResponse,
   Message,
-  ThinkingLevel,
-  THINKING_BUDGETS,
 } from './types.js';
+
+/** Map thinking level → budget tokens (used by Anthropic + Gemini) */
+const THINKING_BUDGETS: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
+/** Map thinking level → OpenAI reasoning_effort string (o1/o3/o4 series) */
+const REASONING_EFFORT: Record<string, string> = { low: 'low', medium: 'medium', high: 'high' };
 
 // ──────────────────────────────────────────
 // Factory
@@ -79,15 +82,21 @@ class OpenAIClient implements LLMClient {
   async chat(options: ChatOptions): Promise<ChatResponse> {
     const messages = this.convertMessages(options);
     const hasTools = (options.tools?.length ?? 0) > 0;
+    const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
+    const extraOpts: Record<string, unknown> = {};
+    if (options.thinkingLevel && isReasoning) {
+      extraOpts.reasoning_effort = options.thinkingLevel; // 'low'|'medium'|'high' all valid
+    }
 
-    const response = await this.client.chat.completions.create({
+    const response = (await this.client.chat.completions.create({
       model: this.model,
       messages,
+      ...extraOpts,
       ...(hasTools ? {
         tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
         tool_choice: 'auto' as const,
       } : {}),
-    });
+    } as OpenAI.ChatCompletionCreateParamsNonStreaming)) as OpenAI.ChatCompletion;
 
     const choice = response.choices[0];
     if (!choice) throw new Error('No choices returned from OpenAI');
@@ -97,7 +106,7 @@ class OpenAIClient implements LLMClient {
       return {
         type: 'tool_calls',
         content: msg.content || '',
-        toolCalls: msg.tool_calls.map((tc) => ({
+        toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
           id: tc.id,
           name: tc.function.name,
           arguments: safeParseJSON(tc.function.arguments, tc.function.name),
@@ -110,11 +119,17 @@ class OpenAIClient implements LLMClient {
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
     const messages = this.convertMessages(options);
-    const stream = await this.client.chat.completions.create({
+    const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
+    const extraOpts: Record<string, unknown> = {};
+    if (options.thinkingLevel && isReasoning) {
+      extraOpts.reasoning_effort = options.thinkingLevel;
+    }
+    const stream = (await this.client.chat.completions.create({
       model: this.model,
       messages,
       stream: true,
-    });
+      ...extraOpts,
+    } as OpenAI.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content;
       if (delta) onChunk(delta);
@@ -153,8 +168,9 @@ class OpenAIClient implements LLMClient {
 }
 
 // ──────────────────────────────────────────
-// DeepSeek  (deepseek-chat, deepseek-coder)
+// DeepSeek  (deepseek-chat, deepseek-coder, deepseek-reasoner)
 // OpenAI-compatible API at api.deepseek.com
+// deepseek-reasoner supports thinking via extra body param
 // ──────────────────────────────────────────
 class DeepSeekClient extends OpenAIClient {
   constructor(model: string) {
@@ -163,6 +179,56 @@ class DeepSeekClient extends OpenAIClient {
       process.env.DEEPSEEK_API_KEY,
       process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/v1',
     );
+  }
+
+  override async chat(options: ChatOptions): Promise<ChatResponse> {
+    const isReasoner = this.model.includes('reasoner') || this.model.includes('r1');
+    if (isReasoner && options.thinkingLevel) {
+      const messages = this.convertMessages(options);
+      const hasTools = (options.tools?.length ?? 0) > 0;
+      const response = (await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        ...(hasTools ? {
+          tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
+          tool_choice: 'auto' as const,
+        } : {}),
+      } as OpenAI.ChatCompletionCreateParamsNonStreaming)) as OpenAI.ChatCompletion;
+      const choice = response.choices[0];
+      if (!choice) throw new Error('No choices from DeepSeek');
+      const msg = choice.message;
+      if (msg.tool_calls?.length) {
+        return {
+          type: 'tool_calls',
+          content: msg.content || '',
+          toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
+            id: tc.id,
+            name: tc.function.name,
+            arguments: safeParseJSON(tc.function.arguments, tc.function.name),
+          })),
+        };
+      }
+      return { type: 'text', content: msg.content || '' };
+    }
+    return super.chat(options);
+  }
+
+  override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+    const isReasoner = this.model.includes('reasoner') || this.model.includes('r1');
+    if (isReasoner && options.thinkingLevel) {
+      const messages = this.convertMessages(options);
+      const stream = (await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        stream: true,
+      } as OpenAI.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
+        if (delta?.content) onChunk(delta.content);
+      }
+      return;
+    }
+    return super.streamChat(options, onChunk);
   }
 }
 
@@ -180,8 +246,9 @@ class MoonshotClient extends OpenAIClient {
 }
 
 // ──────────────────────────────────────────
-// Alibaba Qwen / Tongyi  (qwen-turbo, qwen-plus, qwen-max …)
+// Alibaba Qwen / Tongyi  (qwen-turbo, qwen-plus, qwen-max, qwen3-* …)
 // Uses DashScope OpenAI-compat endpoint
+// Qwen3 models support enable_thinking=true for extended thinking
 // ──────────────────────────────────────────
 class QwenClient extends OpenAIClient {
   constructor(model: string) {
@@ -190,6 +257,29 @@ class QwenClient extends OpenAIClient {
       process.env.DASHSCOPE_API_KEY ?? process.env.QWEN_API_KEY,
       process.env.QWEN_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     );
+  }
+
+  /** Qwen3 models support enable_thinking via extra_body */
+  private isThinkingCapable(): boolean {
+    return /^qwen3|qwq/i.test(this.model);
+  }
+
+  override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+    if (this.isThinkingCapable() && options.thinkingLevel) {
+      const messages = this.convertMessages(options);
+      const stream = (await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        stream: true,
+        extra_body: { enable_thinking: true },
+      } as OpenAI.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
+        if (delta?.content) onChunk(delta.content);
+      }
+      return;
+    }
+    return super.streamChat(options, onChunk);
   }
 }
 
@@ -419,7 +509,6 @@ class GeminiClient implements LLMClient {
 
   private buildRequest(options: ChatOptions) {
     // Convert system prompt + messages to Gemini format
-    // System instruction as a special "user" turn (Gemini uses systemInstruction field)
     const contents = options.messages.map((msg) => {
       const role = msg.role === 'assistant' ? 'model' : 'user';
       if (msg.role === 'tool') {
@@ -431,10 +520,17 @@ class GeminiClient implements LLMClient {
       return { role: role as 'user' | 'model', parts: [{ text: msg.content }] };
     });
 
+    const generationConfig: Record<string, unknown> = { maxOutputTokens: 8192 };
+    // Gemini 2.0 Flash / 2.5 support thinkingConfig.thinkingBudget
+    if (options.thinkingLevel) {
+      const budgetTokens = THINKING_BUDGETS[options.thinkingLevel] ?? 1024;
+      generationConfig.thinkingConfig = { thinkingBudget: budgetTokens };
+    }
+
     const body: Record<string, unknown> = {
       systemInstruction: { parts: [{ text: options.systemPrompt }] },
       contents,
-      generationConfig: { maxOutputTokens: 8192 },
+      generationConfig,
     };
 
     // Add tools if present
