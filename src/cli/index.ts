@@ -1924,7 +1924,6 @@ async function runREPL(
       let firstChunk = true;
       let charCount = 0;
       updateStatusBar({ isThinking: 'low' });
-      rl.setPrompt(makePrompt(options.domain));
       const spinTimer = setInterval(() => {
         const frame = chalk.hex('#a78bfa')(SPIN_FRAMES[spinIdx++ % SPIN_FRAMES.length]);
         const dots  = chalk.dim(SPIN_DOTS[dotIdx++ % SPIN_DOTS.length]);

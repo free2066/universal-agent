@@ -59,6 +59,7 @@ function _setScrollRegion(top: number, bottom: number) {
 function _drawBar() {
   if (!_tty) return;
   const row = _rows();
+  const scrollBottom = row - 1;
   const line = _buildStatusLine();
   process.stdout.write(
     '\x1b[?25l' +
@@ -67,6 +68,7 @@ function _drawBar() {
     '\x1b[2K' +
     line +
     '\x1b[u' +
+    `\x1b[1;${scrollBottom}r` +
     '\x1b[?25h',
   );
 }
@@ -91,23 +93,24 @@ export function initStatusBar(
   _enabled = true;
 
   if (_tty) {
-    const bottom = _rows() - 1;
-    _setScrollRegion(1, bottom);
+    _setScrollRegion(1, _rows() - 1);
     _drawBar();
 
     process.stdout.on('resize', () => {
-      const newBottom = _rows() - 1;
-      _setScrollRegion(1, newBottom);
+      _setScrollRegion(1, _rows() - 1);
       _drawBar();
     });
   }
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
+  const wasThinking = _state.isThinking;
   _state = { ..._state, ...patch };
   if (_enabled) {
     _drawBar();
-    if (_onUpdate) _onUpdate();
+    const onlyThinkingChanged =
+      Object.keys(patch).length === 1 && 'isThinking' in patch && wasThinking !== patch.isThinking;
+    if (_onUpdate && !onlyThinkingChanged) _onUpdate();
   }
 }
 
