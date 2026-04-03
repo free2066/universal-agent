@@ -1190,17 +1190,6 @@ async function runREPL(
     } catch { return 0; }
   })();
 
-  // Initialize statusbar state (no ANSI tricks — status is embedded in prompt)
-  initStatusBar({
-    model: getModelDisplayName(currentModel),
-    domain: options.domain,
-    sessionId: SHORT_ID,
-    estimatedTokens: _initialTokens,
-    contextLength: _startContextLen,
-    isThinking: 'none' as const,
-  });
-
-  // makePrompt: builds the two-line prompt (status line + ❯ line)
   const makePrompt = (domain: string, model?: string) =>
     buildStatusPrompt(domain, model ?? getModelDisplayName(currentModel));
 
@@ -1233,8 +1222,14 @@ async function runREPL(
     completer,
   });
 
-  // Whenever status changes, refresh the prompt (takes effect on next rl.prompt())
-  initStatusBar({}, () => {
+  initStatusBar({
+    model: getModelDisplayName(currentModel),
+    domain: options.domain,
+    sessionId: SHORT_ID,
+    estimatedTokens: _initialTokens,
+    contextLength: _startContextLen,
+    isThinking: 'none' as const,
+  }, () => {
     rl.setPrompt(makePrompt(options.domain));
   });
 

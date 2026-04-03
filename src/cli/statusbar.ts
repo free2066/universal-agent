@@ -1,17 +1,20 @@
 /**
- * statusbar.ts — Status info embedded in readline prompt (reliable approach)
+ * statusbar.ts — Pinned bottom status bar via ANSI scroll-region
  *
- * Instead of fighting readline with ANSI cursor tricks, we expose a function
- * that builds the prompt string containing the status info. The caller
- * (index.ts) calls rl.setPrompt(buildPrompt(...)) + rl.prompt() whenever
- * state changes.  This way the status is always shown at the input line,
- * which readline already manages correctly.
+ * Strategy:
+ *   1. On init, reserve the last terminal row by setting the scroll region to
+ *      rows [1 .. (rows-1)], then draw the status bar on the last row.
+ *   2. All normal output (including readline) stays inside the scroll region,
+ *      so it never overwrites the status line.
+ *   3. On every state update we redraw only the last row.
+ *   4. On teardown we restore the full scroll region and clear the last row.
  *
- * Visual layout (the prompt itself):
- *   [GLM-5] | kwaibi | 1.2K | 76% | ID a1b2c3d4
- *   [auto] ❯
- *
- * The status line is printed ABOVE the ❯ cursor line as part of the prompt.
+ * ANSI sequences used:
+ *   \x1b[{top};{bottom}r   — set scroll region
+ *   \x1b[s / \x1b[u        — save / restore cursor position
+ *   \x1b[{row};1H          — move cursor to row
+ *   \x1b[2K                — erase entire line
+ *   \x1b[?25l / \x1b[?25h  — hide / show cursor (avoids flicker)
  */
 
 import chalk from 'chalk';
@@ -38,51 +41,103 @@ let _state: StatusBarState = {
 };
 
 let _enabled = false;
-/** Called by index.ts whenever the prompt needs to be refreshed */
+let _tty = false;
 let _onUpdate: (() => void) | null = null;
+
+function _rows(): number {
+  return process.stdout.rows ?? 24;
+}
+
+function _cols(): number {
+  return process.stdout.columns ?? 80;
+}
+
+function _setScrollRegion(top: number, bottom: number) {
+  process.stdout.write(`\x1b[${top};${bottom}r`);
+}
+
+function _drawBar() {
+  if (!_tty) return;
+  const row = _rows();
+  const line = _buildStatusLine();
+  process.stdout.write(
+    '\x1b[?25l' +
+    '\x1b[s' +
+    `\x1b[${row};1H` +
+    '\x1b[2K' +
+    line +
+    '\x1b[u' +
+    '\x1b[?25h',
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Call once at startup. onUpdate is called whenever state changes so the
- *  caller can do rl.setPrompt(buildStatusPrompt(...)) + rl.prompt() */
 export function initStatusBar(
   initialState: Partial<StatusBarState>,
   onUpdate?: () => void,
 ): void {
   _state = { ..._state, ...initialState };
-  _enabled = true; // always enabled — no TTY tricks needed
-  _onUpdate = onUpdate ?? null;
+  if (onUpdate !== undefined) _onUpdate = onUpdate;
+
+  if (_enabled) {
+    _drawBar();
+    return;
+  }
+
+  _tty = Boolean(process.stdout.isTTY);
+  _enabled = true;
+
+  if (_tty) {
+    const bottom = _rows() - 1;
+    _setScrollRegion(1, bottom);
+    _drawBar();
+
+    process.stdout.on('resize', () => {
+      const newBottom = _rows() - 1;
+      _setScrollRegion(1, newBottom);
+      _drawBar();
+    });
+  }
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
   _state = { ..._state, ...patch };
-  if (_enabled && _onUpdate) _onUpdate();
+  if (_enabled) {
+    _drawBar();
+    if (_onUpdate) _onUpdate();
+  }
 }
 
-/** No-op — kept for API compatibility */
 export function clearStatusBar(): void {
+  if (!_tty || !_enabled) { _enabled = false; return; }
+  const row = _rows();
+  process.stdout.write(
+    '\x1b[?25l' +
+    '\x1b[s' +
+    `\x1b[${row};1H` +
+    '\x1b[2K' +
+    '\x1b[u' +
+    '\x1b[?25h' +
+    `\x1b[1;${row}r`,
+  );
   _enabled = false;
 }
 
 /**
- * Build the full readline prompt string that contains both the status line
- * and the input chevron.  Use this with rl.setPrompt().
- *
- * Example output (two lines joined by \n):
- *   \x1b[2m [GLM-5] | project | 1.2K | 0% | ID abc12345\x1b[0m
- *   \x1b[2m[auto]\x1b[0m \x1b[1;32m❯\x1b[0m 
+ * Returns a plain single-line prompt (no status line embedded).
+ * The status bar is drawn independently on the last terminal row.
  */
 export function buildStatusPrompt(domain: string, model?: string): string {
-  if (!_enabled) return _plainPrompt(domain, model);
-
-  const statusLine = _buildStatusLine();
-  const inputLine  = _plainPrompt(domain, model);
-  return statusLine + '\n' + inputLine;
+  return _plainPrompt(domain, model);
 }
 
-/** Just the ❯ line, no status */
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
 function _plainPrompt(domain: string, model?: string): string {
   const domainTag = chalk.dim(`[${domain}]`);
   const modelTag  = model
@@ -92,6 +147,7 @@ function _plainPrompt(domain: string, model?: string): string {
 }
 
 function _buildStatusLine(): string {
+  const cols = _cols();
   const pct = _state.contextLength > 0
     ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
     : 0;
@@ -102,32 +158,33 @@ function _buildStatusLine(): string {
   const pctPart     = `${pctCapped}%`;
   const idPart      = _state.sessionId.slice(0, 8);
 
-  return (
-    chalk.dim(' [') +
-    chalk.white(modelShort) +
+  const content =
+    chalk.bgHex('#1e1b4b').dim(' ') +
+    chalk.bgHex('#1e1b4b').white(modelShort) +
     _thinkingLabel(_state.isThinking) +
-    chalk.dim('] | ') +
-    chalk.dim(projectName) +
-    chalk.dim(' | ') +
-    chalk.dim(tokensPart) +
-    chalk.dim(' | ') +
-    _ctxColor(pctCapped)(pctPart) +
-    chalk.dim(' | ') +
+    chalk.bgHex('#1e1b4b').dim(' │ ') +
+    chalk.bgHex('#1e1b4b').dim(projectName) +
+    chalk.bgHex('#1e1b4b').dim(' │ ') +
+    chalk.bgHex('#1e1b4b').dim(tokensPart) +
+    chalk.bgHex('#1e1b4b').dim(' │ ') +
+    chalk.bgHex('#1e1b4b')(_ctxColor(pctCapped)(pctPart)) +
+    chalk.bgHex('#1e1b4b').dim(' │ ') +
     chalk.bgHex('#7c3aed').white(' ID ') +
-    ' ' +
-    chalk.dim(idPart)
-  );
+    chalk.bgHex('#1e1b4b').dim(` ${idPart} `);
+
+  const padding = ' '.repeat(Math.max(0, cols - _stripAnsi(content).length));
+  return chalk.bgHex('#1e1b4b')(content + padding);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+function _stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
 
 function _thinkingLabel(t: ThinkingLevel): string {
-  if (t === false || t === 'none') return '';
-  if (t === true  || t === 'low')  return chalk.dim(' | thinking: ') + chalk.dim('low');
-  if (t === 'medium')              return chalk.dim(' | thinking: ') + chalk.yellow('medium');
-  if (t === 'high')                return chalk.dim(' | thinking: ') + chalk.magenta('high');
+  if (t === false || t === 'none') return chalk.bgHex('#1e1b4b')('');
+  if (t === true  || t === 'low')  return chalk.bgHex('#1e1b4b').dim(' │ ') + chalk.bgHex('#1e1b4b').dim('thinking…');
+  if (t === 'medium')              return chalk.bgHex('#1e1b4b').dim(' │ ') + chalk.bgHex('#1e1b4b').yellow('thinking…');
+  if (t === 'high')                return chalk.bgHex('#1e1b4b').dim(' │ ') + chalk.bgHex('#1e1b4b').magenta('thinking…');
   return '';
 }
 
