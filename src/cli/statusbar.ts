@@ -1,8 +1,7 @@
 import chalk from 'chalk';
 import { basename } from 'path';
 import { execFileSync } from 'child_process';
-import { openSync } from 'fs';
-import { WriteStream } from 'tty';
+import { openSync, writeSync } from 'fs';
 
 export type ThinkingLevel = boolean | 'none' | 'low' | 'medium' | 'high';
 
@@ -25,49 +24,45 @@ let _state: StatusBarState = {
 };
 
 let _enabled  = false;
-let _tty: WriteStream | null = null;
+let _ttyFd    = -1;
 let _onUpdate: (() => void) | null = null;
 
-function _openTTY(): WriteStream | null {
-  try {
-    const fd = openSync('/dev/tty', 'r+');
-    return new WriteStream(fd);
-  } catch {
-    return null;
+function _openTTY(): number {
+  try { return openSync('/dev/tty', 'r+'); } catch { return -1; }
+}
+
+function _ttyWrite(s: string) {
+  if (_ttyFd >= 0) {
+    writeSync(_ttyFd, s);
+  } else {
+    process.stdout.write(s);
   }
 }
 
 function _rows(): number {
-  if (_tty && _tty.rows > 0) return _tty.rows;
-  const r = process.stdout.rows ?? 0;
-  if (r > 0) return r;
   try {
-    return parseInt(execFileSync('tput', ['lines'], {
+    const v = parseInt(execFileSync('tput', ['lines'], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim(), 10) || 24;
-  } catch { return 24; }
+    }).trim(), 10);
+    if (v > 0) return v;
+  } catch {}
+  return process.stdout.rows ?? 24;
 }
 
 function _cols(): number {
-  if (_tty && _tty.columns > 0) return _tty.columns;
-  const c = process.stdout.columns ?? 0;
-  if (c > 0) return c;
   try {
-    return parseInt(execFileSync('tput', ['cols'], {
+    const v = parseInt(execFileSync('tput', ['cols'], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim(), 10) || 80;
-  } catch { return 80; }
-}
-
-function _write(s: string) {
-  (_tty ?? process.stdout).write(s);
+    }).trim(), 10);
+    if (v > 0) return v;
+  } catch {}
+  return process.stdout.columns ?? 80;
 }
 
 function _drawBar() {
-  if (!_tty && !process.stdout.isTTY) return;
   const row = _rows();
   if (row <= 0) return;
-  _write(
+  _ttyWrite(
     '\x1b[?25l'       +
     '\x1b[s'          +
     `\x1b[${row};1H`  +
@@ -95,22 +90,18 @@ export function initStatusBar(
   }
 
   _enabled = true;
-  _tty = _openTTY();
+  _ttyFd   = _openTTY();
 
   const scrollBottom = _rows() - 1;
-  if (scrollBottom > 0) {
-    _write(`\x1b[1;${scrollBottom}r`);
-    _write(`\x1b[${scrollBottom};1H`);
-  }
+  _ttyWrite(`\x1b[1;${scrollBottom}r`);
+  _ttyWrite(`\x1b[${scrollBottom};1H`);
   _drawBar();
 
-  const onResize = () => {
+  process.stdout.on('resize', () => {
     const nb = _rows() - 1;
-    if (nb > 0) _write(`\x1b[1;${nb}r`);
+    _ttyWrite(`\x1b[1;${nb}r`);
     _drawBar();
-  };
-  process.stdout.on('resize', onResize);
-  if (_tty) _tty.on('resize', onResize);
+  });
 }
 
 export function updateStatusBar(patch: Partial<StatusBarState>): void {
@@ -126,21 +117,18 @@ export function updateStatusBar(patch: Partial<StatusBarState>): void {
 export function clearStatusBar(): void {
   if (_enabled) {
     const row = _rows();
-    _write(`\x1b[s\x1b[${row};1H\x1b[2K\x1b[u\x1b[1;${row}r`);
+    _ttyWrite(`\x1b[s\x1b[${row};1H\x1b[2K\x1b[u\x1b[1;${row}r`);
   }
   _enabled = false;
-  _tty?.destroy();
-  _tty = null;
 }
 
-export function printStatusBar(): void {}
+/** Called after every rl.prompt() — redraws the bar in case readline scrolled over it */
+export function printStatusBar(): void {
+  if (_enabled) _drawBar();
+}
 
 export function buildStatusPrompt(domain: string, _model?: string): string {
-  const chevron = `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
-  if (_enabled && !_tty && !process.stdout.isTTY) {
-    return _statusLine() + '\n' + chevron;
-  }
-  return chevron;
+  return `${chalk.dim(`[${domain}]`)} ${chalk.bold.green('❯')} `;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

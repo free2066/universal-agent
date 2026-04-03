@@ -28,26 +28,28 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
-    "commander": "^12.1.0",
+    "@types/blessed": "^0.1.27",
+    "blessed": "^0.1.81",
     "chalk": "^5.3.0",
-    "ora": "^8.1.1",
-    "inquirer": "^12.3.0",
-    "openai": "^4.77.0",
+    "commander": "^12.1.0",
     "csv-parse": "^5.6.0",
     "dotenv": "^16.4.7",
-    "table": "^6.8.2",
+    "inquirer": "^12.3.0",
     "node-fetch": "^3.3.2",
+    "openai": "^4.77.0",
+    "ora": "^8.1.1",
+    "table": "^6.8.2",
     "yaml": "^2.7.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
     "@types/inquirer": "^9.0.7",
-    "typescript": "^5.7.3",
-    "tsx": "^4.19.2",
-    "vitest": "^2.1.8",
-    "eslint": "^9.18.0",
+    "@types/node": "^22.10.2",
     "@typescript-eslint/eslint-plugin": "^8.20.0",
-    "@typescript-eslint/parser": "^8.20.0"
+    "@typescript-eslint/parser": "^8.20.0",
+    "eslint": "^9.18.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
   },
   "engines": {
     "node": ">=18.0.0"
