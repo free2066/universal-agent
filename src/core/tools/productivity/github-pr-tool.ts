@@ -440,13 +440,17 @@ export const githubListPRsTool: ToolRegistration = {
 
     const state = (args.state as string | undefined) ?? 'open';
     const limit = Math.min((args.limit as number | undefined) ?? 10, 30);
-    const branch = (args.branch as string | undefined) ?? getCurrentBranch();
+    // Only filter by head branch if the user explicitly passed `branch`
+    const branch = args.branch as string | undefined;
 
-    const params = new URLSearchParams({
+    const queryParams: Record<string, string> = {
       state,
-      head: `${repoInfo.owner}:${branch}`,
       per_page: String(limit),
-    });
+    };
+    if (branch) {
+      queryParams['head'] = `${repoInfo.owner}:${branch}`;
+    }
+    const params = new URLSearchParams(queryParams);
 
     const { ok, data } = await githubApi(
       'GET',
@@ -459,7 +463,8 @@ export const githubListPRsTool: ToolRegistration = {
 
     const prs = data as GitHubPR[];
     if (prs.length === 0) {
-      return `No ${state} PRs found for branch: ${branch}\nRepo: ${repoInfo.owner}/${repoInfo.repo}`;
+      const branchSuffix = branch ? ` for branch: ${branch}` : '';
+      return `No ${state} PRs found${branchSuffix}\nRepo: ${repoInfo.owner}/${repoInfo.repo}`;
     }
 
     const lines = prs.map((pr) =>
