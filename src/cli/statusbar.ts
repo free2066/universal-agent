@@ -63,14 +63,14 @@ function _drawBar() {
   const info = _statusLine();
 
   process.stdout.write(
-    '\x1b[?25l'          +   // hide cursor (no flicker)
-    '\x1b[s'             +   // save cursor position
-    `\x1b[${rows - 1};1H` +  // move to second-to-last row
-    '\x1b[2K' + sep      +   // clear + draw separator
-    `\x1b[${rows};1H`   +   // move to last row
-    '\x1b[2K' + info     +   // clear + draw status
-    '\x1b[u'             +   // restore cursor position
-    '\x1b[?25h',             // show cursor
+    '\x1b[?25l'            +   // hide cursor
+    '\x1b[s'               +   // save cursor
+    `\x1b[${rows - 1};1H`  +   // row rows-1: separator
+    '\x1b[2K' + sep        +
+    `\x1b[${rows};1H`      +   // row rows: status
+    '\x1b[2K' + info       +
+    '\x1b[u'               +   // restore cursor
+    '\x1b[?25h',               // show cursor
   );
 }
 
@@ -91,10 +91,14 @@ export function initStatusBar(
   _enabled = true;
 
   if (_isTTY) {
-    _setScroll(1, _rows() - 2);
+    const scrollBottom = _rows() - 2;
+    _setScroll(1, scrollBottom);
+    // Move cursor to bottom of scroll region so subsequent output scrolls up inside it
+    process.stdout.write(`\x1b[${scrollBottom};1H`);
     _drawBar();
     process.stdout.on('resize', () => {
-      _setScroll(1, _rows() - 2);
+      const newBottom = _rows() - 2;
+      _setScroll(1, newBottom);
       _drawBar();
     });
   }
