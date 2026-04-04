@@ -101,15 +101,20 @@ export function initStatusBar(
   _enabled = true;
   _ttyFd   = _openTTY();
 
-  const scrollBottom = _rows() - 1;
-  // 设置滚动区域：第 1 行到 scrollBottom 行，保留最后一行给状态栏
+  const totalRows   = _rows();
+  // 布局（从下往上）：
+  //   row totalRows   — 状态栏（statusbar 专用）
+  //   row totalRows-1 — spinner 专用行（CliSpinner 写这里）
+  //   row 1 .. totalRows-2 — 滚动区（readline + LLM 输出）
+  const scrollBottom = Math.max(1, totalRows - 2);
   _ttyWrite(`\x1b[1;${scrollBottom}r`);
   // 把光标定位到滚动区底部（readline 将从这里开始 prompt）
   _ttyWrite(`\x1b[${scrollBottom};1H`);
   _drawBar();
 
   process.stdout.on('resize', () => {
-    const nb = _rows() - 1;
+    const totalR = _rows();
+    const nb = Math.max(1, totalR - 2);
     _ttyWrite(`\x1b[1;${nb}r`);
     _drawBar();
   });
@@ -128,8 +133,12 @@ export function updateStatusBar(patch: Partial<StatusBarState>): void {
 export function clearStatusBar(): void {
   if (_enabled) {
     const row = _rows();
-    // 清除状态栏行，恢复全屏滚动区域
-    _ttyWrite(`\x1b[${row};1H\x1b[2K\x1b[1;${row}r`);
+    // 清除状态栏行 + spinner 行，恢复全屏滚动区域
+    _ttyWrite(
+      `\x1b[${row - 1};1H\x1b[2K` +   // 清 spinner 行
+      `\x1b[${row};1H\x1b[2K`     +   // 清 statusbar 行
+      `\x1b[1;${row}r`,                // 恢复全屏滚动
+    );
   }
   _enabled = false;
 }
