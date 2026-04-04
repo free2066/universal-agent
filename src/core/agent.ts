@@ -633,7 +633,7 @@ export class AgentCore {
       if (inboxMsgs.length > 0) {
         this.history.push({
           role: 'user',
-          content: `<inbox>\n${JSON.stringify(inboxMsgs, null, 2)}\n</inbox>`,
+          content: `<inbox>\n${JSON.stringify(inboxMsgs)}\n</inbox>`,  // compact: no indent needed for LLM parsing
         });
       }
 
@@ -796,7 +796,9 @@ export class AgentCore {
               if (newlyActivated.length > 0) onChunk(`\n🔓 Unlocked tools: ${newlyActivated.join(', ')}\n`);
               await triggerHook(createHookEvent('tool', 'after', { callId, toolName: call.name, success: true }));
               events?.onToolEnd?.(call.name, true, durationMs);
-              const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+              // compact JSON for tool results — LLM does not need pretty-print indentation;
+              // removing null,2 reduces token consumption with no semantic loss.
+              const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
               return { role: 'tool' as const, toolCallId: call.id, content: resultStr };
             } catch (err) {
               const durationMs = Date.now() - toolStartMs;
@@ -872,7 +874,8 @@ export class AgentCore {
               // bashTool returns __CONFIRM_REQUIRED__:<label>\n<command> for dangerous
               // commands instead of executing them. Pause the agent loop and surface
               // a clear confirmation prompt to the user.
-              const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+              // compact JSON for tool results (no null,2 — saves tokens in LLM context)
+              const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
               if (resultStr.startsWith('__CONFIRM_REQUIRED__:')) {
                 const firstNewline = resultStr.indexOf('\n');
                 const header = resultStr.slice('__CONFIRM_REQUIRED__:'.length, firstNewline > -1 ? firstNewline : undefined);

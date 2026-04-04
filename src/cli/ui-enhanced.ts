@@ -433,6 +433,7 @@ export function createSpinner(text: string) {
     stop() {
       if (timer) {
         clearInterval(timer);
+        timer = null; // prevent duplicate clearInterval + double stdout write on repeated stop()
         process.stdout.write('\r' + ' '.repeat(text.length + 4) + '\r');
       }
     },
