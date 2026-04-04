@@ -69,6 +69,15 @@ async function withInferenceTimeout<T>(
     throw err;
   } finally {
     clearTimeout(timer);
+    // Always abort the controller on exit — whether fn completed normally, threw,
+    // or was timed-out.  Without this, a successfully-completed fetch() keeps the
+    // underlying TCP socket alive until GC collects the AbortController, which can
+    // exhaust connection-pool slots under rapid successive requests (e.g. subagent
+    // parallel runs).  Aborting after completion is a no-op for the caller but
+    // signals to fetch's internal machinery to release the connection immediately.
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
   }
 }
 
