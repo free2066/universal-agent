@@ -181,19 +181,19 @@ describe('6. ReplExtra has resumeSessionId', () => {
 // ─── 7. AgentCore public methods ─────────────────────────────────────────────
 
 describe('7. AgentCore public methods', () => {
-  it('agent.ts declares setThinkingLevel() public method', () => {
-    const src = readFileSync(join(PKG_ROOT, 'src/core/agent.ts'), 'utf-8');
-    expect(src).toContain('setThinkingLevel(');
+  // agent.ts is now a forwarding shim; actual implementation lives in agent/index.ts
+  const agentIndexSrc = readFileSync(join(PKG_ROOT, 'src/core/agent/index.ts'), 'utf-8');
+
+  it('AgentCore declares setThinkingLevel() public method', () => {
+    expect(agentIndexSrc).toContain('setThinkingLevel(');
   });
 
-  it('agent.ts declares getMcpInfo() public method', () => {
-    const src = readFileSync(join(PKG_ROOT, 'src/core/agent.ts'), 'utf-8');
-    expect(src).toContain('getMcpInfo()');
+  it('AgentCore declares getMcpInfo() public method', () => {
+    expect(agentIndexSrc).toContain('getMcpInfo()');
   });
 
-  it('agent.ts declares setSystemPrompt() public method', () => {
-    const src = readFileSync(join(PKG_ROOT, 'src/core/agent.ts'), 'utf-8');
-    expect(src).toContain('setSystemPrompt(');
+  it('AgentCore declares setSystemPrompt() public method', () => {
+    expect(agentIndexSrc).toContain('setSystemPrompt(');
   });
 });
 
