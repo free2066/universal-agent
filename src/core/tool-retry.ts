@@ -83,6 +83,25 @@ const RATE_LIMIT_MAX_WAIT_MS = 6 * 60 * 60 * 1000; // 6h
 /** Heartbeat interval — wait and log '.' every 30s (matches Claude Code's 30s cadence) */
 const RATE_LIMIT_HEARTBEAT_MS = 30_000;
 
+// ── Interactive 429 Retry (short exponential backoff for free-tier models) ─────
+//
+// Free models (wanqing, Gemini free, Groq free) have low QPS limits.
+// In interactive mode, the previous behavior was fail-fast on 429, which
+// caused the agent to abort mid-task with an unhelpful error.
+//
+// New behavior: up to 3 short retries with exponential backoff + jitter:
+//   Attempt 1: ~5s   (5000 ± 25%)
+//   Attempt 2: ~10s  (10000 ± 25%)
+//   Attempt 3: ~20s  (20000 ± 25%)
+// If all 3 fail, rethrow so the user sees the error.
+
+/** Max interactive-mode retries for 429/529 */
+const INTERACTIVE_RATE_LIMIT_MAX_RETRIES = 3;
+/** Initial backoff for interactive 429 retry: 5 seconds */
+const INTERACTIVE_RATE_LIMIT_INITIAL_MS = 5_000;
+/** Maximum backoff cap: 60 seconds */
+const INTERACTIVE_RATE_LIMIT_MAX_MS = 60_000;
+
 /**
  * Detect 429 (Too Many Requests) or 529 (Overload) from an error.
  */
@@ -112,6 +131,39 @@ export async function withApiRateLimitRetry<T>(
   const unattended = process.env.AGENT_UNATTENDED_RETRY === '1';
   const startTime = Date.now();
 
+  // ── Interactive mode: short exponential backoff (up to 3 retries) ──────────
+  // Free-tier models (wanqing, Gemini free, Groq) have low QPS limits.
+  // Instead of fail-fast, give the rate limiter a chance to recover.
+  if (!unattended) {
+    let interactiveRetry = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (!isRateLimitError(err)) throw err;           // non-429: rethrow immediately
+        if (interactiveRetry >= INTERACTIVE_RATE_LIMIT_MAX_RETRIES) throw err; // give up
+
+        // Exponential backoff: 5s → 10s → 20s  (±25% jitter)
+        const base = Math.min(
+          INTERACTIVE_RATE_LIMIT_INITIAL_MS * Math.pow(2, interactiveRetry),
+          INTERACTIVE_RATE_LIMIT_MAX_MS,
+        );
+        const jitter = base * 0.25 * (Math.random() * 2 - 1);
+        const wait = Math.round(base + jitter);
+        interactiveRetry++;
+
+        log.warn(
+          `Rate-limit/overload (429/529) — interactive retry ${interactiveRetry}/${INTERACTIVE_RATE_LIMIT_MAX_RETRIES} ` +
+          `in ${Math.round(wait / 1000)}s…`,
+        );
+        onHeartbeat?.(Date.now() - startTime);
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
+  }
+
+  // ── Unattended / CI mode: 30s heartbeat, up to 6 hours ─────────────────────
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
@@ -119,9 +171,6 @@ export async function withApiRateLimitRetry<T>(
     } catch (err) {
       // Always rethrow non-rate-limit errors immediately
       if (!isRateLimitError(err)) throw err;
-
-      // If not in unattended mode, rethrow immediately
-      if (!unattended) throw err;
 
       const elapsed = Date.now() - startTime;
 

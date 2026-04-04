@@ -546,6 +546,9 @@ export class AgentCore {
     }
 
     let iteration = 0;
+    // Tracks the timestamp of the last LLM call — used by the min-round-interval
+    // throttle to ensure at least AGENT_MIN_ROUND_INTERVAL_MS between LLM calls.
+    let lastLLMCallAt = 0;
     // Allow override via AGENT_MAX_ITERATIONS env var for power users
     // who need more turns for complex multi-step tasks (default: 15).
     const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? String(DEFAULT_MAX_ITERATIONS), 10);
@@ -577,6 +580,18 @@ export class AgentCore {
 
     while (iteration < MAX_ITERATIONS) {
       iteration++;
+
+      // ── Min-round-interval throttle ─────────────────────────────────────────
+      // Prevent rapid consecutive LLM calls (e.g. many quick tool results in a row).
+      // Default: 500ms. Set AGENT_MIN_ROUND_INTERVAL_MS=0 to disable.
+      // Effective on free-tier models (wanqing, Gemini free) to avoid 429s.
+      const _minInterval = parseInt(process.env.AGENT_MIN_ROUND_INTERVAL_MS ?? '500', 10);
+      if (_minInterval > 0 && lastLLMCallAt > 0) {
+        const _elapsed = Date.now() - lastLLMCallAt;
+        if (_elapsed < _minInterval) {
+          await new Promise((resolve) => setTimeout(resolve, _minInterval - _elapsed));
+        }
+      }
 
       // s08 — drain background task notifications and inject before LLM call
       const bgNotifs = backgroundManager.drainNotifications();
@@ -641,6 +656,7 @@ export class AgentCore {
               () => this._getLLM().chat(chatOpts),
               (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
             );
+        lastLLMCallAt = Date.now();
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         // ── Layer 7: Reactive Compact — 413 / context-overflow emergency recovery ──
@@ -713,131 +729,214 @@ export class AgentCore {
         });
 
         const toolResults: Message[] = [];
-        for (const call of response.toolCalls) {
+
+        // ── Parallel tool execution ─────────────────────────────────────────────
+        // Read-only tools (Read, LS, Grep, WebFetch, etc.) are safe to run in
+        // parallel: they have no shared state or file-system side effects.
+        // Write tools (Write, Edit, Bash, worktree_*) MUST remain sequential.
+        //
+        // Parallelizing read tools reduces round-trip time for multi-file scans
+        // (e.g. a code-review that calls Read on 6 files in one turn: 6×500ms
+        // serial → ~600ms parallel) and lowers the total number of LLM rounds,
+        // which directly reduces QPS pressure on free-tier models.
+        //
+        // Safety invariant: we never mix parallel + sequential in the same batch;
+        // if ANY call in the batch is a write tool, the entire batch runs serially.
+
+        /** Tools safe to run concurrently (read-only, idempotent). */
+        const PARALLELIZABLE_TOOLS = new Set([
+          // File system — read
+          'Read', 'read_file', 'readFile',
+          'LS', 'ls', 'list_files',
+          'Grep', 'grep_search',
+          // Web
+          'WebFetch', 'WebSearch', 'web_search', 'web_fetch',
+          // Analysis / inspection
+          'InspectCode', 'inspect_code',
+          'DatabaseQuery', 'database_query',
+          'EnvProbe', 'env_probe',
+          // Worktree read operations
+          'worktree_list', 'worktree_status', 'worktree_events',
+        ]);
+
+        const MAX_PARALLEL_TOOLS = 5; // safety cap
+
+        const allParallelizable =
+          response.toolCalls.every((c) => PARALLELIZABLE_TOOLS.has(c.name));
+
+        const canParallelize =
+          allParallelizable && response.toolCalls.length > 1;
+
+        if (canParallelize) {
+          // Execute all read-only calls in parallel (capped at MAX_PARALLEL_TOOLS)
+          const batch = response.toolCalls.slice(0, MAX_PARALLEL_TOOLS);
+          const overflow = response.toolCalls.slice(MAX_PARALLEL_TOOLS);
+
+          const runCall = async (call: (typeof response.toolCalls)[0]) => {
+            events?.onToolStart?.(call.name, call.arguments as Record<string, unknown>);
+            const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const toolStartMs = Date.now();
+            await triggerHook(createHookEvent('tool', 'before', { callId, toolName: call.name, args: call.arguments }));
+            try {
+              const result = await withToolRetry(
+                () => this.registry.execute(call.name, call.arguments),
+                call.name,
+              );
+              const durationMs = Date.now() - toolStartMs;
+              const newlyActivated = this.registry.evaluateConditionals(call.name, result);
+              if (newlyActivated.length > 0) onChunk(`\n🔓 Unlocked tools: ${newlyActivated.join(', ')}\n`);
+              await triggerHook(createHookEvent('tool', 'after', { callId, toolName: call.name, success: true }));
+              events?.onToolEnd?.(call.name, true, durationMs);
+              const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+              return { role: 'tool' as const, toolCallId: call.id, content: resultStr };
+            } catch (err) {
+              const durationMs = Date.now() - toolStartMs;
+              await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: err instanceof Error ? err.message : String(err), success: false }));
+              events?.onToolEnd?.(call.name, false, durationMs);
+              return { role: 'tool' as const, toolCallId: call.id, content: `Error: ${err instanceof Error ? err.message : String(err)}` };
+            }
+          };
+
           if (this.verbose) {
-            const argsStr = JSON.stringify(call.arguments).slice(0, 120);
-            onChunk(`  → ${call.name}(${argsStr}${argsStr.length >= 120 ? '...' : ''})\n`);
+            onChunk(`\n🔧 Tools (parallel): ${batch.map((t) => t.name).join(', ')}\n`);
           }
 
-          // 通知 CLI：工具调用即将开始
-          events?.onToolStart?.(call.name, call.arguments as Record<string, unknown>);
+          const parallelResults = await Promise.all(batch.map(runCall));
+          toolResults.push(...parallelResults);
 
-          const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          const toolStartMs = Date.now();
-          await triggerHook(createHookEvent('tool', 'before', {
-            callId,
-            toolName: call.name,
-            args: call.arguments,
-          }));
-          try {
-            const result = await withToolRetry(
-              () => this.registry.execute(call.name, call.arguments),
-              call.name,
-            );
-
-            const toolDurationMs = Date.now() - toolStartMs;
-
-            // Conditional lazy tool loading (Harness Engineering — kstack #15309):
-            // After each tool execution, evaluate whether new tools should be unlocked.
-            const newlyActivated = this.registry.evaluateConditionals(call.name, result);
-            if (newlyActivated.length > 0) {
-              onChunk(`\n🔓 Unlocked tools: ${newlyActivated.join(', ')}\n`);
-              // No need to explicitly refresh — currentTools is re-fetched at the top
-              // of each while iteration, so newly activated tools appear next turn.
+          // Any overflow calls run serially after the parallel batch
+          for (const call of overflow) {
+            const r = await runCall(call);
+            toolResults.push(r);
+          }
+        } else {
+          // Sequential branch — write tools or single call
+          for (const call of response.toolCalls) {
+            if (this.verbose) {
+              const argsStr = JSON.stringify(call.arguments).slice(0, 120);
+              onChunk(`  → ${call.name}(${argsStr}${argsStr.length >= 120 ? '...' : ''})\n`);
             }
 
-            await triggerHook(createHookEvent('tool', 'after', {
+            // 通知 CLI：工具调用即将开始
+            events?.onToolStart?.(call.name, call.arguments as Record<string, unknown>);
+
+            const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const toolStartMs = Date.now();
+            await triggerHook(createHookEvent('tool', 'before', {
               callId,
               toolName: call.name,
-              success: true,
+              args: call.arguments,
             }));
+            try {
+              const result = await withToolRetry(
+                () => this.registry.execute(call.name, call.arguments),
+                call.name,
+              );
 
-            // 通知 CLI：工具调用成功完成
-            events?.onToolEnd?.(call.name, true, toolDurationMs);
+              const toolDurationMs = Date.now() - toolStartMs;
 
-            if (this.verbose) {
-              const preview = JSON.stringify(result).slice(0, 300);
-              onChunk(`  ✓ ${preview}${preview.length === 300 ? '...' : ''}\n`);
-            }
-            // ── Dry-run confirmation gate (kstack article #15313) ────────────────
-            // bashTool returns __CONFIRM_REQUIRED__:<label>\n<command> for dangerous
-            // commands instead of executing them. Pause the agent loop and surface
-            // a clear confirmation prompt to the user.
-            const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-            if (resultStr.startsWith('__CONFIRM_REQUIRED__:')) {
-              const firstNewline = resultStr.indexOf('\n');
-              const header = resultStr.slice('__CONFIRM_REQUIRED__:'.length, firstNewline > -1 ? firstNewline : undefined);
-              const dangerousCommand = firstNewline > -1 ? resultStr.slice(firstNewline + 1).trim() : '';
-              const cmdCwd = (call.arguments.cwd as string | undefined)
-                ? String(call.arguments.cwd)
-                : process.cwd();
+              // Conditional lazy tool loading (Harness Engineering — kstack #15309):
+              // After each tool execution, evaluate whether new tools should be unlocked.
+              const newlyActivated = this.registry.evaluateConditionals(call.name, result);
+              if (newlyActivated.length > 0) {
+                onChunk(`\n🔓 Unlocked tools: ${newlyActivated.join(', ')}\n`);
+                // No need to explicitly refresh — currentTools is re-fetched at the top
+                // of each while iteration, so newly activated tools appear next turn.
+              }
 
-              this.pendingConfirmation = {
-                command: dangerousCommand,
-                cwd: cmdCwd,
-                label: header,
-                // Record history length BEFORE we inject the synthetic [SYSTEM] message
-                // so we can splice it out after the user confirms or cancels (fix b5).
-                injectedAt: this.history.length + toolResults.length,
-              };
+              await triggerHook(createHookEvent('tool', 'after', {
+                callId,
+                toolName: call.name,
+                success: true,
+              }));
 
-              // Push a synthetic tool result so history stays valid
+              // 通知 CLI：工具调用成功完成
+              events?.onToolEnd?.(call.name, true, toolDurationMs);
+
+              if (this.verbose) {
+                const preview = JSON.stringify(result).slice(0, 300);
+                onChunk(`  ✓ ${preview}${preview.length === 300 ? '...' : ''}\n`);
+              }
+              // ── Dry-run confirmation gate (kstack article #15313) ────────────────
+              // bashTool returns __CONFIRM_REQUIRED__:<label>\n<command> for dangerous
+              // commands instead of executing them. Pause the agent loop and surface
+              // a clear confirmation prompt to the user.
+              const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+              if (resultStr.startsWith('__CONFIRM_REQUIRED__:')) {
+                const firstNewline = resultStr.indexOf('\n');
+                const header = resultStr.slice('__CONFIRM_REQUIRED__:'.length, firstNewline > -1 ? firstNewline : undefined);
+                const dangerousCommand = firstNewline > -1 ? resultStr.slice(firstNewline + 1).trim() : '';
+                const cmdCwd = (call.arguments.cwd as string | undefined)
+                  ? String(call.arguments.cwd)
+                  : process.cwd();
+
+                this.pendingConfirmation = {
+                  command: dangerousCommand,
+                  cwd: cmdCwd,
+                  label: header,
+                  // Record history length BEFORE we inject the synthetic [SYSTEM] message
+                  // so we can splice it out after the user confirms or cancels (fix b5).
+                  injectedAt: this.history.length + toolResults.length,
+                };
+
+                // Push a synthetic tool result so history stays valid
+                toolResults.push({
+                  role: 'tool',
+                  toolCallId: call.id,
+                  content: `[Paused for confirmation] Dangerous command detected: ${header}`,
+                });
+
+                // Flush history so far and break — let agent produce a final text response
+                this.history.push(...toolResults);
+
+                // Inject a system-level instruction so the LLM asks for confirmation
+                this.history.push({
+                  role: 'user',
+                  content:
+                    `[SYSTEM] The Bash tool wants to execute a potentially destructive command.\n` +
+                    `Risk: ${header}\n` +
+                    `Command:\n\`\`\`\n${dangerousCommand}\n\`\`\`\n\n` +
+                    `Please show the user this information and ask them to reply **yes** to execute or **no** to cancel.`,
+                });
+
+                // Run one more LLM turn so the agent surfaces the confirmation prompt
+                const confirmOpts = { systemPrompt, messages: this.history, tools: [], stream: false };
+                try {
+                  const confirmResp = this.fallbackChain
+                    ? await this.fallbackChain.call(this._getLLM(), confirmOpts)
+                    : await this._getLLM().chat(confirmOpts);
+                  if (confirmResp.type === 'text') {
+                    onChunk(confirmResp.content);
+                    this.history.push({ role: 'assistant', content: confirmResp.content });
+                  }
+                } catch { /* ignore — user will still see the raw prompt */ }
+
+                return; // Pause agent loop; resume when user replies
+              }
+
               toolResults.push({
                 role: 'tool',
                 toolCallId: call.id,
-                content: `[Paused for confirmation] Dangerous command detected: ${header}`,
+                content: resultStr,
               });
-
-              // Flush history so far and break — let agent produce a final text response
-              this.history.push(...toolResults);
-
-              // Inject a system-level instruction so the LLM asks for confirmation
-              this.history.push({
-                role: 'user',
-                content:
-                  `[SYSTEM] The Bash tool wants to execute a potentially destructive command.\n` +
-                  `Risk: ${header}\n` +
-                  `Command:\n\`\`\`\n${dangerousCommand}\n\`\`\`\n\n` +
-                  `Please show the user this information and ask them to reply **yes** to execute or **no** to cancel.`,
+            } catch (err) {
+              const toolDurationMsErr = Date.now() - toolStartMs;
+              await triggerHook(createHookEvent('tool', 'error', {
+                callId,
+                toolName: call.name,
+                error: err instanceof Error ? err.message : String(err),
+                success: false,
+              }));
+              // 通知 CLI：工具调用失败
+              events?.onToolEnd?.(call.name, false, toolDurationMsErr);
+              toolResults.push({
+                role: 'tool',
+                toolCallId: call.id,
+                content: `Error: ${err instanceof Error ? err.message : String(err)}`,
               });
-
-              // Run one more LLM turn so the agent surfaces the confirmation prompt
-              const confirmOpts = { systemPrompt, messages: this.history, tools: [], stream: false };
-              try {
-                const confirmResp = this.fallbackChain
-                  ? await this.fallbackChain.call(this._getLLM(), confirmOpts)
-                  : await this._getLLM().chat(confirmOpts);
-                if (confirmResp.type === 'text') {
-                  onChunk(confirmResp.content);
-                  this.history.push({ role: 'assistant', content: confirmResp.content });
-                }
-              } catch { /* ignore — user will still see the raw prompt */ }
-
-              return; // Pause agent loop; resume when user replies
             }
-
-            toolResults.push({
-              role: 'tool',
-              toolCallId: call.id,
-              content: resultStr,
-            });
-          } catch (err) {
-            const toolDurationMsErr = Date.now() - toolStartMs;
-            await triggerHook(createHookEvent('tool', 'error', {
-              callId,
-              toolName: call.name,
-              error: err instanceof Error ? err.message : String(err),
-              success: false,
-            }));
-            // 通知 CLI：工具调用失败
-            events?.onToolEnd?.(call.name, false, toolDurationMsErr);
-            toolResults.push({
-              role: 'tool',
-              toolCallId: call.id,
-              content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-            });
-          }
-        }
+          } // end sequential for loop
+        } // end sequential branch
 
         this.history.push(...toolResults);
 

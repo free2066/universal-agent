@@ -47,11 +47,15 @@ const CLEARED_PLACEHOLDER = '[cleared]';
  * Returns the number of tool results cleared.
  */
 
-/** Age threshold for microcompact — 60 minutes matches Claude Code's observed TTL */
-const MICROCOMPACT_AGE_MS = 60 * 60 * 1000;
+/** Age threshold for microcompact — lowered to 15min for high-frequency tasks (code review, refactor).
+ *  Original: 60min. Reduced to prevent context buildup during long-running sessions.
+ */
+const MICROCOMPACT_AGE_MS = parseInt(process.env.AGENT_MICROCOMPACT_AGE_MS ?? String(15 * 60 * 1000), 10);
 
-/** Only microcompact tool results over this char count (small results stay) */
-const MICROCOMPACT_MIN_CHARS = 500;
+/** Only microcompact tool results over this char count (small results stay).
+ *  Lowered from 500 → 200 to catch medium-sized LS/Grep results earlier.
+ */
+const MICROCOMPACT_MIN_CHARS = 200;
 
 export function microcompact(history: Message[]): number {
   const now = Date.now();
@@ -71,7 +75,9 @@ export function microcompact(history: Message[]): number {
     // Age check: use _ts if available, otherwise position heuristic
     const msgTs = (msg as Message & { _ts?: number })._ts;
     const isStaleByTime = msgTs !== undefined && (now - msgTs) > MICROCOMPACT_AGE_MS;
-    const isStaleByPosition = msgTs === undefined && i < Math.floor(history.length * 0.4);
+    // Position heuristic: front 30% of history (down from 40%) — avoids clearing
+    // too-recent results when there is no timestamp information.
+    const isStaleByPosition = msgTs === undefined && i < Math.floor(history.length * 0.3);
 
     if (isStaleByTime || isStaleByPosition) {
       history[i] = {
@@ -123,8 +129,15 @@ export const PRESERVE_RESULT_TOOLS = new Set([
 ]);
 
 export const DEFAULT_CTX_EDITOR_CONFIG: ContextEditorConfig = {
-  trigger: 80_000,
-  keep: 3,
+  // Trigger lowered from 80K → 60K tokens.
+  // Rationale: 80K on a 128K model = 62% usage before ANY cleanup begins,
+  // leaving insufficient headroom and causing rapid ctx-editor thrashing.
+  // At 60K (47% of 128K) there is more buffer to compact gracefully.
+  // Override via AGENT_CTX_TRIGGER environment variable.
+  trigger: parseInt(process.env.AGENT_CTX_TRIGGER ?? '60000', 10),
+  // Keep raised from 3 → 5: retain more recent tool results so the agent
+  // doesn't need to re-run LS/Grep/Read to recover lost context.
+  keep: 5,
   clearAtLeast: 0,
   // Preserve read_file results — they are reference material the agent
   // may still need; clearing them triggers pointless re-reads (s06 insight).
