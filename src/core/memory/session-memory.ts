@@ -44,6 +44,7 @@
  */
 
 import type { Message } from '../../models/types.js';
+import { getContentText } from '../../models/types.js';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -115,7 +116,7 @@ function estimateTokens(text: string): number {
 
 function estimateHistoryTokens(history: Message[]): number {
   return history.reduce((sum, m) => {
-    const content = typeof m.content === 'string' ? m.content : '';
+    const content = getContentText(m.content);
     return sum + estimateTokens(content);
   }, 0);
 }
@@ -150,16 +151,21 @@ export function buildSessionMemory(history: Message[]): string {
   const toolMessages = history.filter((m) => m.role === 'tool');
 
   // Chapter 1: Session Title — first user message (truncated)
-  const firstUserMsg = userMessages[0]?.content?.slice(0, 150) ?? 'Untitled Session';
+  const firstUserMsgRaw = userMessages[0]?.content;
+  const firstUserMsg = firstUserMsgRaw ? getContentText(firstUserMsgRaw).slice(0, 150) : 'Untitled Session';
 
   // Chapter 2: Current State — last assistant message
-  const lastAssistant = assistantMessages[assistantMessages.length - 1]?.content ?? '';
+  const lastAssistantRaw = assistantMessages[assistantMessages.length - 1]?.content ?? '';
+  const lastAssistant = getContentText(lastAssistantRaw);
   const currentState = lastAssistant.slice(0, SM_MAX_CHAPTER_TOKENS * CHARS_PER_TOKEN);
 
   // Chapter 3: Task Specification — all user messages (condensed)
   const taskSpec = userMessages
-    .filter((m) => !m.content.startsWith('[SYSTEM]') && !m.content.startsWith('<'))
-    .map((m) => `• ${m.content.slice(0, 200)}`)
+    .filter((m) => {
+      const t = getContentText(m.content);
+      return !t.startsWith('[SYSTEM]') && !t.startsWith('<');
+    })
+    .map((m) => `• ${getContentText(m.content).slice(0, 200)}`)
     .slice(-10) // last 10 user messages
     .join('\n');
 
@@ -167,7 +173,7 @@ export function buildSessionMemory(history: Message[]): string {
   const filePatterns = /(?:\/[^\s"'`]+\.[a-zA-Z]{1,6}|[a-zA-Z_][a-zA-Z0-9_]*\.(ts|js|py|go|rs|java|md|json|yaml|yml))/g;
   const filesSet = new Set<string>();
   for (const msg of toolMessages.slice(-30)) {
-    const matches = msg.content.match(filePatterns) ?? [];
+    const matches = getContentText(msg.content).match(filePatterns) ?? [];
     for (const m of matches.slice(0, 5)) filesSet.add(m);
     if (filesSet.size >= 30) break;
   }
@@ -184,7 +190,7 @@ export function buildSessionMemory(history: Message[]): string {
   const errorPattern = /(?:error|failed|exception|traceback|TypeError|SyntaxError)[::\s][^\n]{0,200}/gi;
   const errors: string[] = [];
   for (const msg of toolMessages.slice(-20)) {
-    const matches = msg.content.match(errorPattern) ?? [];
+    const matches = getContentText(msg.content).match(errorPattern) ?? [];
     errors.push(...matches.slice(0, 2));
     if (errors.length >= 10) break;
   }
@@ -192,7 +198,7 @@ export function buildSessionMemory(history: Message[]): string {
 
   // Chapter 7: Codebase Documentation — minimal (detected tech stack)
   const techPatterns: string[] = [];
-  const allContent = history.map((m) => m.content).join('\n');
+  const allContent = history.map((m) => getContentText(m.content)).join('\n');
   if (allContent.includes('package.json') || allContent.includes('node_modules')) techPatterns.push('Node.js/TypeScript');
   if (allContent.includes('requirements.txt') || allContent.includes('.py')) techPatterns.push('Python');
   if (allContent.includes('go.mod') || allContent.includes('.go')) techPatterns.push('Go');
@@ -203,7 +209,7 @@ export function buildSessionMemory(history: Message[]): string {
   const learningPattern = /(?:note:|important:|remember:|key insight:|learned:)[^\n]{0,300}/gi;
   const learnings: string[] = [];
   for (const msg of assistantMessages.slice(-10)) {
-    const matches = msg.content.match(learningPattern) ?? [];
+    const matches = getContentText(msg.content).match(learningPattern) ?? [];
     learnings.push(...matches.slice(0, 2));
   }
   const learningsSection = learnings.slice(0, 5).map((l) => `• ${l.trim()}`).join('\n');
@@ -211,7 +217,7 @@ export function buildSessionMemory(history: Message[]): string {
   // Chapter 9: Key Results — last assistant message summary (brief)
   const keyResults = lastAssistant
     .split('\n')
-    .filter((l) => l.match(/^[•✓✅⚡🔧📝]/))
+    .filter((l: string) => l.match(/^[•✓✅⚡🔧📝]/))
     .slice(0, 8)
     .join('\n');
 
@@ -219,7 +225,7 @@ export function buildSessionMemory(history: Message[]): string {
   const worklog = history
     .filter((m) => m.role === 'assistant')
     .slice(-5)
-    .map((m, i) => `Turn ${i + 1}: ${m.content.slice(0, 100)}`)
+    .map((m, i) => `Turn ${i + 1}: ${getContentText(m.content).slice(0, 100)}`)
     .join('\n');
 
   // Assemble chapters
@@ -354,7 +360,7 @@ export function trySessionMemoryCompaction(
 
   for (let i = history.length - 1; i >= 0; i--) {
     const msgTokens = estimateTokens(
-      typeof history[i].content === 'string' ? history[i].content : ''
+      getContentText(history[i].content)
     );
     keptTokens += msgTokens;
     keptMessages++;

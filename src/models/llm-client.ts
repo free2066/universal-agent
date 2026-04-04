@@ -1,13 +1,62 @@
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import type {
+  ContentBlock,
+  ImageBlock,
+  ImageUrlBlock,
   LLMClient,
   ChatOptions,
   ChatResponse,
   Message,
 } from './types.js';
+import { getContentText } from './types.js';
+// suppress unused-import warning — used in msgText()
+void getContentText;
 
-/** Map thinking level → budget tokens (used by Anthropic + Gemini) */
+// ── Vision helpers ───────────────────────────────────────────────────────────
+/** Build an OpenAI-style user content part array (supports images). */
+function toOpenAIUserContent(
+  content: string | ContentBlock[],
+): string | OpenAI.ChatCompletionContentPart[] {
+  if (typeof content === 'string') return content;
+  const hasBin = content.some(b => typeof b !== 'string');
+  if (!hasBin) return getContentText(content);
+  return content.map((b): OpenAI.ChatCompletionContentPart => {
+    if (typeof b === 'string') return { type: 'text', text: b };
+    if (b.type === 'image') {
+      return { type: 'image_url', image_url: { url: `data:${(b as ImageBlock).mimeType};base64,${(b as ImageBlock).data}` } };
+    }
+    if (b.type === 'image_url') {
+      return { type: 'image_url', image_url: { url: (b as ImageUrlBlock).url } };
+    }
+    return { type: 'text', text: '' };
+  });
+}
+
+/** Build an Anthropic-style content array (supports images). */
+function toAnthropicContent(
+  content: string | ContentBlock[],
+): string | Anthropic.ContentBlockParam[] {
+  if (typeof content === 'string') return content;
+  const hasBin = content.some(b => typeof b !== 'string');
+  if (!hasBin) return getContentText(content);
+  return content.map((b): Anthropic.ContentBlockParam => {
+    if (typeof b === 'string') return { type: 'text', text: b };
+    if (b.type === 'image') {
+      return { type: 'image', source: { type: 'base64', media_type: (b as ImageBlock).mimeType as 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp', data: (b as ImageBlock).data } };
+    }
+    if (b.type === 'image_url') {
+      // Anthropic supports URL sources in newer API versions
+      return { type: 'image', source: { type: 'url', url: (b as ImageUrlBlock).url } as unknown as Anthropic.Base64ImageSource };
+    }
+    return { type: 'text', text: '' };
+  });
+}
+
+/** Safe plain-text extraction for logging/token counting */
+function msgText(content: string | ContentBlock[]): string {
+  return getContentText(content);
+}
 const THINKING_BUDGETS: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
 /** Map thinking level → OpenAI reasoning_effort string (o1/o3/o4 series) */
 const REASONING_EFFORT: Record<string, string> = { low: 'low', medium: 'medium', high: 'high' };
@@ -239,12 +288,12 @@ class OpenAIClient implements LLMClient {
         messages.push({
           role: 'tool',
           tool_call_id: msg.toolCallId!,
-          content: msg.content,
+          content: msgText(msg.content),
         });
       } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
         messages.push({
           role: 'assistant',
-          content: msg.content || null,
+          content: msgText(msg.content) || null,
           tool_calls: msg.toolCalls.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
@@ -252,10 +301,9 @@ class OpenAIClient implements LLMClient {
           })),
         });
       } else if (msg.role === 'user' || msg.role === 'assistant') {
-        messages.push({ role: msg.role, content: msg.content });
+        messages.push({ role: msg.role, content: toOpenAIUserContent(msg.content) as string });
       }
     }
-
     return messages;
   }
 }
@@ -293,7 +341,7 @@ class DeepSeekClient extends OpenAIClient {
       if (msg.tool_calls?.length) {
         return {
           type: 'tool_calls',
-          content: msg.content || '',
+          content: typeof msg.content === 'string' ? msg.content || '' : '',
           toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
             id: tc.id,
             name: tc.function.name,
@@ -301,7 +349,7 @@ class DeepSeekClient extends OpenAIClient {
           })),
         };
       }
-      return { type: 'text', content: msg.content || '' };
+      return { type: 'text', content: typeof msg.content === 'string' ? msg.content || '' : '' };
     }
     return super.chat(options);
   }
@@ -513,14 +561,14 @@ class AnthropicClient implements LLMClient {
     while (i < messages.length) {
       const msg = messages[i];
       if (msg.role === 'user') {
-        result.push({ role: 'user', content: msg.content });
+        result.push({ role: 'user', content: toAnthropicContent(msg.content) as string | Anthropic.ContentBlockParam[] });
         i++;
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls?.length) {
           result.push({
             role: 'assistant',
             content: [
-              ...(msg.content ? [{ type: 'text' as const, text: msg.content }] : []),
+              ...(msg.content ? [{ type: 'text' as const, text: msgText(msg.content) }] : []),
               ...msg.toolCalls.map((tc) => ({
                 type: 'tool_use' as const,
                 id: tc.id,
@@ -530,7 +578,7 @@ class AnthropicClient implements LLMClient {
             ],
           });
         } else {
-          result.push({ role: 'assistant', content: msg.content });
+          result.push({ role: 'assistant', content: msg.content ? [{ type: 'text' as const, text: msgText(msg.content) }] : [] });
         }
         i++;
       } else if (msg.role === 'tool') {
@@ -540,7 +588,7 @@ class AnthropicClient implements LLMClient {
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolMsg.toolCallId!,
-            content: toolMsg.content,
+            content: msgText(toolMsg.content),
           });
           i++;
         }
@@ -635,10 +683,10 @@ class GeminiClient implements LLMClient {
       if (msg.role === 'tool') {
         return {
           role: 'user' as const,
-          parts: [{ text: `[Tool result]\n${msg.content}` }],
+          parts: [{ text: `[Tool result]\n${msgText(msg.content)}` }],
         };
       }
-      return { role: role as 'user' | 'model', parts: [{ text: msg.content }] };
+      return { role: role as 'user' | 'model', parts: [{ text: msgText(msg.content) }] };
     });
 
     const generationConfig: Record<string, unknown> = { maxOutputTokens: 8192 };
@@ -776,9 +824,9 @@ class OllamaClient implements LLMClient {
     ];
     for (const msg of messages) {
       if (msg.role === 'tool') {
-        result.push({ role: 'assistant', content: `[Tool result]\n${msg.content}` });
+        result.push({ role: 'assistant', content: `[Tool result]\n${msgText(msg.content)}` });
       } else if (msg.role === 'user' || msg.role === 'assistant') {
-        result.push({ role: msg.role, content: msg.content });
+        result.push({ role: msg.role, content: msgText(msg.content) });
       }
     }
     return result;
@@ -882,7 +930,7 @@ class OpenRouterClient implements LLMClient {
 
     return {
       type: 'text',
-      content: msg.content ?? '',
+      content: msg.content || '',
     };
   }
 
@@ -908,11 +956,11 @@ class OpenRouterClient implements LLMClient {
     }
     for (const m of options.messages) {
       if (m.role === 'tool') {
-        msgs.push({ role: 'tool', content: String(m.content), tool_call_id: m.toolCallId ?? '' });
+        msgs.push({ role: 'tool', content: msgText(m.content), tool_call_id: m.toolCallId ?? '' });
       } else if (m.role === 'assistant' && m.toolCalls?.length) {
         msgs.push({
           role: 'assistant',
-          content: m.content as string | null,
+          content: typeof m.content === 'string' ? m.content || null : null,
           tool_calls: m.toolCalls.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
@@ -920,7 +968,7 @@ class OpenRouterClient implements LLMClient {
           })),
         });
       } else {
-        msgs.push({ role: m.role as 'user' | 'assistant', content: m.content as string });
+        msgs.push({ role: m.role as 'user' | 'assistant', content: toOpenAIUserContent(m.content) as string });
       }
     }
     return msgs;

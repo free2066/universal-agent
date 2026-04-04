@@ -7,7 +7,7 @@ import chalk from 'chalk';
 import { createInterface } from 'readline';
 import { readdirSync, statSync, readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs';
 import { join, relative, extname } from 'path';
-import { spawnSync } from 'child_process';
+import { spawnSync, execSync } from 'child_process';
 import type { AgentCore } from '../../core/agent.js';
 import { modelManager } from '../../models/model-manager.js';
 import { subagentSystem } from '../../core/subagent-system.js';
@@ -127,11 +127,16 @@ export async function runREPL(
   const SLASH_COMPLETIONS = [
     '/help', '/clear', '/exit', '/resume', '/compact', '/tokens', '/cost',
     '/model', '/models', '/domain', '/continue',
-    '/review', '/inspect', '/purify', '/spec',
+    '/review', '/inspect', '/purify',
+    '/spec', '/spec:brainstorm', '/spec:write-plan', '/spec:execute-plan',
     '/agents', '/team', '/tasks', '/inbox',
     '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
     '/mcp',
     '/log', '/logs',
+    // CF parity additions
+    '/context', '/status', '/copy', '/export',
+    '/branch', '/rename', '/add-dir',
+    '/terminal-setup', '/bug', '/output-style',
   ];
 
   function completer(line: string): [string[], string] {
@@ -178,6 +183,9 @@ export async function runREPL(
   // F8: Esc×2 rollback
   let _lastEsc = 0;
 
+  // Ctrl+R: reverse-search index (tracks position in cycle)
+  let _historySearchIdx = -1;
+
   // F3: multiline input buffer
   const _pendingLines: string[] = [];
   let _multilineMode = false;
@@ -206,11 +214,25 @@ export async function runREPL(
       return;
     }
 
-    // ── Ctrl+R: reverse history search ────────────────────────────────────
+    // ── Ctrl+R: toggle / cycle reverse history search ───────────────────────
     if (key.ctrl && key.name === 'r') {
-      _historySearch = true;
-      _historyQuery = '';
-      process.stdout.write('\r\x1b[2K' + chalk.dim('(reverse-search) ') + chalk.cyan('_'));
+      if (!_historySearch) {
+        _historySearch = true;
+        _historyQuery = '';
+        _historySearchIdx = -1;
+        process.stdout.write('\r\x1b[2K' + chalk.dim('(reverse-search) ') + chalk.cyan('_'));
+      } else {
+        // Already searching — cycle to next (older) match
+        const _rv = _inputHistory.slice().reverse();
+        const _from = _historySearchIdx + 1;
+        const _ni = _rv.slice(_from).findIndex((h) => h.includes(_historyQuery));
+        if (_ni !== -1) {
+          _historySearchIdx = _from + _ni;
+          process.stdout.write(`\r\x1b[2K${chalk.dim('(reverse-search)')} ${chalk.cyan(_historyQuery)}: ${chalk.white(_rv[_historySearchIdx]!)}`);
+        } else {
+          process.stdout.write(`\r\x1b[2K${chalk.dim('(reverse-search)')} ${chalk.cyan(_historyQuery)}: ${chalk.dim('no more matches')}`);
+        }
+      }
       return;
     }
 
@@ -306,23 +328,58 @@ export async function runREPL(
       return;
     }
 
-    // ── Reverse-search key handling ────────────────────────────────────────
+    // ── Ctrl+V: paste image from clipboard (uses top-level execSync) ──────
+    if (key.ctrl && key.name === 'v') {
+      const _tryPasteImgV = (cmd: string, tmpPath: string): boolean => {
+        try {
+          execSync(cmd, { stdio: 'pipe' });
+          if (existsSync(tmpPath)) {
+            const base64 = readFileSync(tmpPath).toString('base64');
+            try { unlinkSync(tmpPath); } catch { /* */ }
+            const agentImgV = agent as AgentCore & { _pendingImage?: { data: string; mimeType: string } };
+            agentImgV._pendingImage = { data: base64, mimeType: 'image/png' };
+            rl.setPrompt(chalk.magenta('[image] ') + chalk.green('❯ '));
+            process.stdout.write('\r\x1b[2K' + chalk.green('  ✓ Image from clipboard attached. Now type your question.') + '\n');
+            rl.prompt(); printStatusBar();
+            return true;
+          }
+        } catch { /* */ }
+        return false;
+      };
+      const _tmpV = join('/tmp', `uagent-clipboard-${Date.now()}.png`);
+      let _handledV = false;
+      try {
+        execSync('which pngpaste 2>/dev/null', { stdio: 'pipe' });
+        _handledV = _tryPasteImgV(`pngpaste "${_tmpV}"`, _tmpV);
+        if (!_handledV) { process.stdout.write('\r\x1b[2K' + chalk.yellow('  ⚠ No image in clipboard.') + '\n'); rl.prompt(); printStatusBar(); }
+      } catch {
+        const _tmpVL = join('/tmp', `uagent-clip-${Date.now()}.png`);
+        try { execSync('which xclip 2>/dev/null', { stdio: 'pipe' }); _handledV = _tryPasteImgV(`xclip -selection clipboard -t image/png -o > "${_tmpVL}"`, _tmpVL); } catch { /* */ }
+        if (!_handledV) { process.stdout.write('\r\x1b[2K' + chalk.dim('  (install pngpaste: brew install pngpaste)') + '\n'); rl.prompt(); printStatusBar(); }
+      }
+      return;
+    }
+
+    // ── Reverse-search input handling (when in search mode) ──────────────────
     if (!_historySearch) return;
     if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
       _historySearch = false;
       _historyQuery = '';
+      _historySearchIdx = -1;
       rl.prompt(); printStatusBar();
       return;
     }
     if (key.name === 'return' || key.name === 'enter') {
       _historySearch = false;
-      const match = _inputHistory.slice().reverse().find((h) => h.includes(_historyQuery));
+      const _rv2 = _inputHistory.slice().reverse();
+      const _mSel = _historySearchIdx >= 0 ? _rv2[_historySearchIdx] : _rv2.find((h) => h.includes(_historyQuery));
       _historyQuery = '';
-      if (match) {
-        (rl as unknown as { line: string }).line = match;
+      _historySearchIdx = -1;
+      if (_mSel) {
+        (rl as unknown as { line: string }).line = _mSel;
         process.stdout.write('\r\x1b[2K');
         rl.prompt(); printStatusBar();
-        process.stdout.write(match);
+        process.stdout.write(_mSel);
       } else {
         rl.prompt(); printStatusBar();
       }
@@ -330,12 +387,14 @@ export async function runREPL(
     }
     if (key.name === 'backspace') {
       _historyQuery = _historyQuery.slice(0, -1);
+      _historySearchIdx = -1;
     } else if (key.sequence && key.sequence.length === 1 && !key.ctrl) {
       _historyQuery += key.sequence;
+      _historySearchIdx = -1;
     }
-    const match = _inputHistory.slice().reverse().find((h) => h.includes(_historyQuery));
-    const display = match ? chalk.white(match) : chalk.dim('no match');
-    process.stdout.write(`\r\x1b[2K${chalk.dim('(reverse-search)')} ${chalk.cyan(_historyQuery)}: ${display}`);
+    const _rv3 = _inputHistory.slice().reverse();
+    const _mDisp = _historySearchIdx >= 0 ? _rv3[_historySearchIdx] : _rv3.find((h) => h.includes(_historyQuery));
+    process.stdout.write(`\r\x1b[2K${chalk.dim('(reverse-search)')} ${chalk.cyan(_historyQuery)}: ${_mDisp ? chalk.white(_mDisp) : chalk.dim('no match')}`);
   });
 
   // ── Welcome line ─────────────────────────────────────────────────────────
@@ -507,13 +566,23 @@ export async function runREPL(
         finalInput = `${input}\n\n---\n${hookCtx.injection}`;
       }
 
-      const agentWithImage = agent as AgentCore & { _pendingImage?: string };
+      const agentWithImage = agent as AgentCore & { _pendingImage?: { data: string; mimeType: string } };
       if (agentWithImage._pendingImage) {
-        const imgDataUrl = agentWithImage._pendingImage;
+        const { data, mimeType } = agentWithImage._pendingImage;
         delete agentWithImage._pendingImage;
         rl.setPrompt(makePrompt(options.domain));
-        finalInput = `[Image attached — analyze this image]\n${finalInput}\n\n[Image data: ${imgDataUrl.slice(0, 100)}...]`;
-        console.log(chalk.gray('  (Image context attached to this request)'));
+        // Append the image as a multimodal ContentBlock to the prompt
+        // agent.runStream will receive a string prompt; we attach image via injectContext
+        // by constructing a multimodal message directly
+        const imageBlock: import('../../models/types.js').ImageBlock = { type: 'image', data, mimeType };
+        const multiContent: import('../../models/types.js').ContentBlock[] = [
+          finalInput,
+          imageBlock,
+        ];
+        // Override finalInput with a marker and attach image block via agent history injection
+        agent.injectImagePrompt(finalInput, imageBlock);
+        finalInput = ''; // consumed by injectImagePrompt
+        console.log(chalk.gray('  (Image attached to this request)'));
       }
 
       const spinner = new CliSpinner();

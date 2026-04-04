@@ -201,14 +201,50 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
     rl.prompt(); printStatusBar(); return true;
   }
 
-  // /resume
-  if (input === '/resume') {
-    const snap = loadLastSnapshot();
-    if (snap && snap.messages.length >= 2) {
-      agent.setHistory(snap.messages as never);
-      process.stdout.write(chalk.green(`  ✓ Restored session from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n');
+  // /resume — with optional session_id parameter
+  if (input === '/resume' || input.startsWith('/resume ')) {
+    const parts = input.split(/\s+/);
+    const sessionId = parts[1];
+    if (sessionId) {
+      // Load specific session by ID
+      const { loadSnapshot: _loadSnap } = await import('../../core/memory/session-snapshot.js');
+      const snap = _loadSnap(sessionId);
+      if (snap && snap.messages.length >= 2) {
+        agent.setHistory(snap.messages as never);
+        process.stdout.write(chalk.green(`  ✓ Restored session "${sessionId}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n');
+      } else {
+        // Try listing available sessions for the user
+        const { readdirSync: _rds, statSync: _ss, existsSync: _es } = await import('fs');
+        const { resolve: _res, join: _jn } = await import('path');
+        const sessDir = _res(process.env.HOME ?? '~', '.uagent', 'sessions');
+        if (_es(sessDir)) {
+          const files = _rds(sessDir).filter(f => f.endsWith('.json'));
+          if (files.length) {
+            console.log(chalk.yellow('\n💾 Available sessions:\n'));
+            const sorted = files
+              .map(f => ({ f, mtime: _ss(_jn(sessDir, f)).mtimeMs }))
+              .sort((a, b) => b.mtime - a.mtime)
+              .slice(0, 10);
+            for (const { f, mtime } of sorted) {
+              const id = f.replace('.json', '');
+              console.log(`  ${chalk.cyan(id.padEnd(30))} ${chalk.gray(new Date(mtime).toLocaleString('zh-CN', { hour12: false }))}`);
+            }
+            console.log(chalk.gray('\n  Use: /resume <session-id>\n'));
+          } else {
+            process.stdout.write(chalk.dim(`  Session "${sessionId}" not found.\n\n`));
+          }
+        } else {
+          process.stdout.write(chalk.dim(`  Session "${sessionId}" not found.\n\n`));
+        }
+      }
     } else {
-      process.stdout.write(chalk.dim('  No saved session found.') + '\n\n');
+      const snap = loadLastSnapshot();
+      if (snap && snap.messages.length >= 2) {
+        agent.setHistory(snap.messages as never);
+        process.stdout.write(chalk.green(`  ✓ Restored session from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n');
+      } else {
+        process.stdout.write(chalk.dim('  No saved session found.') + '\n\n');
+      }
     }
     rl.prompt(); printStatusBar(); return true;
   }
@@ -648,7 +684,352 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
     rl.prompt(); printStatusBar(); return true;
   }
 
+  // ── /context — alias for /tokens (CF calls it /context) ──────────────────
+  if (input === '/context') {
+    const { shouldCompact } = await import('../../core/context/context-compressor.js');
+    const history = agent.getHistory();
+    const decision = shouldCompact(history);
+    const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
+    console.log(chalk.yellow('\n📊 Context Window Stats:'));
+    console.log(`  Estimated tokens : ${chalk.white(decision.estimatedTokens.toLocaleString())}`);
+    console.log(`  Context limit    : ${chalk.white(decision.contextLength.toLocaleString())}`);
+    console.log(`  Usage            : ${chalk.white(pct + '%')}`);
+    console.log(`  Messages in ctx  : ${chalk.white(String(history.length))}`);
+    console.log(`  Compact needed   : ${decision.shouldCompact ? chalk.red('Yes') : chalk.green('No')}`);
+    console.log(chalk.gray('\n  Tip: /compact — compress context; /clear — start fresh\n'));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /status — show CLI version, working dir, session info, model ──────────
+  if (input === '/status') {
+    const { readFileSync: _rfs } = await import('fs');
+    const { dirname: _dn, join: _jn } = await import('path');
+    const { fileURLToPath: _ftu } = await import('url');
+    let version = '(unknown)';
+    try {
+      const pkgPath = _jn(_dn(_ftu(import.meta.url)), '../../../package.json');
+      version = JSON.parse(_rfs(pkgPath, 'utf-8')).version ?? version;
+    } catch { /* */ }
+    const currentModel = modelManager.getCurrentModel('main');
+    const h = agent.getHistory();
+    console.log(chalk.yellow('\n📋 Status:'));
+    console.log(`  Version  : ${chalk.white('v' + version)}`);
+    console.log(`  CWD      : ${chalk.cyan(process.cwd())}`);
+    console.log(`  Model    : ${chalk.white(currentModel)}`);
+    console.log(`  Domain   : ${chalk.white(options.domain)}`);
+    console.log(`  Session  : ${chalk.white(SESSION_ID)}`);
+    console.log(`  Messages : ${chalk.white(String(h.length))}`);
+    console.log(`  Log      : ${chalk.cyan(sessionLogger.path)}`);
+    console.log(chalk.gray('\n  /model — switch model  |  /log — session log path\n'));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /copy — copy AI last reply to clipboard ────────────────────────────────
+  if (input === '/copy') {
+    const history = agent.getHistory();
+    const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
+    if (!lastAssistant) {
+      console.log(chalk.gray('\n  No AI reply to copy yet.\n'));
+      rl.prompt(); printStatusBar(); return true;
+    }
+    const { getContentText: _gct2 } = await import('../../models/types.js');
+    const text = _gct2(lastAssistant.content);
+    try {
+      const { execSync: _exec } = await import('child_process');
+      // macOS: pbcopy, Linux: xclip or xsel
+      const cmd = process.platform === 'darwin' ? 'pbcopy' : 'xclip -selection clipboard';
+      _exec(cmd, { input: text });
+      console.log(chalk.green(`\n✓ Copied ${text.length} chars to clipboard.\n`));
+    } catch {
+      // Fallback: show content
+      console.log(chalk.yellow('\n⚠ Clipboard not available. Last reply:\n'));
+      console.log(text.slice(0, 500) + (text.length > 500 ? '\n...(truncated)' : ''));
+      console.log();
+    }
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /export — export current session context to a file ───────────────────
+  if (input.startsWith('/export')) {
+    const parts = input.split(/\s+/);
+    const { mkdirSync: _mkdir, writeFileSync: _wfs } = await import('fs');
+    const { join: _jn2 } = await import('path');
+    const outDir = parts[1] ? parts[1] : process.cwd();
+    const filename = `uagent-session-${SESSION_ID.slice(0, 8)}-${Date.now()}.md`;
+    const outPath = _jn2(outDir, filename);
+    const history = agent.getHistory();
+    const { getContentText: _gct3 } = await import('../../models/types.js');
+    const lines: string[] = [`# Session Export — ${new Date().toLocaleString()}\n`];
+    for (const msg of history) {
+      const icon = msg.role === 'user' ? '👤 **User**' : msg.role === 'assistant' ? '🤖 **Assistant**' : `🔧 **${msg.role}**`;
+      lines.push(`### ${icon}\n\n${_gct3(msg.content)}\n`);
+    }
+    try {
+      _mkdir(outDir, { recursive: true });
+      _wfs(outPath, lines.join('\n---\n\n'), 'utf-8');
+      console.log(chalk.green(`\n✓ Session exported → ${outPath}\n`));
+    } catch (err) {
+      console.log(chalk.red(`\n✗ Export failed: ${err instanceof Error ? err.message : String(err)}\n`));
+    }
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /branch — fork current session into a new branch ─────────────────────
+  if (input === '/branch') {
+    const history = agent.getHistory();
+    const branchId = `branch-${Date.now()}`;
+    saveSnapshot(branchId, history);
+    console.log(chalk.green(`\n✓ Branched session saved as: ${branchId}`));
+    console.log(chalk.gray('  Use /resume to restore this session later.'));
+    console.log(chalk.gray('  Current session continues unchanged.\n'));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /rename <name> — rename the current session ───────────────────────────
+  if (input.startsWith('/rename')) {
+    const newName = input.replace('/rename', '').trim();
+    if (!newName) {
+      console.log(chalk.gray('\n  Usage: /rename <session-name>\n'));
+      rl.prompt(); printStatusBar(); return true;
+    }
+    // Store the custom name alongside the session snapshot
+    const history = agent.getHistory();
+    saveSnapshot(`named-${newName}`, history);
+    console.log(chalk.green(`\n✓ Session renamed to: ${newName}`));
+    console.log(chalk.gray('  Restore with: /resume (then pick from list)\n'));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /add-dir <dir_path> — add directory to working context ───────────────
+  if (input.startsWith('/add-dir ')) {
+    const dirPath = input.replace('/add-dir ', '').trim();
+    const { readdirSync: _rds, statSync: _ss, existsSync: _es } = await import('fs');
+    const { join: _jn3, relative: _rel } = await import('path');
+    if (!dirPath || !_es(dirPath)) {
+      console.log(chalk.red(`\n✗ Directory not found: ${dirPath}\n`));
+      rl.prompt(); printStatusBar(); return true;
+    }
+    // Collect files and summarize
+    const files: string[] = [];
+    const scanDir = (d: string, depth = 0): void => {
+      if (depth > 2 || files.length > 100) return;
+      try {
+        for (const f of _rds(d)) {
+          if (['node_modules', '.git', 'dist'].includes(f)) continue;
+          const full = _jn3(d, f);
+          try {
+            if (_ss(full).isDirectory()) scanDir(full, depth + 1);
+            else files.push(_rel(process.cwd(), full));
+          } catch { /* */ }
+        }
+      } catch { /* */ }
+    };
+    scanDir(dirPath);
+    agent.injectContext(`[Added directory to context: ${dirPath}]\nFiles in this directory:\n${files.slice(0, 80).join('\n')}`);
+    console.log(chalk.green(`\n✓ Added ${dirPath} to context (${files.length} files indexed)\n`));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /terminal-setup — configure Shift+Enter line break shortcut ──────────
+  if (input === '/terminal-setup') {
+    console.log(chalk.yellow('\n⌨  Terminal Setup — Shift+Enter line break\n'));
+    console.log('This command configures Shift+Enter as a newline shortcut in your terminal.\n');
+    console.log(chalk.white('Option 1: iTerm2'));
+    console.log(chalk.gray('  Open Preferences → Profiles → Keys → Key Mappings'));
+    console.log(chalk.gray('  Add: Shift+Enter → Send Hex Code → 0x0a\n'));
+    console.log(chalk.white('Option 2: VS Code integrated terminal'));
+    console.log(chalk.gray('  Add to keybindings.json:'));
+    console.log(chalk.cyan('  { "key": "shift+enter", "command": "workbench.action.terminal.sendSequence",'));
+    console.log(chalk.cyan('    "args": { "text": "\\n" },'));
+    console.log(chalk.cyan('    "when": "terminalFocus" }\n'));
+    console.log(chalk.white('Option 3: ~/.inputrc (universal readline)'));
+    console.log(chalk.gray('  Add: "\\e[13;2u": "\\n"'));
+    console.log(chalk.gray('  Then run: bind -f ~/.inputrc\n'));
+    console.log(chalk.dim('Already supported in uagent: \\ + Enter (universal), Option+Enter (macOS)\n'));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /bug — extract session log and report a bug ───────────────────────────
+  if (input.startsWith('/bug')) {
+    const desc = input.replace('/bug', '').trim();
+    console.log(chalk.yellow('\n🐛 Bug Report\n'));
+    const logPath = sessionLogger.path;
+    console.log(`  Session log  : ${chalk.cyan(logPath)}`);
+    console.log(`  Working dir  : ${chalk.cyan(process.cwd())}`);
+    console.log(`  Model        : ${chalk.white(modelManager.getCurrentModel('main'))}`);
+    console.log(`  Session      : ${chalk.white(SESSION_ID)}`);
+    if (desc) console.log(`  Description  : ${chalk.white(desc)}`);
+    console.log();
+    console.log(chalk.yellow('  Steps to report:'));
+    console.log(chalk.gray('  1. Copy log to clipboard:'));
+    console.log(chalk.gray(`     cat "${logPath}" | pbcopy`));
+    console.log(chalk.gray('  2. Open issue tracker or KOncall'));
+    console.log(chalk.gray('  3. Paste log and describe the problem'));
+    console.log();
+    console.log(chalk.dim('  Tip: /export — save full conversation to a file\n'));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /output-style — choose output style (plain / markdown / compact) ──────
+  if (input.startsWith('/output-style')) {
+    const style = input.replace('/output-style', '').trim();
+    const validStyles = ['plain', 'markdown', 'compact'];
+    if (!style) {
+      console.log(chalk.yellow('\n🎨 Output Styles:\n'));
+      validStyles.forEach((s) => console.log(`  • ${chalk.white(s)}`));
+      console.log(chalk.gray('\n  Usage: /output-style <style>\n'));
+      console.log(chalk.gray('  Currently: markdown (default — all output rendered as markdown)\n'));
+      rl.prompt(); printStatusBar(); return true;
+    }
+    if (!validStyles.includes(style)) {
+      console.log(chalk.red(`\n✗ Unknown style "${style}". Choose: ${validStyles.join(', ')}\n`));
+      rl.prompt(); printStatusBar(); return true;
+    }
+    // Inject style instruction as a system-level context note
+    agent.injectContext(`[Output style changed to: ${style}]\nFrom now on, format all responses as ${style}.`);
+    console.log(chalk.green(`\n✓ Output style → ${style}\n`));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /spec:brainstorm — brainstorm design/feature ideas ────────────────────
+  if (input.startsWith('/spec:brainstorm')) {
+    const topic = input.replace('/spec:brainstorm', '').trim();
+    if (!topic) {
+      console.log(chalk.gray('\n  Usage: /spec:brainstorm <topic or feature description>\n'));
+      rl.prompt(); printStatusBar(); return true;
+    }
+    rl.pause();
+    process.stdout.write('\n');
+    const spinnerB = ora('Brainstorming ideas...').start();
+    try {
+      const prompt = `# Brainstorm: ${topic}
+
+Please brainstorm design approaches and ideas for the following topic. Be creative and explore multiple angles:
+
+**Topic:** ${topic}
+
+Provide:
+1. 3-5 distinct design approaches
+2. Pros and cons of each
+3. Key technical challenges to consider
+4. A recommended starting point`;
+      spinnerB.stop();
+      await agent.runStream(prompt, (chunk) => process.stdout.write(chunk));
+      process.stdout.write('\n\n');
+    } catch (err) {
+      spinnerB.fail('Brainstorm failed: ' + (err instanceof Error ? err.message : String(err)));
+    }
+    rl.resume();
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /spec:write-plan — generate a structured implementation plan ─────────
+  if (input.startsWith('/spec:write-plan')) {
+    const topic = input.replace('/spec:write-plan', '').trim();
+    const history = agent.getHistory();
+    const recentContext = history.slice(-6).map((m) => {
+      const { getContentText: _gct4 } = { getContentText: (c: unknown): string => typeof c === 'string' ? c : '[content]' };
+      return `${m.role}: ${_gct4(m.content).slice(0, 200)}`;
+    }).join('\n');
+    rl.pause();
+    process.stdout.write('\n');
+    try {
+      const planPrompt = topic
+        ? `Generate a detailed implementation plan for: ${topic}`
+        : `Based on our recent conversation:\n\n${recentContext}\n\nGenerate a detailed, step-by-step implementation plan with:\n1. Clear phases and milestones\n2. Specific tasks for each phase\n3. Dependencies between tasks\n4. Estimated complexity\n5. Potential risks and mitigations`;
+      await agent.runStream(planPrompt, (chunk) => process.stdout.write(chunk));
+      process.stdout.write('\n\n');
+    } catch (err) {
+      console.error(chalk.red('Plan generation failed: ') + (err instanceof Error ? err.message : String(err)));
+    }
+    rl.resume();
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /spec:execute-plan — execute the current plan step by step ──────────
+  if (input.startsWith('/spec:execute-plan')) {
+    const history = agent.getHistory();
+    const lastPlan = [...history].reverse().find((m) =>
+      m.role === 'assistant' && ((): boolean => {
+        const t = typeof m.content === 'string' ? m.content : '';
+        return t.includes('Phase') || t.includes('Step') || t.includes('Task');
+      })()
+    );
+    if (!lastPlan) {
+      console.log(chalk.gray('\n  No plan found in context. Run /spec:write-plan first.\n'));
+      rl.prompt(); printStatusBar(); return true;
+    }
+    rl.pause();
+    process.stdout.write('\n');
+    try {
+      const execPrompt = `Execute the implementation plan step by step. Start with Phase 1 / Step 1. 
+For each step:
+1. Explain what you're doing
+2. Implement it
+3. Verify it works
+4. Move to the next step
+
+Begin execution now.`;
+      await agent.runStream(execPrompt, (chunk) => process.stdout.write(chunk));
+      process.stdout.write('\n\n');
+    } catch (err) {
+      console.error(chalk.red('Plan execution failed: ') + (err instanceof Error ? err.message : String(err)));
+    }
+    rl.resume();
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /resume with session_id parameter ─────────────────────────────────────
+  // (override the simple /resume below — matched before reaching original handler)
+
   // Not a recognised slash command — check hook-defined custom slash commands
+  // Also check .uagent/commands/*.md custom commands (CF-compatible format)
+  if (input.startsWith('/')) {
+    // CF-compatible: load .uagent/commands/*.md and ~/.uagent/commands/*.md
+    const cmdName = input.split(/\s+/)[0]!.slice(1); // strip leading /
+    const cmdArgs = input.split(/\s+/).slice(1).join(' ');
+    const { existsSync: _es2, readFileSync: _rfs2 } = await import('fs');
+    const { join: _jn4, resolve: _res2, extname: _ext2 } = await import('path');
+    const searchDirs = [
+      _jn4(process.cwd(), '.uagent', 'commands'),
+      _jn4(process.env.HOME ?? '~', '.uagent', 'commands'),
+    ];
+    let customHandled = false;
+    for (const dir of searchDirs) {
+      const mdPath = _jn4(dir, `${cmdName}.md`);
+      if (_es2(mdPath)) {
+        let template = _rfs2(mdPath, 'utf-8');
+        // Strip YAML frontmatter if present
+        if (template.startsWith('---\n')) {
+          const endFm = template.indexOf('\n---\n', 4);
+          if (endFm !== -1) template = template.slice(endFm + 5);
+        }
+        // Replace $ARGUMENTS and positional $1 $2 etc.
+        const argParts = cmdArgs.split(/\s+/);
+        let body = template.replace(/\$ARGUMENTS/g, cmdArgs);
+        argParts.forEach((arg, idx) => {
+          body = body.replace(new RegExp(`\\$${idx + 1}`, 'g'), arg);
+        });
+        body = body.trim();
+        if (body) {
+          rl.pause();
+          process.stdout.write('\n');
+          try {
+            await agent.runStream(body, (chunk) => process.stdout.write(chunk));
+            process.stdout.write('\n\n');
+          } catch (err) {
+            console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
+          }
+          rl.resume();
+        }
+        rl.prompt(); printStatusBar();
+        customHandled = true;
+        break;
+      }
+    }
+    if (customHandled) return true;
+  }
+
   if (input.startsWith('/') && !input.startsWith('/exit') && !input.startsWith('/help') && !input.startsWith('/cost')) {
     const hookResult = await hookRunner.handleSlashCmd(input).catch(() => ({ handled: false, output: '' }));
     if (hookResult.handled) {

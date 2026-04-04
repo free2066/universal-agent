@@ -487,6 +487,22 @@ export class AgentCore {
     this.history.push({ role: 'assistant', content: '(noted)' });
   }
 
+  /**
+   * Inject a multimodal user message (text + image) directly into history
+   * without going through the LLM. The next `runStream` call will pick up
+   * these messages as context, giving the LLM the image.
+   */
+  injectImagePrompt(
+    text: string,
+    imageBlock: import('../models/types.js').ImageBlock | import('../models/types.js').ImageUrlBlock,
+  ): void {
+    const contentBlocks: import('../models/types.js').ContentBlock[] = [
+      text,
+      imageBlock,
+    ];
+    this.history.push({ role: 'user', content: contentBlocks });
+  }
+
   async runStream(
     prompt: string,
     onChunk: (chunk: string) => void,
@@ -728,7 +744,8 @@ export class AgentCore {
       const currentTools = this.registry.getToolDefinitions();
 
       // Tool selection: filter to relevant tools when count > threshold
-      const lastUserMsg = [...this.history].reverse().find((m) => m.role === 'user')?.content ?? prompt;
+      const _lastUserRaw = [...this.history].reverse().find((m) => m.role === 'user')?.content ?? prompt;
+      const lastUserMsg: string = typeof _lastUserRaw === 'string' ? _lastUserRaw : Array.isArray(_lastUserRaw) ? _lastUserRaw.map((b: import('../models/types.js').ContentBlock) => typeof b === 'string' ? b : '').join('') : prompt;
       const tools = await selectTools(currentTools, lastUserMsg, this.history);
 
       let response;

@@ -1,10 +1,42 @@
 // Shared type definitions across the agent framework
 
+/** Vision image block — base64 encoded, compatible with OpenAI and Anthropic vision APIs */
+export interface ImageBlock {
+  type: 'image';
+  /** base64-encoded image data (WITHOUT the "data:..." URI prefix) */
+  data: string;
+  /** MIME type, e.g. "image/png" */
+  mimeType: string;
+}
+
+/** URL-referenced image block (OpenAI vision image_url format) */
+export interface ImageUrlBlock {
+  type: 'image_url';
+  url: string;
+}
+
+/** A single content block in a multimodal message */
+export type ContentBlock = string | ImageBlock | ImageUrlBlock;
+
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  /** Either a plain string or a multimodal content array */
+  content: string | ContentBlock[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
+}
+
+/** Extract the plain-text portion of a message's content (for logging / display). */
+export function getContentText(content: string | ContentBlock[]): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((b) => {
+      if (typeof b === 'string') return b;
+      if (b.type === 'image') return '[image]';
+      if (b.type === 'image_url') return `[image: ${b.url}]`;
+      return '';
+    })
+    .join('');
 }
 
 export interface ToolCall {

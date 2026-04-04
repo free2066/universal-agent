@@ -19,6 +19,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import type { Message } from '../../models/types.js';
+import { getContentText } from '../../models/types.js';
 import { modelManager } from '../../models/model-manager.js';
 
 // ── Environment overrides ──────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ function estimateTokens(text: string, isJson = false): number {
 
 // Export estimateMessageTokens so context-editor.ts can reuse it
 export function estimateMessageTokens(msg: Message): number {
-  const contentTokens = estimateTokens(msg.content, msg.role === 'tool');
+  const contentTokens = estimateTokens(getContentText(msg.content), msg.role === 'tool');
   const toolCallTokens = msg.toolCalls
     ? msg.toolCalls.reduce(
         (sum, tc) => sum + estimateTokens(JSON.stringify(tc.arguments), true) + 10,

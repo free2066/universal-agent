@@ -1,12 +1,5 @@
 /**
  * session-snapshot.ts — Save / restore full Message[] between sessions.
- *
- * Snapshots are stored as JSON files under ~/.uagent/sessions/<sessionId>.json.
- * Only the last 60 messages are kept per file to bound disk usage.
- *
- * Unlike session-history.ts (which only stores user prompt strings),
- * this preserves complete Message objects including assistant replies and
- * tool calls, enabling true context resumption.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
