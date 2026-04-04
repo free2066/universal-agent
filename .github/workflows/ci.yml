@@ -26,6 +26,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Type Check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true   # 不因 lint warning 阻断主流程，但结果可见
+
       - name: Build
         run: npm run build
 
@@ -33,3 +40,19 @@ jobs:
         run: npm test
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Coverage Report
+        if: matrix.node-version == '22.x'  # 只在一个版本生成报告，避免重复
+        run: npx vitest run --coverage
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        continue-on-error: true   # 当前覆盖率低，不阻断 CI；后续可改为 fail
+
+      - name: Upload Coverage
+        if: matrix.node-version == '22.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+        continue-on-error: true
