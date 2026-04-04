@@ -288,13 +288,20 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
     .map(s => s.trim().split(':')[0].trim())   // 只取 ID 部分，去掉 :显示名称
     .filter(s => s && !s.startsWith('ep-xxxxxx') && (s.startsWith('ep-') || s.startsWith('api-')));
 
-  // 万擎识别条件：有 WQ_API_KEY，且 UAGENT_MODEL 已填（不是占位符），或者 OPENAI_BASE_URL 指向万擎
+  // 万擎识别条件：有 WQ_API_KEY，且满足以下任一：
+  //   1. UAGENT_MODEL 已填（不是占位符）
+  //   2. OPENAI_BASE_URL 指向万擎
+  //   3. WQ_MODELS 里有有效 endpoint（UAGENT_MODEL 可能因 dotenv 加载时序问题未被 shell 读到）
   const isWanqing = wqKey && (
     (wqModel && !wqModel.startsWith('ep-xxxxxx')) ||
-    (wqBase && (wqBase.includes('wanqing') || wqBase.includes('wanqing.internal')))
+    (wqBase && (wqBase.includes('wanqing') || wqBase.includes('wanqing.internal'))) ||
+    extraModels.length > 0
   );
   if (isWanqing) {
-    const primaryId = wqModel && !wqModel.startsWith('ep-xxxxxx') ? wqModel : 'wanqing-default';
+    // primaryId 优先取 UAGENT_MODEL，其次取 WQ_MODELS 第一项，最后兜底
+    const primaryId = (wqModel && !wqModel.startsWith('ep-xxxxxx'))
+      ? wqModel
+      : (extraModels[0] ?? 'wanqing-default');
     // 合并主模型 + WQ_MODELS 里的额外模型，去重
     const allIds = [primaryId, ...extraModels.filter(id => id !== primaryId)];
     if (!silent) process.stdout.write(`✅ Using 万擎 (Wanqing) internal API: ${primaryId}${allIds.length > 1 ? ` (+${allIds.length - 1} more)` : ''}\n`);

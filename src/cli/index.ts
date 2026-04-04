@@ -3,6 +3,19 @@
 process.removeAllListeners('warning');
 process.on('warning', (w) => { if (w.name !== 'DeprecationWarning') process.stderr.write(String(w) + '\n'); });
 
+// ── Environment setup (MUST be before all other imports) ──────────────────────
+// dotenv must load BEFORE any module is imported because model-manager.ts,
+// free-model-detector.ts, and llm-client.ts all read process.env at import time
+// (static initializers / export const singletons).
+import { config as dotenvConfig } from 'dotenv';
+import { existsSync as _existsSync } from 'fs';
+import { resolve as _resolve } from 'path';
+{
+  const homeEnv = _resolve(process.env.HOME || '~', '.uagent', '.env');
+  if (_existsSync(homeEnv)) dotenvConfig({ path: homeEnv, override: true });
+  dotenvConfig({ path: _resolve(process.cwd(), '.env') });
+}
+
 // Auto-update: pull + rebuild if a new version is available, then prompt restart.
 import { checkAndUpdate, printUpdateBanner } from './auto-update.js';
 const _hasUpdate = await checkAndUpdate();
@@ -11,14 +24,12 @@ import { program } from 'commander';
 import chalk from 'chalk';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
-import { config } from 'dotenv';
 
 import { AgentCore } from '../core/agent.js';
 import { modelManager } from '../models/model-manager.js';
 import { printBanner } from './ui-enhanced.js';
 import { loadConfig } from './config-store.js';
 
-// Command module registrations
 import { validateDomain, validateModel, inferProviderEnvKey } from './commands/shared.js';
 import { registerModelsCommands } from './commands/cmd-models.js';
 import { registerMcpCommands } from './commands/cmd-mcp.js';
@@ -26,17 +37,7 @@ import { registerMemoryCommands } from './commands/cmd-memory.js';
 import { registerSchemaCommands } from './commands/cmd-schema.js';
 import { registerSpecCommands } from './commands/cmd-spec.js';
 import { registerMiscCommands } from './commands/cmd-misc.js';
-
-// REPL
 import { runREPL } from './repl/repl.js';
-
-// ── Environment setup ────────────────────────────────────────────────────────
-// Load env — ~/.uagent/.env is the primary config store (override: true so it
-// always wins over any stale values from the project .env or shell environment).
-const homeEnv = resolve(process.env.HOME || '~', '.uagent', '.env');
-if (existsSync(homeEnv)) config({ path: homeEnv, override: true });
-// Also load project-level .env (without override — home .env takes precedence)
-config({ path: resolve(process.cwd(), '.env') });
 
 // ── Program metadata ─────────────────────────────────────────────────────────
 const pkg = JSON.parse(

@@ -159,8 +159,11 @@ export class ModelManager {
           // Validate each profile before loading: must have a known provider and non-empty modelName.
           // This prevents test-injected garbage (e.g. 'non-existent-model-12345') from
           // polluting the active profile list across sessions (fix g3).
+          // Also skip wanqing/* profiles — they are CodeFlicker IDE internal aliases that
+          // don't map to real API endpoint IDs.
           if (p && typeof p.name === 'string' && typeof p.modelName === 'string'
-              && p.modelName.length > 0 && validProviders.has(p.provider)) {
+              && p.modelName.length > 0 && validProviders.has(p.provider)
+              && !p.name.startsWith('wanqing/') && !p.modelName.startsWith('wanqing/')) {
             this.profiles.set(p.name, p);
           }
         }
@@ -169,6 +172,11 @@ export class ModelManager {
         const validKeys = new Set<string>(['main', 'task', 'compact', 'quick']);
         for (const [k, v] of Object.entries(data.pointers)) {
           if (validKeys.has(k) && typeof v === 'string' && v.length > 0) {
+            // Skip wanqing/* model names — they are CodeFlicker IDE internal aliases,
+            // not real API endpoint IDs. Storing them as pointers causes 400 errors
+            // because the API doesn't recognize the alias format.
+            // autoSelectFreeModel() will resolve the correct ep-* ID at runtime.
+            if (typeof v === 'string' && v.startsWith('wanqing/')) continue;
             (this.pointers as unknown as Record<string, string>)[k] = v;
             if (k === 'main') this._userSelectedMain = true;
           }
@@ -388,16 +396,31 @@ export class ModelManager {
           }
         }
 
-        // 万擎 source: always override pointers — UAGENT_MODEL IS the wanqing config,
-        // not a reason to skip updating. For other sources, respect explicit env vars.
+        // 万擎 source: ALWAYS override all pointers unconditionally.
+        // _userSelectedMain must NOT block wanqing auto-detection because:
+        //   1. models.json may contain a stale "wanqing/xxx" pointer from a previous
+        //      session that set _userSelectedMain=true, but wanqing/* names are not real
+        //      API endpoint IDs and will cause 400 errors.
+        //   2. The correct ep-* endpoint is only known at runtime via WQ_API_KEY + UAGENT_MODEL.
+        // For non-wanqing sources, still respect user-selected models.
         const isWanqing = result.source === 'wanqing';
-        if ((isWanqing || !process.env.UAGENT_MODEL) && pointers.main && !this._userSelectedMain) {
-          this.pointers.main = pointers.main;
-          this.pointers.task = pointers.task ?? pointers.main;
-        }
-        if ((isWanqing || !process.env.UAGENT_QUICK_MODEL) && pointers.quick) {
-          this.pointers.quick = pointers.quick;
-          this.pointers.compact = pointers.compact ?? pointers.quick;
+        if (isWanqing) {
+          // Unconditional override for wanqing — ep-* endpoint must always win
+          if (pointers.main) {
+            this.pointers.main = pointers.main;
+            this.pointers.task = pointers.task ?? pointers.main;
+            this.pointers.compact = pointers.compact ?? pointers.main;
+            this.pointers.quick = pointers.quick ?? pointers.main;
+          }
+        } else {
+          if (!process.env.UAGENT_MODEL && pointers.main && !this._userSelectedMain) {
+            this.pointers.main = pointers.main;
+            this.pointers.task = pointers.task ?? pointers.main;
+          }
+          if (!process.env.UAGENT_QUICK_MODEL && pointers.quick) {
+            this.pointers.quick = pointers.quick;
+            this.pointers.compact = pointers.compact ?? pointers.quick;
+          }
         }
         // Save detected model ids for /model cycle (only cycle available models)
         this._detectedModels = result.available.map(m => {
