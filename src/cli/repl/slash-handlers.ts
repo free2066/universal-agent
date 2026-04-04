@@ -684,6 +684,145 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
     rl.prompt(); printStatusBar(); return true;
   }
 
+  // ── /skills — list installed custom commands (uagent's "skills") ────────────
+  if (input === '/skills') {
+    const { readdirSync: _rds, statSync: _ss, existsSync: _es, readFileSync: _rfs } = await import('fs');
+    const { join: _jn } = await import('path');
+    const searchDirs = [
+      { label: 'project (.uagent/commands/)', dir: _jn(process.cwd(), '.uagent', 'commands') },
+      { label: 'global (~/.uagent/commands/)', dir: _jn(process.env.HOME ?? '~', '.uagent', 'commands') },
+    ];
+    let totalCount = 0;
+    console.log(chalk.yellow('\n🎯 Installed Skills (custom slash commands):\n'));
+    for (const { label, dir } of searchDirs) {
+      if (!_es(dir)) continue;
+      let files: string[] = [];
+      try { files = _rds(dir).filter((f) => f.endsWith('.md')); } catch { continue; }
+      if (files.length === 0) continue;
+      console.log(chalk.cyan(`  📂 ${label}`));
+      for (const f of files) {
+        const cmdName = '/' + f.replace(/\.md$/, '');
+        // Try to extract description from YAML frontmatter
+        let description = '';
+        try {
+          const raw = _rfs(_jn(dir, f), 'utf-8');
+          if (raw.startsWith('---\n')) {
+            const match = raw.match(/^description:\s*(.+)$/m);
+            if (match) description = match[1]!.trim();
+          }
+          if (!description) {
+            // First non-empty, non-frontmatter line
+            const lines = raw.replace(/^---[\s\S]*?---\n/, '').split('\n').filter((l) => l.trim());
+            if (lines[0]) description = lines[0].slice(0, 80) + (lines[0].length > 80 ? '...' : '');
+          }
+        } catch { /* */ }
+        const mtime = _ss(_jn(dir, f)).mtimeMs;
+        const ago = Math.floor((Date.now() - mtime) / (1000 * 60 * 60 * 24));
+        console.log(`    ${chalk.white(cmdName.padEnd(24))} ${chalk.gray(ago === 0 ? 'today' : `${ago}d ago`)}  ${chalk.dim(description)}`);
+        totalCount++;
+      }
+    }
+    if (totalCount === 0) {
+      console.log(chalk.gray('  No custom skills found.\n'));
+      console.log(chalk.gray('  To create a skill: create .uagent/commands/<name>.md'));
+      console.log(chalk.gray('  Example: .uagent/commands/summarize.md'));
+      console.log(chalk.gray('  Content: "Summarize the following: $ARGUMENTS"\n'));
+    } else {
+      console.log(chalk.gray(`\n  Total: ${totalCount} skill(s) installed`));
+      console.log(chalk.gray('  Use: /<skill-name> [arguments]'));
+      console.log(chalk.gray('  Tip: create .uagent/commands/<name>.md to add a skill\n'));
+    }
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /plugin — manage local extensions (hooks, agents, commands) ───────────
+  if (input.startsWith('/plugin')) {
+    const sub = input.replace('/plugin', '').trim();
+    const { readdirSync: _rds2, existsSync: _es2, statSync: _ss2 } = await import('fs');
+    const { join: _jn2 } = await import('path');
+    const baseDir = _jn2(process.cwd(), '.uagent');
+    const globalDir = _jn2(process.env.HOME ?? '~', '.uagent');
+    const scanDir = (dir: string, sub2: string) => {
+      const full = _jn2(dir, sub2);
+      if (!_es2(full)) return [];
+      try { return _rds2(full).map((f) => ({ name: f, mtime: _ss2(_jn2(full, f)).mtimeMs })); } catch { return []; }
+    };
+    if (!sub || sub === 'list') {
+      console.log(chalk.yellow('\n🔌 Local Extensions (Plugins):\n'));
+      const sections: Array<{ label: string; type: string }> = [
+        { label: 'Custom Commands (skills)', type: 'commands' },
+        { label: 'Subagents', type: 'agents' },
+        { label: 'Hooks', type: 'hooks' },
+      ];
+      let found = false;
+      for (const { label, type } of sections) {
+        const items = [
+          ...scanDir(baseDir, type).map((f) => ({ ...f, scope: 'project' })),
+          ...scanDir(globalDir, type).map((f) => ({ ...f, scope: 'global' })),
+        ];
+        if (items.length === 0) continue;
+        found = true;
+        console.log(chalk.cyan(`  ${label}:`));
+        for (const item of items.slice(0, 10)) {
+          const ago = Math.floor((Date.now() - item.mtime) / (1000 * 60 * 60 * 24));
+          console.log(`    ${chalk.white(item.name.padEnd(30))} ${chalk.dim(item.scope)} ${chalk.gray(ago === 0 ? '(today)' : `(${ago}d ago)`)}`);
+        }
+        if (items.length > 10) console.log(chalk.gray(`    ... and ${items.length - 10} more`));
+        console.log();
+      }
+      if (!found) {
+        console.log(chalk.gray('  No local extensions installed.\n'));
+      }
+      console.log(chalk.gray('  Plugin types:'));
+      console.log(chalk.gray('    .uagent/commands/*.md — custom slash commands (skills)'));
+      console.log(chalk.gray('    .uagent/agents/*.md   — custom subagents'));
+      console.log(chalk.gray('    .uagent/hooks/*.json  — lifecycle hooks'));
+      console.log(chalk.gray('\n  /plugin list         — show all extensions'));
+      console.log(chalk.gray('  /skills              — show only custom commands\n'));
+    } else {
+      console.log(chalk.gray(`\n  Unknown plugin subcommand: ${sub}`));
+      console.log(chalk.gray('  Usage: /plugin [list]\n'));
+    }
+    rl.prompt(); printStatusBar(); return true;
+  }
+
+  // ── /logout — show current API key config + clear instructions ───────────
+  if (input === '/logout') {
+    console.log(chalk.yellow('\n🔑 API Key Configuration\n'));
+    const keyEnvVars = [
+      'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY',
+      'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'WQ_API_KEY',
+    ];
+    let found = false;
+    for (const envVar of keyEnvVars) {
+      const val = process.env[envVar];
+      if (val) {
+        found = true;
+        const masked = val.length > 8
+          ? val.slice(0, 4) + '*'.repeat(val.length - 8) + val.slice(-4)
+          : '****';
+        console.log(`  ${chalk.cyan(envVar.padEnd(24))} ${chalk.green('●')} set  ${chalk.dim(masked)}`);
+      } else {
+        console.log(`  ${chalk.gray(envVar.padEnd(24))} ${chalk.red('○')} not set`);
+      }
+    }
+    console.log();
+    if (found) {
+      console.log(chalk.yellow('  To remove a key (logout):'));
+      console.log(chalk.gray('    unset OPENAI_API_KEY            # current shell only'));
+      console.log(chalk.gray('    # or remove from ~/.zshrc / ~/.bashrc / .env file'));
+      console.log(chalk.gray('\n  To switch models/providers:'));
+      console.log(chalk.gray('    /model                           # interactive picker'));
+      console.log(chalk.gray('    uagent models add                # add new model profile'));
+    } else {
+      console.log(chalk.red('  No API keys found. uagent requires at least one API key.'));
+      console.log(chalk.gray('  Set one: export OPENAI_API_KEY=sk-...'));
+    }
+    console.log(chalk.dim('\n  Note: uagent uses API keys (not login sessions).'));
+    console.log(chalk.dim('        Keys are read from environment variables or .env file.\n'));
+    rl.prompt(); printStatusBar(); return true;
+  }
+
   // ── /context — alias for /tokens (CF calls it /context) ──────────────────
   if (input === '/context') {
     const { shouldCompact } = await import('../../core/context/context-compressor.js');

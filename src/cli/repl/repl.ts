@@ -133,10 +133,12 @@ export async function runREPL(
     '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
     '/mcp',
     '/log', '/logs',
-    // CF parity additions
+    // CF parity additions (v0.4.0)
     '/context', '/status', '/copy', '/export',
     '/branch', '/rename', '/add-dir',
     '/terminal-setup', '/bug', '/output-style',
+    // CF parity additions (v0.4.1)
+    '/skills', '/plugin', '/logout',
   ];
 
   function completer(line: string): [string[], string] {
