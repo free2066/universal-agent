@@ -107,7 +107,12 @@ export async function runREPL(
 
   const { emitKeypressEvents } = await import('readline');
   emitKeypressEvents(process.stdin);
-  if (process.stdin.isTTY) process.stdin.setRawMode(false);
+  // IMPORTANT: must use setRawMode(true) so that Ctrl+T is delivered as a
+  // keypress event instead of being intercepted by macOS as SIGINFO (which
+  // prints "load: X.XX  cmd: node ..." lines to the terminal).
+  // We re-enable raw mode here; it is temporarily disabled before spawning
+  // child processes (bash tool) and re-enabled afterwards.
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
 
   // ── Ctrl+T: cycle thinking level ────────────────────────────────────────
   // Cycles: off → low → medium → high → off → ...

@@ -1,5 +1,17 @@
 import chalk from 'chalk';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import type { ModelProfile, ModelPointers } from '../models/model-manager.js';
+
+// Read package.json version once at module load time
+const _pkgVersion = (() => {
+  try {
+    const __dir = dirname(fileURLToPath(import.meta.url));
+    const raw = readFileSync(join(__dir, '../../package.json'), 'utf-8');
+    return (JSON.parse(raw) as { version: string }).version;
+  } catch { return ''; }
+})();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 现代化 UI 组件库 - 为 Universal Agent CLI 提供美观的交互界面
@@ -47,6 +59,7 @@ function truncate(text: string, maxLength: number): string {
 // ─── 现代化 Banner ────────────────────────────────────────────────────────────
 
 export function printBanner() {
+  const verLabel = _pkgVersion ? ` v${_pkgVersion}` : '';
   const lines = [
     '',
     theme.primary('    ██╗   ██╗███╗   ██╗██╗██╗   ██╗███████╗██████╗ ███████╗ █████╗ ██╗     '),
@@ -56,7 +69,7 @@ export function printBanner() {
     theme.primary('    ╚██████╔╝██║ ╚████║██║ ╚████╔╝ ███████╗██║  ██║███████╗██║  ██║███████╗'),
     theme.primary('     ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝'),
     '',
-    theme.muted(center('Universal Agent CLI v0.1.0', 77)),
+    theme.muted(center(`Universal Agent CLI${verLabel}`, 77)),
     theme.primaryLight(center('Multi-domain AI Powered Assistant', 77)),
     '',
   ];
