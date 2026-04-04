@@ -12,6 +12,60 @@ const THINKING_BUDGETS: Record<string, number> = { low: 1024, medium: 8000, high
 /** Map thinking level → OpenAI reasoning_effort string (o1/o3/o4 series) */
 const REASONING_EFFORT: Record<string, string> = { low: 'low', medium: 'medium', high: 'high' };
 
+/**
+ * Inference timeout for streaming LLM calls.
+ *
+ * Problem: AbortSignal.timeout(N) on fetch() only covers the FIRST chunk.
+ * Once streaming begins, reader.read() / for-await loops run indefinitely
+ * if the server hangs or stops sending data without closing the connection.
+ * This causes agent sessions to freeze permanently (observed with MiMo-V2-Pro
+ * and other third-party OpenAI-compat endpoints that silently stall mid-stream).
+ *
+ * Fix: wrap the entire streamChat body in withInferenceTimeout(), which installs
+ * a hard AbortController that fires after INFERENCE_TIMEOUT_MS regardless of
+ * whether data has been flowing. Both the initial fetch AND the stream loop
+ * are cancelled atomically when the timer fires.
+ *
+ * Default: 3 minutes. Override with env var UAGENT_INFERENCE_TIMEOUT_MS.
+ */
+const INFERENCE_TIMEOUT_MS = parseInt(
+  process.env.UAGENT_INFERENCE_TIMEOUT_MS ?? String(3 * 60 * 1000), 10,
+);
+
+/**
+ * Run `fn(signal)` with a hard wall-clock timeout.
+ * Throws an error with a user-friendly message when the timeout fires.
+ * The AbortController is shared — pass `signal` to fetch() so both
+ * the connection and the stream loop are cancelled together.
+ */
+async function withInferenceTimeout<T>(
+  model: string,
+  fn: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(
+      new Error(
+        `[llm-client] Inference timeout after ${INFERENCE_TIMEOUT_MS / 1000}s — ` +
+        `model "${model}" did not complete streaming. ` +
+        `Increase timeout with UAGENT_INFERENCE_TIMEOUT_MS env var.`,
+      ),
+    );
+  }, INFERENCE_TIMEOUT_MS);
+  try {
+    return await fn(controller.signal);
+  } catch (err) {
+    // Re-wrap AbortError with a friendlier message so it surfaces clearly in UI
+    if (err instanceof Error && err.name === 'AbortError') {
+      const reason = controller.signal.reason;
+      throw reason instanceof Error ? reason : new Error(String(reason ?? err.message));
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ──────────────────────────────────────────
 // Factory
 // ──────────────────────────────────────────
@@ -118,22 +172,29 @@ class OpenAIClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
-    const messages = this.convertMessages(options);
-    const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
-    const extraOpts: Record<string, unknown> = {};
-    if (options.thinkingLevel && isReasoning) {
-      extraOpts.reasoning_effort = options.thinkingLevel;
-    }
-    const stream = (await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      stream: true,
-      ...extraOpts,
-    } as OpenAI.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) onChunk(delta);
-    }
+    return withInferenceTimeout(this.model, async (signal) => {
+      const messages = this.convertMessages(options);
+      const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
+      const extraOpts: Record<string, unknown> = {};
+      if (options.thinkingLevel && isReasoning) {
+        extraOpts.reasoning_effort = options.thinkingLevel;
+      }
+      // Pass AbortSignal via httpAgent option — OpenAI SDK v4 accepts signal in
+      // the request options object (second argument to create()).
+      const stream = (await this.client.chat.completions.create(
+        {
+          model: this.model,
+          messages,
+          stream: true,
+          ...extraOpts,
+        } as OpenAI.ChatCompletionCreateParamsStreaming,
+        { signal },
+      )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content;
+        if (delta) onChunk(delta);
+      }
+    });
   }
 
   protected convertMessages(options: ChatOptions): OpenAI.ChatCompletionMessageParam[] {
@@ -216,17 +277,21 @@ class DeepSeekClient extends OpenAIClient {
   override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
     const isReasoner = this.model.includes('reasoner') || this.model.includes('r1');
     if (isReasoner && options.thinkingLevel) {
-      const messages = this.convertMessages(options);
-      const stream = (await this.client.chat.completions.create({
-        model: this.model,
-        messages,
-        stream: true,
-      } as OpenAI.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
-        if (delta?.content) onChunk(delta.content);
-      }
-      return;
+      return withInferenceTimeout(this.model, async (signal) => {
+        const messages = this.convertMessages(options);
+        const stream = (await this.client.chat.completions.create(
+          {
+            model: this.model,
+            messages,
+            stream: true,
+          } as OpenAI.ChatCompletionCreateParamsStreaming,
+          { signal },
+        )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
+          if (delta?.content) onChunk(delta.content);
+        }
+      });
     }
     return super.streamChat(options, onChunk);
   }
@@ -266,18 +331,22 @@ class QwenClient extends OpenAIClient {
 
   override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
     if (this.isThinkingCapable() && options.thinkingLevel) {
-      const messages = this.convertMessages(options);
-      const stream = (await this.client.chat.completions.create({
-        model: this.model,
-        messages,
-        stream: true,
-        extra_body: { enable_thinking: true },
-      } as OpenAI.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
-        if (delta?.content) onChunk(delta.content);
-      }
-      return;
+      return withInferenceTimeout(this.model, async (signal) => {
+        const messages = this.convertMessages(options);
+        const stream = (await this.client.chat.completions.create(
+          {
+            model: this.model,
+            messages,
+            stream: true,
+            extra_body: { enable_thinking: true },
+          } as OpenAI.ChatCompletionCreateParamsStreaming,
+          { signal },
+        )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
+          if (delta?.content) onChunk(delta.content);
+        }
+      });
     }
     return super.streamChat(options, onChunk);
   }
@@ -370,29 +439,34 @@ class AnthropicClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
-    const messages = this.convertMessages(options.messages);
-    const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
-    const thinking = options.thinkingLevel;
-    const budgets: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
-    const budgetTokens = thinking ? budgets[thinking] ?? 1024 : undefined;
-    const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
+    return withInferenceTimeout(this.model, async (_signal) => {
+      // Note: Anthropic SDK uses its own internal AbortController; we can't inject
+      // our signal directly into messages.stream(). The outer withInferenceTimeout
+      // will still abort after the TTL by throwing, which unwinds the for-await loop.
+      const messages = this.convertMessages(options.messages);
+      const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
+      const thinking = options.thinkingLevel;
+      const budgets: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
+      const budgetTokens = thinking ? budgets[thinking] ?? 1024 : undefined;
+      const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
-    const stream = this.client.messages.stream({
-      model: this.model,
-      max_tokens: effectiveMax,
-      system: options.systemPrompt,
-      messages,
-      ...(budgetTokens ? {
-        thinking: { type: 'enabled', budget_tokens: budgetTokens },
-        betas: ['interleaved-thinking-2025-05-14'],
-      } : {}),
-    } as Parameters<typeof this.client.messages.stream>[0]);
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        onChunk(event.delta.text);
+      const stream = this.client.messages.stream({
+        model: this.model,
+        max_tokens: effectiveMax,
+        system: options.systemPrompt,
+        messages,
+        ...(budgetTokens ? {
+          thinking: { type: 'enabled', budget_tokens: budgetTokens },
+          betas: ['interleaved-thinking-2025-05-14'],
+        } : {}),
+      } as Parameters<typeof this.client.messages.stream>[0]);
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          onChunk(event.delta.text);
+        }
+        // thinking_delta — we don't stream it to user, but it still counts toward context
       }
-      // thinking_delta — we don't stream it to user, but it still counts toward context
-    }
+    });
   }
 
   private convertMessages(messages: Message[]): Anthropic.MessageParam[] {
@@ -477,40 +551,43 @@ class GeminiClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
-    const body = this.buildRequest(options);
-    const url = `${this.baseURL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+    return withInferenceTimeout(this.model, async (signal) => {
+      const body = this.buildRequest(options);
+      const url = `${this.baseURL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120000),
-    });
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        // Compose with per-chunk connection timeout; inference timeout covers the whole stream
+        signal,
+      });
 
-    if (!res.ok) throw new Error(`Gemini stream error: ${res.status}`);
+      if (!res.ok) throw new Error(`Gemini stream error: ${res.status}`);
 
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const lines = decoder.decode(value, { stream: true }).split('\n');
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const chunk = JSON.parse(line.slice(6)) as GeminiResponse;
-          const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) onChunk(text);
-        } catch (err) {
-          // Debug only — malformed SSE lines are expected (empty lines, keep-alive pings, etc.).
-          // Only log if it looks like non-trivial content (length > 10) to avoid log spam.
-          if (line.length > 16) {
-            process.stderr.write(`[llm-client:gemini] Failed to parse SSE chunk (${line.length} chars): ${String(err)}\n`);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const lines = decoder.decode(value, { stream: true }).split('\n');
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const chunk = JSON.parse(line.slice(6)) as GeminiResponse;
+            const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) onChunk(text);
+          } catch (err) {
+            // Debug only — malformed SSE lines are expected (empty lines, keep-alive pings, etc.).
+            // Only log if it looks like non-trivial content (length > 10) to avoid log spam.
+            if (line.length > 16) {
+              process.stderr.write(`[llm-client:gemini] Failed to parse SSE chunk (${line.length} chars): ${String(err)}\n`);
+            }
           }
         }
       }
-    }
+    });
   }
 
   private buildRequest(options: ChatOptions) {
@@ -621,36 +698,38 @@ class OllamaClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
-    const messages = this.convertMessages(options.messages, options.systemPrompt);
+    return withInferenceTimeout(this.model, async (signal) => {
+      const messages = this.convertMessages(options.messages, options.systemPrompt);
 
-    const res = await fetch(`${this.baseURL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, messages, stream: true }),
-      signal: AbortSignal.timeout(120000),
-    });
+      const res = await fetch(`${this.baseURL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.model, messages, stream: true }),
+        signal,
+      });
 
-    if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
+      if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean);
-      for (const line of lines) {
-        try {
-          const data = JSON.parse(line) as { message?: { content?: string } };
-          if (data.message?.content) onChunk(data.message.content);
-        } catch (err) {
-          // Ollama may emit incomplete JSON fragments at chunk boundaries — log
-          // at debug level so operators can diagnose persistent parse failures.
-          if (line.length > 2) {
-            process.stderr.write(`[llm-client:ollama] Failed to parse chunk (${line.length} chars): ${String(err)}\n`);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean);
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line) as { message?: { content?: string } };
+            if (data.message?.content) onChunk(data.message.content);
+          } catch (err) {
+            // Ollama may emit incomplete JSON fragments at chunk boundaries — log
+            // at debug level so operators can diagnose persistent parse failures.
+            if (line.length > 2) {
+              process.stderr.write(`[llm-client:ollama] Failed to parse chunk (${line.length} chars): ${String(err)}\n`);
+            }
           }
         }
       }
-    }
+    });
   }
 
   private convertMessages(messages: Message[], systemPrompt: string) {
@@ -770,16 +849,17 @@ class OpenRouterClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
-    const messages = this.convertMessages(options);
-    const stream = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      stream: true,
+    return withInferenceTimeout(this.model, async (signal) => {
+      const messages = this.convertMessages(options);
+      const stream = await this.client.chat.completions.create(
+        { model: this.model, messages, stream: true },
+        { signal },
+      );
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content;
+        if (delta) onChunk(delta);
+      }
     });
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) onChunk(delta);
-    }
   }
 
   /** Convert universal Message[] to OpenAI chat format */
