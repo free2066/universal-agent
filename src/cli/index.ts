@@ -1921,55 +1921,105 @@ async function runREPL(
         console.log(chalk.gray('  (Image context attached to this request)'));
       }
 
-      // ── CliSpinner — 精美工具调用展示（对齐 claude-code 风格）─────────────────
+      // ── CliSpinner — 完整交互逻辑（对齐 claude-code 风格）────────────────────
+      //
+      // 交互流程：
+      //   1. 发送请求     → spinner thinking（紫色旋转 + "Thinking···"）
+      //   2. 工具调用开始 → spinner tool-use（黄色 + "Using tools"）
+      //                     每个工具独立一行：  ● toolName  args（灰色圆点，进行中）
+      //   3. 工具调用完成 → 对应行变   ● toolName ✓ (0.3s)（绿色）或 ✗（红色）
+      //   4. 所有工具完成后 LLM 开始输出文本：
+      //                     → spinner.stop(true) — 保留工具行打印到终端
+      //                     → 打印响应分隔线
+      //                     → 流式输出文字
+      //   5. 输出完毕     → 打印结尾分隔线 → 回到 prompt
+      //
+      // 关键细节：
+      //   - toolIndexMap 用 seq 序号做唯一 key，避免同名工具互相覆盖
+      //   - 若整个 turn 无文本输出（纯工具调用），仍保留工具行并正确清理
+      //   - 状态栏 isThinking: none→low（thinking）→medium（tool/respond）→none
+
       const spinner = new CliSpinner();
-      // toolIndex 映射：toolName+callIdx → spinner 行索引（支持并发同名工具）
+      // 用 toolCallSeq 做唯一 key，防止同名工具（如多次 bash）互相覆盖索引
       let toolCallSeq = 0;
+      // seq_key → spinner 行索引
       const toolIndexMap = new Map<string, number>();
+      // 记录每个工具调用对应的 seq_key（按 LLM 给的顺序，用于 onToolEnd 匹配）
+      const pendingToolKeys: string[] = [];
 
       updateStatusBar({ isThinking: 'low' });
-      rl.setPrompt(makePrompt(options.domain));
 
-      // 先输出一个空行，然后启动 spinner（start() 内部会再输出一个占位换行）
+      // start() 内部会写一个 \n 将 spinner 与 prompt 分隔
       spinner.start('thinking');
 
-      let firstChunk = true;
-      let charCount = 0;
+      let firstChunk = true;   // 是否还没收到第一个文本 chunk
+      let charCount  = 0;      // 本轮输出的字符数
+
       await agent.runStream(
         finalInput,
+
+        // ── onChunk: LLM 文本输出回调 ──────────────────────────────────────
         (chunk) => {
           if (firstChunk) {
-            // 首个 chunk 到来：停止 spinner，打印响应分隔线，切换状态
-            spinner.stop();
-            process.stdout.write(chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))) + '\n');
+            // 首个文本 chunk 到来：
+            //   1. 保留工具调用行（stop(true) 把工具行静态打到终端）
+            //   2. 打响应分隔线
+            //   3. 更新状态栏
+            spinner.stop(true);
+            process.stdout.write(
+              chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))) + '\n'
+            );
             updateStatusBar({ isThinking: 'medium' });
             firstChunk = false;
           }
           process.stdout.write(chunk);
           charCount += chunk.length;
         },
+
+        // ── AgentEvents: 工具调用生命周期 ──────────────────────────────────
         {
           onToolStart: (name, args) => {
-            // 切换 spinner 到 tool-use 模式，并添加工具行
+            // 第一个工具调用时切换 spinner 到 tool-use 模式
             spinner.setMode('tool-use', 'Using tools');
-            const key = `${name}-${toolCallSeq++}`;
+
+            // 用 seq 做唯一 key（支持同一 turn 里多次调用同名工具）
+            const seqKey = `${name}#${toolCallSeq++}`;
             const idx = spinner.addToolLine(name, summarizeArgs(args));
-            toolIndexMap.set(key, idx);
-            // 将最近一次 key 存为 name 的映射（简单方案：后者覆盖前者）
-            toolIndexMap.set(name, idx);
+            toolIndexMap.set(seqKey, idx);
+            // 压栈：下一个 onToolEnd 会弹出栈顶的 seqKey
+            pendingToolKeys.push(seqKey);
+
             updateStatusBar({ isThinking: 'medium' });
           },
+
           onToolEnd: (name, success, durationMs) => {
-            const idx = toolIndexMap.get(name) ?? -1;
-            if (idx >= 0) {
-              spinner.updateToolLine(idx, success ? 'done' : 'error', durationMs);
+            // 弹出最近一个匹配名称的 pending key（FIFO 顺序）
+            const keyIdx = pendingToolKeys.findIndex((k) => k.startsWith(`${name}#`));
+            if (keyIdx !== -1) {
+              const seqKey = pendingToolKeys.splice(keyIdx, 1)[0]!;
+              const lineIdx = toolIndexMap.get(seqKey) ?? -1;
+              if (lineIdx >= 0) {
+                spinner.updateToolLine(lineIdx, success ? 'done' : 'error', durationMs);
+              }
             }
           },
         },
       );
-      spinner.stop();
-      if (!firstChunk && charCount > 0) {
-        process.stdout.write('\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))));
+
+      // ── runStream 结束，清理收尾 ────────────────────────────────────────────
+      if (firstChunk) {
+        // 整个 turn 没有文本输出（纯工具调用，或工具全部失败后 LLM 没有文本）
+        // 保留工具行静态展示，然后换行
+        spinner.stop(true);
+        process.stdout.write('\n');
+      } else {
+        // 有文本输出：spinner 已在首 chunk 时 stop(true)，补打结尾分隔线
+        spinner.stop(false); // 防止还有残留（正常不会，保险起见）
+        if (charCount > 0) {
+          process.stdout.write(
+            '\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80)))
+          );
+        }
       }
       try {
         const h = agent.getHistory();
