@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'fs';
 import { resolve, join, dirname } from 'path';
 import { spawnSync } from 'child_process';
+import { homedir } from 'os';
 import { getSkillLoader } from '../skills/skill-loader.js';
 
 export interface AgentsContext {
@@ -78,7 +79,10 @@ export function loadProjectContext(startDir?: string): AgentsContext {
 export function loadRules(startDir?: string): { content: string; sources: string[] } {
   const cwd = startDir || process.cwd();
   const rulesDir = join(cwd, '.uagent', 'rules');
-  const globalRulesDir = join(process.env.HOME || '~', '.uagent', 'rules');
+  // #29: process.env.HOME || '~' is wrong — Node.js does NOT shell-expand '~'.
+  // join('~', '.uagent') produces the literal string "~/.uagent", not the home dir.
+  // Use os.homedir() as the authoritative cross-platform home directory.
+  const globalRulesDir = join(process.env.HOME ?? homedir(), '.uagent', 'rules');
 
   const parts: string[] = [];
   const sources: string[] = [];

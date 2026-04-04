@@ -462,9 +462,14 @@ ${convText}`;
 
   // ── Private Helpers ───────────────────────────────────────────────────────
 
-  /** Simple character-level Jaccard similarity for LWW dedup */
+  /** Simple token-level Jaccard similarity for LWW dedup.
+   * Handles CJK text by splitting on CJK codepoint boundaries (#28). */
   private similarity(a: string, b: string): number {
-    const tokenize = (s: string) => new Set(s.toLowerCase().split(/\s+/));
+    // Match individual CJK characters or Latin words so Chinese text isn't
+    // collapsed into a single token by split(/\s+/) which yields zero Jaccard
+    // similarity for any two Chinese strings with different whitespace layout.
+    const tokenize = (s: string) =>
+      new Set(s.toLowerCase().match(/[\u4e00-\u9fff]|[\uac00-\ud7af]|[\u3040-\u30ff]|[\w]+/g) ?? []);
     const setA = tokenize(a);
     const setB = tokenize(b);
     const intersection = [...setA].filter((x) => setB.has(x)).length;
@@ -472,13 +477,22 @@ ${convText}`;
     return union === 0 ? 0 : intersection / union;
   }
 
-  /** Trim items array to the per-type limit (remove least recently used) */
+  /** Trim items array to the per-type limit (remove least recently used).
+   * #21: avoid sort() side-effects on the live cache array — build an ordered
+   * list of IDs to drop, then splice only those entries out in-place.
+   */
   private trimToLimit(items: MemoryItem[], type: MemoryType): void {
     const max = MAX_PER_TYPE[type];
-    if (items.length > max) {
-      // Sort by access count asc, then remove oldest low-access items
-      items.sort((a, b) => a.accessCount - b.accessCount || a.updatedAt - b.updatedAt);
-      items.splice(0, items.length - max);
+    if (items.length <= max) return;
+    // Sort a shallow copy to find the LRU items (lowest accessCount, then oldest)
+    // without reordering the live cache array.
+    const sorted = [...items].sort(
+      (a, b) => a.accessCount - b.accessCount || a.updatedAt - b.updatedAt,
+    );
+    const toRemove = new Set(sorted.slice(0, items.length - max).map((x) => x.id));
+    // Splice backwards so indices stay valid
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (toRemove.has(items[i].id)) items.splice(i, 1);
     }
   }
 }

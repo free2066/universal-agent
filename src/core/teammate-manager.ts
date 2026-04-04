@@ -54,6 +54,8 @@ const log = createLogger('teammate');
 
 const POLL_INTERVAL_MS = 5_000;
 const IDLE_TIMEOUT_ROUNDS = 12; // 12 × 5s = 60s max idle
+/** #22: cap workPrompt length to prevent unbounded memory growth in long-running teammates */
+const MAX_WORK_PROMPT_LEN = 8_000;
 
 export const VALID_MSG_TYPES = new Set([
   'message',
@@ -267,7 +269,10 @@ export class TeammateManager {
           this.setStatus(name, 'shutdown');
           return;
         }
-        workPrompt += `\n[inbox] ${JSON.stringify(msg)}`;
+        // #22: cap workPrompt length to prevent unbounded memory growth in
+        // long-running teammates that receive many inbox messages over time.
+        const inboxLine = `\n[inbox] ${JSON.stringify(msg)}`;
+        workPrompt = (workPrompt + inboxLine).slice(-MAX_WORK_PROMPT_LEN);
       }
 
       try {
@@ -491,7 +496,20 @@ export const broadcastTool: ToolRegistration = {
 
 // ─── s10 shutdown + plan approval ─────────────────────────────────────────
 
-const pendingPlanRequests = new Map<string, { from: string; plan: string }>();
+/** TTL for pending plan requests: 30 minutes. Entries not approved/rejected within
+ * this window are automatically evicted to prevent unbounded memory growth (#27). */
+const PLAN_REQUEST_TTL_MS = 30 * 60 * 1000;
+const pendingPlanRequests = new Map<string, { from: string; plan: string; createdAt: number }>();
+
+// GC stale plan requests every 60 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, req] of pendingPlanRequests) {
+    if (now - req.createdAt > PLAN_REQUEST_TTL_MS) {
+      pendingPlanRequests.delete(id);
+    }
+  }
+}, 60_000).unref(); // .unref() so the timer doesn't keep the process alive
 
 export const shutdownRequestTool: ToolRegistration = {
   definition: {

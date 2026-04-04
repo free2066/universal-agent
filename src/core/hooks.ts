@@ -311,6 +311,19 @@ export class HookRunner {
     if (!hook.command_line) return { proceed: true };
 
     const timeout = hook.timeout_ms ?? SHELL_HOOK_DEFAULT_TIMEOUT_MS;
+
+    // #19 Shell injection mitigation: shell-escape env vars that may contain
+    // user-controlled content before they are passed into `sh -c command_line`.
+    // If hook.command_line references $TOOL_ARGS_CMD and tool args contain
+    // shell meta-chars (;, |, &, $, `...), the shell would execute them.
+    // Single-quote wrapping + escaping embedded single-quotes neutralises this.
+    function shellEscape(value: string): string {
+      // Replace every ' with '"'"' (end quote, literal single quote, start quote)
+      // then wrap the whole thing in single quotes.
+      return "'" + String(value).replace(/'/g, "'\"'\"'") + "'";
+    }
+
+    const rawCmd = String(ctx.toolArgs?.command ?? ctx.toolArgs?.cmd ?? '');
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       HOOK_EVENT: ctx.event,
@@ -321,7 +334,8 @@ export class HookRunner {
       HOOK_TOOL_ARGS: ctx.toolArgs ? JSON.stringify(ctx.toolArgs) : '',
       TOOL_NAME: ctx.toolName ?? '',
       TOOL_ARGS: ctx.toolArgs ? JSON.stringify(ctx.toolArgs) : '',
-      TOOL_ARGS_CMD: (ctx.toolArgs?.command ?? ctx.toolArgs?.cmd ?? '') as string,
+      // Shell-escaped so that $TOOL_ARGS_CMD in hook scripts cannot inject commands
+      TOOL_ARGS_CMD: shellEscape(rawCmd),
       HOOK_SLASH_CMD: ctx.slashCmd ?? '',
       HOOK_FILE_PATH: ctx.filePath ?? '',
       HOOK_CURRENT_VALUE: currentValue,
@@ -364,7 +378,14 @@ export class HookRunner {
     currentValue: string,
   ): Promise<HookResult> {
     if (!hook.module_path) return { proceed: true };
-    const absPath = resolve(this.cwd, hook.module_path);
+    const cwdResolved = resolve(this.cwd);
+    const absPath = resolve(cwdResolved, hook.module_path);
+    // CWE-22: reject module_path that escapes the project cwd.
+    // Without this guard, a hooks.json entry like module_path: '../../evil.js'
+    // could load and execute arbitrary code outside the project directory.
+    if (!absPath.startsWith(cwdResolved + '/') && absPath !== cwdResolved) {
+      return { proceed: true, error: `Module path traversal rejected: "${hook.module_path}" escapes project directory` };
+    }
     if (!existsSync(absPath)) {
       return { proceed: true, error: `Module not found: ${absPath}` };
     }
