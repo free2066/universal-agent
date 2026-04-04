@@ -1181,6 +1181,7 @@ async function runREPL(
   const { readFileSync: fsReadFileSync, existsSync: fsExistsSync } = await import('fs');
   const hookRunner = new HookRunner(process.cwd());
   const { loadLastSnapshot, saveSnapshot, formatAge } = await import('../core/memory/session-snapshot.js');
+  const { SessionLogger, listLogs } = await import('./session-logger.js');
 
   // Unique session ID for this run (used for snapshot file name + status bar)
   const SESSION_ID = `session-${Date.now()}`;
@@ -1221,6 +1222,7 @@ async function runREPL(
     '/review', '/inspect', '/purify', '/spec',
     '/agents', '/team', '/tasks', '/inbox',
     '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
+    '/log', '/logs',
   ];
 
   function completer(line: string): [string[], string] {
@@ -1331,6 +1333,16 @@ async function runREPL(
     setTimeout(() => rl.emit('line', extra.initialPrompt!), 100);
   }
 
+  // ── Session Logger 初始化 ─────────────────────────────────────────────────
+  const sessionLogger = new SessionLogger({
+    model: getModelDisplayName(currentModel),
+    domain: options.domain,
+    sessionId: SHORT_ID,
+  });
+  process.stdout.write(
+    chalk.dim(`  📝 Session log: `) + chalk.gray(sessionLogger.path) + '\n',
+  );
+
   // Init status bar LAST — after all welcome output is done, before first prompt
   initStatusBar({
     model: getModelDisplayName(currentModel),
@@ -1355,7 +1367,35 @@ async function runREPL(
       if (_inputHistory.length > 500) _inputHistory.shift();
     }
 
+    sessionLogger.logInput(input);
+
     // ── slash commands ──
+
+    // /log — show current session log path + quick copy hint
+    if (input === '/log') {
+      console.log(chalk.yellow('\n📝 Current session log:'));
+      console.log(`  ${chalk.cyan(sessionLogger.path)}`);
+      console.log(chalk.gray('  To share with AI: cat "' + sessionLogger.path + '" | pbcopy\n'));
+      rl.prompt(); printStatusBar(); return;
+    }
+    // /logs — list recent session logs
+    if (input === '/logs' || input === '/logs list') {
+      const logs = listLogs();
+      if (!logs.length) {
+        console.log(chalk.gray('\n  No session logs found.\n'));
+      } else {
+        console.log(chalk.yellow('\n📋 Recent session logs (newest first):'));
+        for (const [i, l] of logs.entries()) {
+          const kb = (l.size / 1024).toFixed(1);
+          const age = l.mtime ? new Date(l.mtime).toLocaleString('zh-CN', { hour12: false }) : '';
+          const marker = i === 0 ? chalk.green(' ← current/latest') : '';
+          console.log(`  ${chalk.gray(String(i + 1).padStart(2) + '.')} ${chalk.cyan(l.name)}  ${chalk.gray(kb + 'KB  ' + age)}${marker}`);
+        }
+        console.log(chalk.gray('\n  To copy latest log to clipboard:'));
+        console.log(chalk.gray(`  cat "${logs[0]?.path}" | pbcopy\n`));
+      }
+      rl.prompt(); printStatusBar(); return;
+    }
 
     // /continue — resume after hitting the iteration limit.
     // Agent history is preserved between runStream() calls, so injecting a
@@ -2011,6 +2051,7 @@ async function runREPL(
           }
           process.stdout.write(chunk);
           charCount += chunk.length;
+          sessionLogger.logChunk(chunk);
         },
 
         // ── AgentEvents: 工具调用生命周期 ──────────────────────────────────
@@ -2026,6 +2067,7 @@ async function runREPL(
             // 压栈：下一个 onToolEnd 会弹出栈顶的 seqKey
             pendingToolKeys.push(seqKey);
 
+            sessionLogger.logToolStart(name, args as Record<string, unknown>);
             updateStatusBar({ isThinking: 'medium' });
           },
 
@@ -2039,6 +2081,7 @@ async function runREPL(
                 spinner.updateToolLine(lineIdx, success ? 'done' : 'error', durationMs);
               }
             }
+            sessionLogger.logToolEnd(name, success, durationMs);
           },
         },
       );
@@ -2064,6 +2107,7 @@ async function runREPL(
         updateStatusBar({ isThinking: 'none', estimatedTokens: est });
         rl.setPrompt(makePrompt(options.domain));
       } catch { updateStatusBar({ isThinking: 'none' }); rl.setPrompt(makePrompt(options.domain)); }
+      sessionLogger.flushOutput();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isAuthError =
@@ -2075,6 +2119,7 @@ async function runREPL(
       if (isAuthError) {
         console.error(chalk.red('\n✗ API key missing or invalid.'));
         console.log(chalk.yellow('\n  Starting API key setup...\n'));
+        sessionLogger.logError(err);
         try {
           const { configureAgent } = await import('./configure.js');
           await configureAgent(
@@ -2093,6 +2138,7 @@ async function runREPL(
         }
       } else {
         console.error(chalk.red('\n✗ ') + msg);
+        sessionLogger.logError(err);
       }
     }
     rl.resume();
@@ -2101,6 +2147,7 @@ async function runREPL(
 
 
   rl.on('close', () => {
+    sessionLogger.close();
     // Dream Mode (kstack article #15343): on session exit, auto-ingest the
     // conversation history into memory-store so next session has continuity.
     // This is fire-and-forget — we catch all errors so exit is never blocked.
