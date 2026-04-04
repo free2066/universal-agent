@@ -85,6 +85,26 @@ const log = createLogger('agent');
 
 // ─── Agent Loop Constants ────────────────────────────────────────────────────
 
+/**
+ * Tools that are safe to run in parallel (read-only / idempotent).
+ * Declared at module level so it is allocated once, not on every LLM response.
+ */
+const PARALLELIZABLE_TOOLS = new Set([
+  // File system — read
+  'Read', 'read_file', 'readFile',
+  'LS', 'ls', 'list_files',
+  'Grep', 'grep_search',
+  // Web
+  'WebFetch', 'WebSearch', 'web_search', 'web_fetch',
+  // Analysis / inspection
+  'InspectCode', 'inspect_code',
+  'DatabaseQuery', 'database_query',
+  'EnvProbe', 'env_probe',
+  // Worktree read operations
+  'worktree_list', 'worktree_status', 'worktree_events',
+]);
+
+
 /** Default maximum LLM iterations per runStream() call.
  * Raised from 15 → 50: complex tasks (code review, multi-file refactor) easily need
  * 30-80 tool calls. Users can override via AGENT_MAX_ITERATIONS env var.
@@ -746,22 +766,8 @@ export class AgentCore {
         // Safety invariant: we never mix parallel + sequential in the same batch;
         // if ANY call in the batch is a write tool, the entire batch runs serially.
 
-        /** Tools safe to run concurrently (read-only, idempotent). */
-        const PARALLELIZABLE_TOOLS = new Set([
-          // File system — read
-          'Read', 'read_file', 'readFile',
-          'LS', 'ls', 'list_files',
-          'Grep', 'grep_search',
-          // Web
-          'WebFetch', 'WebSearch', 'web_search', 'web_fetch',
-          // Analysis / inspection
-          'InspectCode', 'inspect_code',
-          'DatabaseQuery', 'database_query',
-          'EnvProbe', 'env_probe',
-          // Worktree read operations
-          'worktree_list', 'worktree_status', 'worktree_events',
-        ]);
-
+        // NOTE: PARALLELIZABLE_TOOLS and MAX_PARALLEL_TOOLS are declared at module
+        // level (see top of file) to avoid repeated allocation on every LLM response.
         const MAX_PARALLEL_TOOLS = 5; // safety cap
 
         const allParallelizable =

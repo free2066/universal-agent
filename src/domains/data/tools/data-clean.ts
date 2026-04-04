@@ -1,6 +1,17 @@
 import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { parse } from 'csv-parse/sync';
 import type { ToolRegistration } from '../../../models/types.js';
+
+/** Resolve path within cwd; throws on traversal attempt */
+function safeResolvePath(userPath: string, baseDir: string): string {
+  const resolved = resolve(baseDir, userPath);
+  const base = resolve(baseDir);
+  if (resolved !== base && !resolved.startsWith(base + '/')) {
+    throw new Error(`Path traversal detected: "${userPath}" resolves outside the working directory.`);
+  }
+  return resolved;
+}
 
 export const dataCleanTool: ToolRegistration = {
   definition: {

@@ -5,6 +5,26 @@ import { createInterface } from 'readline';
 import type { ToolRegistration } from '../../../models/types.js';
 import { mmrRerankGrepResults } from '../../memory/mmr.js';
 
+// ─── Path Safety Helper ──────────────────────────────────────────────────────
+/**
+ * Resolve `userPath` relative to `baseDir` and assert the result stays inside
+ * `baseDir` (prevents path-traversal: `../../etc/passwd`, absolute paths, etc.).
+ *
+ * @throws Error with a clear message if the path escapes the base directory.
+ */
+function safeResolvePath(userPath: string, baseDir: string): string {
+  const resolved = resolve(baseDir, userPath);
+  // Normalise baseDir so "startsWith" works correctly even without trailing slash
+  const base = resolve(baseDir);
+  if (resolved !== base && !resolved.startsWith(base + '/')) {
+    throw new Error(
+      `Path traversal detected: "${userPath}" resolves to "${resolved}" ` +
+      `which is outside the working directory "${base}".`,
+    );
+  }
+  return resolved;
+}
+
 // ─── Output truncation (inspired by opencode truncate.ts) ────────────────────
 /** Lines / bytes beyond which tool output is considered "large" */
 const TRUNCATE_MAX_LINES = 2000;
@@ -58,7 +78,12 @@ export const readFileTool: ToolRegistration = {
     },
   },
   handler: async (args) => {
-    const filePath = resolve(process.cwd(), args.file_path as string);
+    let filePath: string;
+    try {
+      filePath = safeResolvePath(args.file_path as string, process.cwd());
+    } catch (err) {
+      return `Error: ${(err as Error).message}`;
+    }
     if (!existsSync(filePath)) return `Error: File not found: ${filePath}`;
     try {
       const st = statSync(filePath);
@@ -205,8 +230,14 @@ export const writeFileTool: ToolRegistration = {
     },
   },
   handler: async (args) => {
-    const filePath = resolve(process.cwd(), args.file_path as string);
+    let filePath: string;
+    try {
+      filePath = safeResolvePath(args.file_path as string, process.cwd());
+    } catch (err) {
+      return `Error: ${(err as Error).message}`;
+    }
     const content = args.content as string;
+    // Note: safeResolvePath already enforces cwd boundary — no additional resolve needed
 
     // ── Secret detection (kstack article #15375) ──────────────────────────────
     // Inspired by Claude Code's 30-pattern secret scanner that prevents
@@ -442,7 +473,12 @@ export const editFileTool: ToolRegistration = {
     },
   },
   handler: async (args) => {
-    const filePath = resolve(process.cwd(), args.file_path as string);
+    let filePath: string;
+    try {
+      filePath = safeResolvePath(args.file_path as string, process.cwd());
+    } catch (err) {
+      return `Error: ${(err as Error).message}`;
+    }
     if (!existsSync(filePath)) return `Error: File not found: ${filePath}`;
     try {
       const st = statSync(filePath);

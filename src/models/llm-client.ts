@@ -28,9 +28,15 @@ const REASONING_EFFORT: Record<string, string> = { low: 'low', medium: 'medium',
  *
  * Default: 3 minutes. Override with env var UAGENT_INFERENCE_TIMEOUT_MS.
  */
-const INFERENCE_TIMEOUT_MS = parseInt(
-  process.env.UAGENT_INFERENCE_TIMEOUT_MS ?? String(3 * 60 * 1000), 10,
-);
+const _parsed = parseInt(process.env.UAGENT_INFERENCE_TIMEOUT_MS ?? '', 10);
+/**
+ * Hard wall-clock timeout for streaming LLM calls.
+ * If UAGENT_INFERENCE_TIMEOUT_MS is set but not a valid positive integer
+ * (e.g. "abc", "0", negative), we fall back to the 3-minute default rather
+ * than silently setting the timer to 0/NaN (which would abort every request
+ * immediately or behave non-deterministically).
+ */
+const INFERENCE_TIMEOUT_MS = Number.isFinite(_parsed) && _parsed > 0 ? _parsed : 3 * 60 * 1000;
 
 /**
  * Run `fn(signal)` with a hard wall-clock timeout.

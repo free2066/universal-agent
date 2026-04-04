@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { parse } from 'csv-parse/sync';
 import type { ToolRegistration } from '../../../models/types.js';
 
@@ -19,9 +20,19 @@ export const edaReportTool: ToolRegistration = {
     },
   },
   handler: async (args) => {
-    const filePath = args.file_path as string;
+    const rawPath = args.file_path as string;
     const targetCol = args.target_column as string | undefined;
-
+    let filePath: string;
+    try {
+      const resolved = resolve(process.cwd(), rawPath);
+      const base = resolve(process.cwd());
+      if (resolved !== base && !resolved.startsWith(base + '/')) {
+        return `Error: Path traversal detected: "${rawPath}" resolves outside the working directory.`;
+      }
+      filePath = resolved;
+    } catch {
+      filePath = rawPath;
+    }
     let content: string;
     try {
       content = readFileSync(filePath, 'utf-8');
