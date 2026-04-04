@@ -44,6 +44,7 @@ import {
   readdirSync,
 } from 'fs';
 import { join, resolve } from 'path';
+import { sanitizeName } from '../utils/path-security.js';
 import { createLogger } from '../core/logger.js';
 import type { ToolRegistration } from '../models/types.js';
 
@@ -92,6 +93,10 @@ export class MessageBus {
     if (!VALID_MSG_TYPES.has(msgType)) {
       return `Error: Invalid type '${msgType}'. Valid: ${[...VALID_MSG_TYPES].join(', ')}`;
     }
+    // CWE-22: sanitize 'to' before constructing inbox path
+    try { sanitizeName(to, 'recipient name'); } catch (e) {
+      return `Error: ${e instanceof Error ? e.message : String(e)}`;
+    }
     const msg: InboxMessage = {
       type: msgType,
       from: sender,
@@ -105,6 +110,8 @@ export class MessageBus {
   }
 
   readInbox(name: string): InboxMessage[] {
+    // CWE-22: sanitize name before constructing inbox path
+    try { sanitizeName(name, 'inbox name'); } catch { return []; }
     const path = join(this.inboxDir, `${name}.jsonl`);
     if (!existsSync(path)) return [];
     const lines = readFileSync(path, 'utf-8').trim().split('\n').filter(Boolean);
@@ -190,6 +197,10 @@ export class TeammateManager {
    * here (runs as a detached async task, not blocking the main loop).
    */
   spawn(name: string, role: string, prompt: string): string {
+    // CWE-22: sanitize teammate name before it is used in inbox path construction
+    try { sanitizeName(name, 'teammate name'); } catch (e) {
+      return `Error: ${e instanceof Error ? e.message : String(e)}`;
+    }
     const existing = this.findMember(name);
     if (existing) {
       if (!['idle', 'shutdown'].includes(existing.status)) {

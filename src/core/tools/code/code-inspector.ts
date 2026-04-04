@@ -11,6 +11,7 @@
  */
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { readFile as readFileAsync } from 'fs/promises';
 import { resolve, join, relative, extname } from 'path';
 import type { ToolRegistration } from '../../../models/types.js';
 
@@ -236,15 +237,15 @@ const RULES: Rule[] = [
 // ─── Scanner ─────────────────────────────────────────────
 
 /**
- * Scan a single file for all rule violations.
+ * Async version of scanFile — reads file content asynchronously to avoid blocking.
  * Each rule creates a fresh RegExp via its factory to avoid lastIndex state leaks.
  */
-function scanFile(filePath: string, rootDir: string): Finding[] {
+async function scanFileAsync(filePath: string, rootDir: string): Promise<Finding[]> {
   const findings: Finding[] = [];
   let content: string;
 
   try {
-    content = readFileSync(filePath, 'utf-8');
+    content = await readFileAsync(filePath, 'utf-8');
   } catch {
     return findings;
   }
@@ -281,6 +282,34 @@ function scanFile(filePath: string, rootDir: string): Finding[] {
   // Pass already-split lines to avoid re-splitting inside detectLongFunctions (b9 opt)
   findings.push(...detectLongFunctions(lines, relFile));
 
+  return findings;
+}
+
+/** @deprecated Use scanFileAsync — kept for test compatibility only */
+function scanFile(filePath: string, rootDir: string): Finding[] {
+  const findings: Finding[] = [];
+  let content: string;
+  try { content = readFileSync(filePath, 'utf-8'); } catch { return findings; }
+  const lines = content.split('\n');
+  const relFile = relative(rootDir, filePath);
+  for (const rule of RULES) {
+    lines.forEach((line, lineIdx) => {
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith('//') && rule.id !== 'todo-fixme') return;
+      if (trimmed.startsWith('*')) return;
+      const re = rule.pattern();
+      const match = re.exec(line);
+      if (match) {
+        findings.push({
+          file: relFile, line: lineIdx + 1, column: match.index + 1,
+          severity: rule.severity, category: rule.category,
+          rule: rule.id, message: rule.message,
+          snippet: line.trim().slice(0, 120), suggestion: rule.suggestion,
+        });
+      }
+    });
+  }
+  findings.push(...detectLongFunctions(lines, relFile));
   return findings;
 }
 
@@ -459,8 +488,9 @@ export async function inspectProject(
   const severityOrder: Severity[] = ['info', 'warning', 'error', 'critical'];
   const minIdx = severityOrder.indexOf(minSeverity);
 
-  let allFindings: Finding[] = [];
-  for (const file of files) allFindings.push(...scanFile(file, rootDir));
+  // Parallel async scan — avoids blocking the event loop on large file sets
+  const scanResults = await Promise.all(files.map((f) => scanFileAsync(f, rootDir)));
+  let allFindings: Finding[] = scanResults.flat();
   allFindings = allFindings.filter((f) => {
     const sevOk = severityOrder.indexOf(f.severity) >= minIdx;
     const catOk = filterCategory === 'all' || f.category === filterCategory;

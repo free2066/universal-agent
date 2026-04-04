@@ -26,7 +26,7 @@
  *   AutopilotRun({ requirement: "...", mode: "manual" }) — 手动审批模式
  */
 
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { modelManager } from '../../../models/model-manager.js';
@@ -184,10 +184,14 @@ function getSkippedStages(score: number): PipelineStage[] {
  */
 function inferBranchPrefix(projectRoot: string): string {
   try {
-    const branches = execSync(
-      'git branch -a --sort=-committerdate --format="%(refname:short)"',
-      { cwd: projectRoot, stdio: 'pipe', timeout: 3000 },
-    ).toString().split('\n').slice(0, 20).filter(Boolean);
+    // Use spawnSync (no shell) to avoid command injection and cross-platform issues
+    const r = spawnSync(
+      'git',
+      ['branch', '-a', '--sort=-committerdate', '--format=%(refname:short)'],
+      { cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000 },
+    );
+    const branches = (r.status === 0 ? r.stdout : '')
+      .split('\n').slice(0, 20).filter(Boolean);
 
     const prefixCounts = new Map<string, number>();
     for (const b of branches) {

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'fs';
 import { resolve, join, dirname } from 'path';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { getSkillLoader } from '../skills/skill-loader.js';
 
 export interface AgentsContext {
@@ -207,9 +207,11 @@ function getGitStatus(cwd?: string): string | null {
 
   let result: string | null = null;
   try {
-    const raw = execSync('git status --short --branch 2>/dev/null', {
+    // Use spawnSync instead of execSync to avoid shell injection and for better cross-platform safety
+    const r = spawnSync('git', ['status', '--short', '--branch'], {
       cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000,
-    }).trim();
+    });
+    const raw = (r.status === 0 ? r.stdout : '').trim();
     if (raw) {
       // Truncate to 2 KB
       result = raw.length > 2048 ? raw.slice(0, 2048) + '\n...(truncated)' : raw;
@@ -282,9 +284,11 @@ export function initAgentsMd(dir: string): string {
 
 function findGitRoot(dir: string): string | null {
   try {
-    return execSync('git rev-parse --show-toplevel', {
-      cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
+    // Use spawnSync to avoid shell injection (no shell interpolation)
+    const r = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000,
+    });
+    return r.status === 0 ? r.stdout.trim() : null;
   } catch { return null; }
 }
 
