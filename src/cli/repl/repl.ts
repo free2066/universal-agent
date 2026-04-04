@@ -588,68 +588,30 @@ export async function runREPL(
       }
 
       const spinner = new CliSpinner();
+      // tool-call sequence counter (for deduplicating concurrent same-name calls)
       let toolCallSeq = 0;
-      const toolIndexMap = new Map<string, number>();
-      const pendingToolKeys: string[] = [];
-
-      // ── Live tool-call tracking (printed to stdout in real-time) ────────────
-      // Each tool call gets a dedicated stdout line:
-      //   ● ToolName argsSummary...
-      // When finished:
-      //   ● ToolName argsSummary... ✓ (42ms)
-      //
-      // Implementation: we print the line immediately on start, then use
-      // ANSI cursor-up to overwrite the same line on completion.
-      //
-      // liveToolLines[i] = { lineOffset: number (lines from current cursor up) }
-      //   lineOffset is stored as the number of lines printed AFTER that tool's line,
-      //   so we can navigate back with \x1b[Nx (N lines up) and overwrite.
-      interface LiveToolLine {
-        name: string;
-        argsSummary: string;
-        linesBelow: number;  // how many stdout lines have been printed after this line
-      }
-      const liveToolLines: LiveToolLine[] = [];
-      let liveToolsPrinted = false;  // whether we've printed any tool lines yet
+      // pending tool key → start timestamp (for duration calculation)
+      const toolStartTimes = new Map<string, number>();
+      // pending tool key → args summary (for ↳ line on completion)
+      const toolArgMap = new Map<string, string>();
 
       updateStatusBar({ isThinking: 'low' });
       spinner.start('thinking');
 
       let firstChunk = true;
       let charCount = 0;
+      let toolsPrinted = false;
 
       // F4: create AbortController for Esc to cancel streaming
       _currentAbort = new AbortController();
-
-      // ── Live tool-call line tracking ──────────────────────────────────────
-      // Each tool call prints a live line immediately on start:
-      //   ● ToolName argsSummary...
-      // On completion, we move the cursor back up to overwrite with:
-      //   ● ToolName argsSummary... ✓ (42ms)
-      //
-      // For parallel calls (multiple lines in-flight simultaneously),
-      // we track how many lines have been printed after each tool's line
-      // so we can calculate the correct cursor-up offset.
-      interface LiveLine {
-        name: string;
-        argsSummary: string;
-        linesBelow: number;  // lines printed to stdout AFTER this line
-      }
-      const liveLines: LiveLine[] = [];
-      let toolsPrinted = false;
 
       await agent.runStream(
         finalInput,
         (chunk) => {
           if (firstChunk) {
             spinner.stop(false);
-            // Print all accumulated live tool lines (if any) as a clean static block
-            if (toolsPrinted) {
-              // They're already printed; just add separator before response
-            }
-            process.stdout.write(
-              chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))) + '\n'
-            );
+            // blank line to separate tool-calls block from response text
+            if (toolsPrinted) process.stdout.write('\n');
             updateStatusBar({ isThinking: 'medium' });
             firstChunk = false;
           }
@@ -659,87 +621,52 @@ export async function runREPL(
         },
         {
           onToolStart: (name, args) => {
-            // First tool call: stop thinking spinner, print separator
+            // First tool call: stop the "thinking" spinner
             if (!toolsPrinted) {
               spinner.stop(false);
               toolsPrinted = true;
             }
 
             const argStr = summarizeArgs(args);
-            const CIRCLE = chalk.hex('#10b981')('●');
-            const nameStr = chalk.hex('#e2e8f0')(name);
-            const cols = process.stdout.columns ?? 80;
-            const maxArgLen = Math.max(0, cols - name.length - 10);
-            const argDisplay = argStr.length > 0
-              ? ' ' + chalk.hex('#6b7280')(argStr.slice(0, maxArgLen))
+            const seqKey = `${name}#${toolCallSeq++}`;
+            toolStartTimes.set(seqKey, Date.now());
+            toolArgMap.set(seqKey, argStr);
+
+            // Style: cyan bold tool name + dim args in parens — like the reference UI
+            const cols = process.stdout.columns ?? 120;
+            const maxArgLen = Math.max(0, cols - name.length - 6);
+            const argsDisplay = argStr.length > 0
+              ? chalk.dim('(' + argStr.slice(0, maxArgLen) + '...)')
               : '';
 
-            // Increment linesBelow for all currently pending (in-flight) live lines
-            for (const ll of liveLines) ll.linesBelow++;
-
-            // Print the new live line
-            process.stdout.write(`  ${CIRCLE} ${nameStr}${argDisplay}\n`);
-
-            // Track this line
-            const seqKey = `${name}#${toolCallSeq++}`;
-            liveLines.push({ name: seqKey, argsSummary: argStr, linesBelow: 0 });
-            toolIndexMap.set(seqKey, liveLines.length - 1);
-            pendingToolKeys.push(seqKey);
+            process.stdout.write(
+              chalk.cyan.bold(name) + argsDisplay + '\n'
+            );
 
             sessionLogger.logToolStart(name, args as Record<string, unknown>);
             updateStatusBar({ isThinking: 'medium' });
           },
           onToolEnd: (name, success, durationMs) => {
-            const keyIdx = pendingToolKeys.findIndex((k) => k.startsWith(`${name}#`));
-            if (keyIdx !== -1) {
-              const seqKey = pendingToolKeys.splice(keyIdx, 1)[0]!;
-              const lineIdx = toolIndexMap.get(seqKey) ?? -1;
-              const ll = lineIdx >= 0 ? liveLines[lineIdx] : undefined;
-
-              if (ll !== undefined) {
-                // Navigate cursor up to overwrite the pending line
-                const upLines = ll.linesBelow + 1;
-                const CIRCLE = success
-                  ? chalk.hex('#10b981')('●')
-                  : chalk.hex('#ef4444')('●');
-                const nameStr = chalk.hex('#e2e8f0')(name.replace(/#\d+$/, ''));
-                const cols = process.stdout.columns ?? 80;
-                const maxArgLen = Math.max(0, cols - name.length - 24);
-                const argDisplay = ll.argsSummary.length > 0
-                  ? ' ' + chalk.hex('#6b7280')(ll.argsSummary.slice(0, maxArgLen))
-                  : '';
-                const durationStr = durationMs < 1000
-                  ? `${durationMs}ms`
-                  : `${(durationMs / 1000).toFixed(1)}s`;
-                const suffix = success
-                  ? chalk.hex('#10b981')(` ✓ (${durationStr})`)
-                  : chalk.hex('#ef4444')(` ✗`);
-
-                // Move cursor up, rewrite line, move back down
-                process.stdout.write(
-                  `\x1b[${upLines}A`  +  // cursor up
-                  `\r\x1b[2K`         +  // clear line
-                  `  ${CIRCLE} ${nameStr}${argDisplay}${suffix}\n` +
-                  (ll.linesBelow > 0 ? `\x1b[${ll.linesBelow}B` : ''),  // cursor back down
-                );
-
-                // Decrement linesBelow for all lines that were above this one
-                // (they've now "absorbed" one line being rewritten in-place)
-                // Actually no — we rewrite in place, so linesBelow stays correct.
-                // But other in-flight lines above this one now have one fewer line below.
-                for (let i = 0; i < liveLines.length; i++) {
-                  if (i !== lineIdx && liveLines[i] !== undefined) {
-                    const other = liveLines[i]!;
-                    // If other line is "below" this line's original position, it's unaffected
-                    // If other line is "above" this line (higher linesBelow), decrement
-                    if (other.linesBelow > ll.linesBelow) {
-                      // other was printed before this line — it has more linesBelow
-                      // rewriting this line in-place doesn't change other's offset
-                    }
-                  }
-                }
-              }
+            // Find matching pending key (first match wins)
+            let matchedKey: string | undefined;
+            for (const k of toolStartTimes.keys()) {
+              if (k.startsWith(`${name}#`)) { matchedKey = k; break; }
             }
+            if (matchedKey) {
+              toolStartTimes.delete(matchedKey);
+              toolArgMap.delete(matchedKey);
+            }
+
+            const durationStr = durationMs < 1000
+              ? `${durationMs}ms`
+              : `${(durationMs / 1000).toFixed(1)}s`;
+
+            // ↳ result line — dim gray, indented
+            const resultLine = success
+              ? chalk.dim(`↳ done (${durationStr}).`)
+              : chalk.hex('#ef4444')(`↳ failed (${durationStr}).`);
+            process.stdout.write(`${resultLine}\n`);
+
             sessionLogger.logToolEnd(name, success, durationMs);
           },
         },
@@ -750,20 +677,10 @@ export async function runREPL(
 
       if (firstChunk) {
         spinner.stop(false);
-        // If tools were called but no text response, print separator
-        if (toolsPrinted) {
-          process.stdout.write(
-            chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))) + '\n'
-          );
-        }
         process.stdout.write('\n');
       } else {
         spinner.stop(false);
-        if (charCount > 0) {
-          process.stdout.write(
-            '\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))) + '\n'
-          );
-        }
+        if (charCount > 0) process.stdout.write('\n');
       }
       try {
         const h = agent.getHistory();
