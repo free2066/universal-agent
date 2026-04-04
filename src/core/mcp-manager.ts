@@ -88,10 +88,10 @@ class StdioMCPClient {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    this.proc.stdout!.setEncoding('utf-8');
-    this.proc.stdout!.on('data', (chunk: string) => this.onData(chunk));
+    this.proc.stdout?.setEncoding('utf-8');
+    this.proc.stdout?.on('data', (chunk: string) => this.onData(chunk));
 
-    this.proc.stderr!.on('data', (chunk: Buffer) => {
+    this.proc.stderr?.on('data', (chunk: Buffer) => {
       // Forward stderr to our stderr for debugging (suppressed unless AGENT_VERBOSE)
       if (process.env.AGENT_VERBOSE === '1') {
         process.stderr.write(`[MCP:${this.server.name}] ${chunk}`);
@@ -154,14 +154,14 @@ class StdioMCPClient {
 
       const msg: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
       const line = JSON.stringify(msg) + '\n';
-      this.proc.stdin!.write(line);
+      this.proc.stdin?.write(line);
     });
   }
 
   private notify(method: string) {
     if (!this.proc) return;
     const msg = { jsonrpc: '2.0', method };
-    this.proc.stdin!.write(JSON.stringify(msg) + '\n');
+    this.proc.stdin?.write(JSON.stringify(msg) + '\n');
   }
 
   private onData(chunk: string) {
@@ -209,8 +209,11 @@ export class MCPManager {
   private loadConfig() {
     if (!existsSync(this.configPath)) return;
     try {
-      const raw = JSON.parse(readFileSync(this.configPath, 'utf-8')) as MCPConfig;
-      for (const [name, server] of Object.entries(raw.servers || {})) {
+      const raw = JSON.parse(readFileSync(this.configPath, 'utf-8'));
+      // Defensive: raw must be an object with a servers map
+      if (typeof raw !== 'object' || raw === null || typeof raw.servers !== 'object' || Array.isArray(raw.servers)) return;
+      const typed = raw as MCPConfig;
+      for (const [name, server] of Object.entries(typed.servers || {})) {
         this.servers.set(name, { ...server, name, enabled: server.enabled ?? true });
       }
     } catch { /* ignore */ }

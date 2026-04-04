@@ -173,7 +173,13 @@ export class TeammateManager {
 
   private loadConfig(): TeamConfig {
     if (existsSync(this.configPath)) {
-      try { return JSON.parse(readFileSync(this.configPath, 'utf-8')); } catch { /* fallthrough */ }
+      try {
+        const raw = JSON.parse(readFileSync(this.configPath, 'utf-8'));
+        // Defensive: must have members array
+        if (typeof raw === 'object' && raw !== null && Array.isArray(raw.members)) {
+          return raw as TeamConfig;
+        }
+      } catch { /* fallthrough */ }
     }
     return { team_name: 'default', members: [] };
   }
@@ -326,9 +332,11 @@ export class TeammateManager {
       });
     for (const f of files) {
       try {
-        const t = JSON.parse(readFileSync(join(this.tasksDir, f), 'utf-8'));
-        if (t.status === 'pending' && !t.owner && (!t.blockedBy || t.blockedBy.length === 0)) {
-          return t;
+        const raw = JSON.parse(readFileSync(join(this.tasksDir, f), 'utf-8'));
+        if (typeof raw !== 'object' || raw === null) continue;
+        const t = raw as Record<string, unknown>;
+        if (t['status'] === 'pending' && !t['owner'] && (!Array.isArray(t['blockedBy']) || (t['blockedBy'] as unknown[]).length === 0)) {
+          return t as { id: number; subject: string; description?: string };
         }
       } catch { /* skip */ }
     }
@@ -338,7 +346,9 @@ export class TeammateManager {
   private claimTask(id: number, owner: string): void {
     const path = join(this.tasksDir, `task_${id}.json`);
     if (!existsSync(path)) return;
-    const task = JSON.parse(readFileSync(path, 'utf-8'));
+    let task: Record<string, unknown>;
+    try { task = JSON.parse(readFileSync(path, 'utf-8')); } catch { return; }
+    if (typeof task !== 'object' || task === null) return;
     task.owner = owner;
     task.status = 'in_progress';
     task.updatedAt = Date.now();

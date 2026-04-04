@@ -119,7 +119,16 @@ class WorktreeManager {
   }
 
   private loadIndex(): WorktreeIndex {
-    return JSON.parse(readFileSync(this.indexPath, 'utf-8')) as WorktreeIndex;
+    try {
+      const raw = JSON.parse(readFileSync(this.indexPath, 'utf-8'));
+      // Defensive: must be an object with a worktrees array
+      if (typeof raw !== 'object' || raw === null || !Array.isArray(raw.worktrees)) {
+        return { worktrees: [] };
+      }
+      return raw as WorktreeIndex;
+    } catch {
+      return { worktrees: [] };
+    }
   }
 
   private saveIndex(data: WorktreeIndex): void {
@@ -143,7 +152,9 @@ class WorktreeManager {
     if (!Number.isInteger(taskId) || taskId < 0) throw new Error(`Invalid task id: ${taskId}`);
     const p = join(this.tasksDir, `task_${taskId}.json`);
     if (!existsSync(p)) return;
-    const task = JSON.parse(readFileSync(p, 'utf-8'));
+    let task: Record<string, unknown>;
+    try { task = JSON.parse(readFileSync(p, 'utf-8')); } catch { return; }
+    if (typeof task !== 'object' || task === null) return;
     task.worktree = worktreeName;
     if (task.status === 'pending') task.status = 'in_progress';
     task.updatedAt = Date.now();
@@ -154,7 +165,9 @@ class WorktreeManager {
     if (!Number.isInteger(taskId) || taskId < 0) throw new Error(`Invalid task id: ${taskId}`);
     const p = join(this.tasksDir, `task_${taskId}.json`);
     if (!existsSync(p)) return;
-    const task = JSON.parse(readFileSync(p, 'utf-8'));
+    let task: Record<string, unknown>;
+    try { task = JSON.parse(readFileSync(p, 'utf-8')); } catch { return; }
+    if (typeof task !== 'object' || task === null) return;
     task.worktree = '';
     task.updatedAt = Date.now();
     writeFileSync(p, JSON.stringify(task, null, 2), 'utf-8');
@@ -236,7 +249,9 @@ class WorktreeManager {
       if (completeTask && wt.task_id !== null) {
         const tp = join(this.tasksDir, `task_${wt.task_id}.json`);
         if (existsSync(tp)) {
-          const task = JSON.parse(readFileSync(tp, 'utf-8'));
+          let task: Record<string, unknown>;
+          try { task = JSON.parse(readFileSync(tp, 'utf-8')); } catch { task = {}; }
+          if (typeof task !== 'object' || task === null) task = {};
           task.status = 'completed';
           task.updatedAt = Date.now();
           writeFileSync(tp, JSON.stringify(task, null, 2), 'utf-8');

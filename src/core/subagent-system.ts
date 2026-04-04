@@ -36,8 +36,12 @@ function loadUsage(): Record<string, UsageRecord> {
   if (_usageCache) return _usageCache;
   try {
     if (existsSync(usageFile)) {
-      _usageCache = JSON.parse(readFileSync(usageFile, 'utf-8')) as Record<string, UsageRecord>;
-      return _usageCache;
+      const raw = JSON.parse(readFileSync(usageFile, 'utf-8'));
+      // Defensive: must be a plain object mapping agent names to usage records
+      if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+        _usageCache = raw as Record<string, UsageRecord>;
+        return _usageCache;
+      }
     }
   } catch { /* ignore */ }
   _usageCache = {};
