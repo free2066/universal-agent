@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { execSync, spawnSync } from 'child_process';
+import { sanitizeName } from '../../../utils/path-security.js';
 import type { ToolRegistration } from '../../../models/types.js';
 import { createLogger } from '../../logger.js';
 
@@ -130,12 +131,16 @@ class WorktreeManager {
   }
 
   private validateName(name: string): void {
-    if (!/^[A-Za-z0-9._-]{1,40}$/.test(name || '')) {
+    // Use sanitizeName for CWE-22 path-traversal prevention (rejects ../ / \)
+    sanitizeName(name, 'worktree name');
+    if (name.length > 40) {
       throw new Error('Invalid worktree name. Use 1-40 chars: letters, numbers, ., _, -');
     }
   }
 
   private bindTaskToWorktree(taskId: number, worktreeName: string): void {
+    // taskId is always a number so no path-traversal risk here, but validate anyway
+    if (!Number.isInteger(taskId) || taskId < 0) throw new Error(`Invalid task id: ${taskId}`);
     const p = join(this.tasksDir, `task_${taskId}.json`);
     if (!existsSync(p)) return;
     const task = JSON.parse(readFileSync(p, 'utf-8'));
@@ -146,6 +151,7 @@ class WorktreeManager {
   }
 
   private unbindTask(taskId: number): void {
+    if (!Number.isInteger(taskId) || taskId < 0) throw new Error(`Invalid task id: ${taskId}`);
     const p = join(this.tasksDir, `task_${taskId}.json`);
     if (!existsSync(p)) return;
     const task = JSON.parse(readFileSync(p, 'utf-8'));

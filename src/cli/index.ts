@@ -11,9 +11,10 @@ import { program } from 'commander';
 import { createInterface } from 'readline';
 import chalk from 'chalk';
 import ora from 'ora';
-import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { resolve, join } from 'path';
 import { config } from 'dotenv';
+import { sanitizeName, safeResolve } from '../utils/path-security.js';
 import { AgentCore } from '../core/agent.js';
 import { modelManager } from '../models/model-manager.js';
 import { subagentSystem } from '../core/subagent-system.js';
@@ -212,8 +213,16 @@ program
       const { join } = await import('path');
       const contextIds: string[] = (options.context as string).split(',').map((s: string) => s.trim()).filter(Boolean);
       const contextParts: string[] = [];
+      const ctxBase = join(process.cwd(), '.uagent', 'context');
       for (const id of contextIds) {
-        const ctxFile = join(process.cwd(), '.uagent', 'context', `${id}.md`);
+        let ctxFile: string;
+        try {
+          sanitizeName(id, 'context id');
+          ctxFile = safeResolve(`${id}.md`, ctxBase);
+        } catch {
+          console.warn(chalk.yellow(`  ⚠ Skipping invalid context id: ${id}`));
+          continue;
+        }
         if (existsSync(ctxFile)) {
           contextParts.push(`## Context from [${id}]\n${readFileSync(ctxFile, 'utf-8').trim()}`);
         } else {
@@ -240,19 +249,26 @@ program
 
       // Save output to context file for downstream chaining (優化点4)
       if (options.saveContext) {
-        const { writeFileSync, mkdirSync } = await import('fs');
-        const { join } = await import('path');
         const ctxDir = join(process.cwd(), '.uagent', 'context');
-        mkdirSync(ctxDir, { recursive: true });
-        const ctxContent = [
-          `# Agent Context: ${options.saveContext}`,
-          '',
-          `> Generated at: ${new Date().toISOString()}`,
-          '',
-          result,
-        ].join('\n');
-        writeFileSync(join(ctxDir, `${options.saveContext}.md`), ctxContent, 'utf-8');
-        console.log(chalk.green(`\n✓ Context saved → .uagent/context/${options.saveContext}.md`));
+        let saveName: string;
+        try {
+          saveName = sanitizeName(options.saveContext as string, 'context name');
+        } catch (e) {
+          console.warn(chalk.yellow(`  ⚠ Invalid context name: ${e instanceof Error ? e.message : String(e)}`));
+          saveName = '';
+        }
+        if (saveName) {
+          mkdirSync(ctxDir, { recursive: true });
+          const ctxContent = [
+            `# Agent Context: ${saveName}`,
+            '',
+            `> Generated at: ${new Date().toISOString()}`,
+            '',
+            result,
+          ].join('\n');
+          writeFileSync(safeResolve(`${saveName}.md`, ctxDir), ctxContent, 'utf-8');
+          console.log(chalk.green(`\n✓ Context saved → .uagent/context/${saveName}.md`));
+        }
       }
     } catch (err) {
       spinner.stop();
