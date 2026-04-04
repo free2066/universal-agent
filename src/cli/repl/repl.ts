@@ -634,9 +634,10 @@ export async function runREPL(
 
             // Style: cyan bold tool name + dim args in parens — like the reference UI
             const cols = process.stdout.columns ?? 120;
-            const maxArgLen = Math.max(0, cols - name.length - 6);
+            const maxArgLen = Math.max(0, cols - name.length - 4);
+            const truncated = argStr.length > maxArgLen;
             const argsDisplay = argStr.length > 0
-              ? chalk.dim('(' + argStr.slice(0, maxArgLen) + '...)')
+              ? chalk.dim('(' + argStr.slice(0, maxArgLen) + (truncated ? '...' : '') + ')')
               : '';
 
             process.stdout.write(
