@@ -260,6 +260,19 @@ async function scanFileAsync(filePath: string, rootDir: string): Promise<Finding
       if (trimmed.startsWith('//') && rule.id !== 'todo-fixme') return;
       if (trimmed.startsWith('*')) return; // JSDoc
 
+      // Honour inline suppression comments:
+      //   // inspect-ignore               — suppress ALL rules on this line
+      //   // inspect-ignore: weak-crypto  — suppress a specific rule by id
+      // This is analogous to eslint-disable-line and allows documenting
+      // intentional exceptions (e.g. protocol-required SHA-1, test fixtures).
+      if (line.includes('// inspect-ignore')) {
+        const match = line.match(/\/\/\s*inspect-ignore(?::\s*([\w,-]+))?/);
+        if (match) {
+          const ids = match[1]; // undefined = suppress all
+          if (!ids || ids.split(',').map((s) => s.trim()).includes(rule.id)) return;
+        }
+      }
+
       // Fresh RegExp per line per rule → no lastIndex issues
       const re = rule.pattern();
       const match = re.exec(line);

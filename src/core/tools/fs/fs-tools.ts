@@ -78,12 +78,9 @@ export const readFileTool: ToolRegistration = {
     },
   },
   handler: async (args) => {
-    let filePath: string;
-    try {
-      filePath = safeResolvePath(args.file_path as string, process.cwd());
-    } catch (err) {
-      return `Error: ${(err as Error).message}`;
-    }
+    // Read is a first-class tool intentionally allowed to read from any path.
+    // safeResolvePath() is NOT applied here — see path-security.ts.
+    const filePath = resolve(args.file_path as string);
     if (!existsSync(filePath)) return `Error: File not found: ${filePath}`;
     try {
       const st = statSync(filePath);
@@ -230,14 +227,12 @@ export const writeFileTool: ToolRegistration = {
     },
   },
   handler: async (args) => {
-    let filePath: string;
-    try {
-      filePath = safeResolvePath(args.file_path as string, process.cwd());
-    } catch (err) {
-      return `Error: ${(err as Error).message}`;
-    }
+    // Write is a first-class tool intentionally allowed to write to any path.
+    // safeResolvePath() (which enforces the cwd boundary) is NOT applied here —
+    // see path-security.ts for the documented distinction between first-class
+    // tools (unrestricted) and internal subsystems (restricted).
+    const filePath = resolve(args.file_path as string);
     const content = args.content as string;
-    // Note: safeResolvePath already enforces cwd boundary — no additional resolve needed
 
     // ── Secret detection (kstack article #15375) ──────────────────────────────
     // Inspired by Claude Code's 30-pattern secret scanner that prevents

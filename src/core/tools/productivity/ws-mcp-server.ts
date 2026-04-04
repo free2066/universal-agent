@@ -119,7 +119,7 @@ class WsMcpServer {
           // This is NOT a cryptographic/security use — every browser and WS client
           // expects exactly this algorithm. Replacing with SHA-256 would break all
           // WebSocket clients. Static analysers that flag this are producing a false positive.
-          const accept = createHash('sha1')
+          const accept = createHash('sha1') // inspect-ignore: weak-crypto — RFC 6455 §4.2.2 mandates SHA-1
             .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
             .digest('base64');
 

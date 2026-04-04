@@ -248,10 +248,22 @@ describe('withApiRateLimitRetry', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it('throws rate-limit error immediately when AGENT_UNATTENDED_RETRY is not set', async () => {
+  it('throws rate-limit error after interactive retries when AGENT_UNATTENDED_RETRY is not set', async () => {
+    // In interactive mode withApiRateLimitRetry retries up to INTERACTIVE_RATE_LIMIT_MAX_RETRIES
+    // (3) with exponential backoff before giving up.  Use fake timers to skip the waits.
+    vi.useFakeTimers();
+
     const fn = vi.fn().mockRejectedValue(new Error('429 Too Many Requests'));
-    await expect(withApiRateLimitRetry(fn)).rejects.toThrow('429 Too Many Requests');
-    expect(fn).toHaveBeenCalledTimes(1);
+    const promise = withApiRateLimitRetry(fn);
+
+    // Advance well past all three backoff windows (5s + 10s + 20s = 35s total max)
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(promise).rejects.toThrow('429 Too Many Requests');
+    // 1 initial + 3 retries = 4 calls
+    expect(fn).toHaveBeenCalledTimes(4);
+
+    vi.useRealTimers();
   });
 
   it('retries on rate-limit when AGENT_UNATTENDED_RETRY=1', async () => {
