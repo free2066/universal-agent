@@ -33,9 +33,10 @@ function readPkg() {
 // ─── 1. Version ──────────────────────────────────────────────────────────────
 
 describe('1. Version display', () => {
-  it('package.json version is 0.2.0', () => {
+  it('package.json version is >= 0.4.0', () => {
     const pkg = readPkg();
-    expect(pkg.version).toBe('0.2.0');
+    const [major, minor] = pkg.version.split('.').map(Number);
+    expect(major! > 0 || (major === 0 && minor! >= 4)).toBe(true);
   });
 
   it('ui-enhanced reads version from package.json (dynamic, not hardcoded)', async () => {
