@@ -124,10 +124,30 @@ export function loadRules(startDir?: string): { content: string; sources: string
     }
   }
 
+  // Helper: load a single .md file (if it exists and not already loaded by filename)
+  function loadFile(filePath: string) {
+    if (!existsSync(filePath)) return;
+    const fileName = filePath.split('/').pop() ?? filePath;
+    if (sources.some((s) => s.endsWith(fileName))) return; // already loaded
+    try {
+      const content = readFileSync(filePath, 'utf-8').trim();
+      if (content) {
+        parts.push(`<!-- Rule: ${fileName} -->\n${content}`);
+        sources.push(filePath);
+      }
+    } catch { /* skip unreadable file */ }
+  }
+
   // Project-level rules take precedence (loaded first so they win dedup check)
   loadFromDir(rulesDir);
   // Global rules fill in the rest
   loadFromDir(globalRulesDir);
+
+  // Compat patch: also read ~/.codeflicker/AGENTS.md (CodeFlicker CLI global rules path).
+  // CodeFlicker CLI stores global rules at ~/.codeflicker/AGENTS.md, while uagent uses
+  // ~/.uagent/rules/*.md. This patch makes both paths work transparently.
+  const cfAgentsMd = join(process.env.HOME ?? homedir(), '.codeflicker', 'AGENTS.md');
+  loadFile(cfAgentsMd);
 
   const result = { content: parts.join('\n\n'), sources };
   // Write back to cache; evict oldest entry if Map grows beyond 20 keys
