@@ -396,29 +396,34 @@ export class ModelManager {
           }
         }
 
-        // 万擎 source: ALWAYS override all pointers unconditionally.
-        // _userSelectedMain must NOT block wanqing auto-detection because:
-        //   1. models.json may contain a stale "wanqing/xxx" pointer from a previous
-        //      session that set _userSelectedMain=true, but wanqing/* names are not real
-        //      API endpoint IDs and will cause 400 errors.
-        //   2. The correct ep-* endpoint is only known at runtime via WQ_API_KEY + UAGENT_MODEL.
-        // For non-wanqing sources, still respect user-selected models.
+        // 万擎 source: override pointers, but RESPECT the user's previous selection.
+        // Rules:
+        //   - If user already picked a valid ep-* or api-* model (via /model or models set),
+        //     keep their choice — only update task/compact/quick if needed.
+        //   - If the stored main pointer is empty OR was a stale wanqing/* alias
+        //     (IDE internal name, not a real endpoint), override it with the detected ep-*.
+        //   - For non-wanqing sources, always respect _userSelectedMain.
         const isWanqing = result.source === 'wanqing';
+        const currentMain = this.pointers.main;
+        // A valid wanqing endpoint ID starts with 'ep-' or 'api-' (never 'wanqing/')
+        const currentMainIsValidWanqingEp =
+          currentMain && (currentMain.startsWith('ep-') || currentMain.startsWith('api-'));
         if (isWanqing) {
-          // Unconditional override for wanqing — ep-* endpoint must always win
-          if (pointers.main) {
-            this.pointers.main = pointers.main;
-            this.pointers.task = pointers.task ?? pointers.main;
+          if (!currentMainIsValidWanqingEp && pointers.main) {
+            // No valid ep-* stored yet (first run, or stale alias) → use auto-detected endpoint
+            this.pointers.main    = pointers.main;
+            this.pointers.task    = pointers.task    ?? pointers.main;
             this.pointers.compact = pointers.compact ?? pointers.main;
-            this.pointers.quick = pointers.quick ?? pointers.main;
+            this.pointers.quick   = pointers.quick   ?? pointers.main;
           }
+          // If user already has a valid ep-* selected, keep it — don't override
         } else {
           if (!process.env.UAGENT_MODEL && pointers.main && !this._userSelectedMain) {
             this.pointers.main = pointers.main;
             this.pointers.task = pointers.task ?? pointers.main;
           }
           if (!process.env.UAGENT_QUICK_MODEL && pointers.quick) {
-            this.pointers.quick = pointers.quick;
+            this.pointers.quick   = pointers.quick;
             this.pointers.compact = pointers.compact ?? pointers.quick;
           }
         }
