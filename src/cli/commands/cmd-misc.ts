@@ -199,6 +199,100 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
       }
     });
 
+  // uagent config migrate [--dry-run] [-y]
+  configCmd
+    .command('migrate')
+    .description('One-click import of CodeFlicker IDE / KwaiPilot preferences into uagent config')
+    .option('--dry-run', 'Preview what would be migrated without writing')
+    .option('-y, --yes', 'Skip confirmation prompt and apply immediately')
+    .action(async (opts: { dryRun?: boolean; yes?: boolean }) => {
+      const {
+        buildMigrationPlan,
+        detectSources,
+      } = await import('../config-migrate.js') as typeof import('../config-migrate.js');
+      const {
+        loadConfig,
+        globalConfigPath,
+      } = await import('../config-store.js') as typeof import('../config-store.js');
+
+      const { existsSync, mkdirSync, writeFileSync } = await import('fs');
+      const { resolve } = await import('path');
+
+      // Show source detection
+      const detected = detectSources();
+      const found = detected.filter((s) => s.exists);
+      const notFound = detected.filter((s) => !s.exists);
+
+      console.log(chalk.bold('\n🔍 Scanning for CodeFlicker / KwaiPilot settings...\n'));
+      for (const s of found) {
+        console.log(chalk.green(`  ✓  ${s.name}`));
+        console.log(chalk.gray(`     ${s.path}`));
+      }
+      if (notFound.length > 0) {
+        console.log(chalk.gray(`\n  (${notFound.length} sources not found, skipped)\n`));
+      } else {
+        console.log();
+      }
+
+      // Build migration plan
+      const existingGlobal = (() => {
+        try { return loadConfig(); } catch { return {}; }
+      })();
+      const plan = buildMigrationPlan(existingGlobal);
+
+      if (plan.sources.length === 0 || plan.changedCount === 0) {
+        console.log(chalk.yellow('  ℹ  Nothing to migrate — your uagent config is already up-to-date.\n'));
+        return;
+      }
+
+      // Show what will be written
+      console.log(chalk.bold(`📋 Migration preview (${plan.changedCount} settings to update):\n`));
+      for (const source of plan.sources) {
+        const fields = Object.keys(source.discovered);
+        if (fields.length === 0) continue;
+        console.log(chalk.cyan(`  From: ${source.name}`));
+        for (const field of fields) {
+          const oldVal = existingGlobal[field as keyof typeof existingGlobal];
+          const newVal = source.discovered[field as keyof typeof source.discovered];
+          const oldStr = oldVal !== undefined ? chalk.red(`${JSON.stringify(oldVal)} →`) : '';
+          console.log(`    ${chalk.bold(field)}: ${oldStr} ${chalk.green(JSON.stringify(newVal))}`);
+        }
+        console.log();
+      }
+
+      const dest = globalConfigPath();
+      console.log(chalk.dim(`  Target: ${dest}\n`));
+
+      if (opts.dryRun) {
+        console.log(chalk.yellow('  [dry-run] No changes written.\n'));
+        return;
+      }
+
+      // Confirm
+      if (!opts.yes) {
+        const { createInterface } = await import('readline');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>((resolve) => {
+          rl.question(chalk.bold('Apply migration? [Y/n] '), resolve);
+        });
+        rl.close();
+        if (answer.trim().toLowerCase() === 'n') {
+          console.log(chalk.gray('\n  Cancelled.\n'));
+          return;
+        }
+        console.log();
+      }
+
+      // Write global config (merge plan into existing)
+      const merged = { ...existingGlobal, ...plan.merged } as Record<string, unknown>;
+      const dir = resolve(dest, '..');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(dest, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+
+      console.log(chalk.green(`✓ Migrated ${plan.changedCount} settings to ${dest}`));
+      console.log(chalk.dim('  Run `uagent config ls` to verify.\n'));
+    });
+
   // Default action when no subcommand given → API key wizard
   configCmd.action(async () => {
     const { configureAgent } = await import('../configure.js');
