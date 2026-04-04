@@ -79,7 +79,12 @@ program
     const cfg = loadConfig();
 
     // Model: CLI flag > config file > auto-select
-    let resolvedModel = options.model ?? cfg.model ?? '';
+    // Note: wanqing/* model names in config are CodeFlicker-internal service-discovery IDs.
+    // uagent has its own wanqing endpoint detector (autoSelectFreeModel) that finds the
+    // correct ep-* endpoint at runtime — skip the config value and let it auto-detect.
+    const cfgModel = cfg.model;
+    const skipCfgModel = typeof cfgModel === 'string' && cfgModel.startsWith('wanqing/');
+    let resolvedModel = options.model ?? (skipCfgModel ? '' : cfgModel ?? '');
     if (!resolvedModel) {
       await modelManager.autoSelectFreeModel(options.quiet ?? false);
       resolvedModel = modelManager.getCurrentModel('main');

@@ -198,6 +198,14 @@ export function buildMigrationPlan(existingGlobal: UAgentConfig = {}): Migration
       ];
       for (const field of directFields) {
         if (data[field] !== undefined) {
+          // Skip wanqing/* model names — they are CodeFlicker-internal service-discovery IDs
+          // (format: "wanqing/claude-4.6-sonnet"). uagent has its own wanqing endpoint
+          // detector that finds the correct ep-* ID at runtime. Copying this value would
+          // break uagent's model routing.
+          if (field === 'model' && typeof data[field] === 'string' &&
+              (data[field] as string).startsWith('wanqing/')) {
+            continue;
+          }
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (discovered as any)[field] = data[field];
         }
@@ -218,7 +226,8 @@ export function buildMigrationPlan(existingGlobal: UAgentConfig = {}): Migration
     const data = readJson(SOURCES.ideData);
     if (data?.recentModels?.length > 0 && !merged.model) {
       const model = data.recentModels[0] as string;
-      if (typeof model === 'string' && model) {
+      // Skip wanqing/* model names — uagent auto-detects the correct ep-* endpoint
+      if (typeof model === 'string' && model && !model.startsWith('wanqing/')) {
         const discovered: Partial<UAgentConfig> = { model };
         sources.push({
           name: 'IDE recent models (~/.codeflicker/data.json)',
@@ -236,7 +245,9 @@ export function buildMigrationPlan(existingGlobal: UAgentConfig = {}): Migration
     if (data && typeof data === 'object') {
       const discovered: Partial<UAgentConfig> = {};
       // Use DEFAULT_MODEL as fallback model if not already set
-      if (!merged.model && typeof data.DEFAULT_MODEL === 'string' && data.DEFAULT_MODEL) {
+      // Skip wanqing/* model names — uagent auto-detects the correct ep-* endpoint
+      if (!merged.model && typeof data.DEFAULT_MODEL === 'string' && data.DEFAULT_MODEL &&
+          !data.DEFAULT_MODEL.startsWith('wanqing/')) {
         discovered.model = data.DEFAULT_MODEL as string;
       }
       // COMMIT_MODEL → commit.language is not directly related, but track it for info
