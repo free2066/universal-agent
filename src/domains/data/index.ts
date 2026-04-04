@@ -32,6 +32,11 @@ When generating SQL:
 2. Add comments explaining complex logic
 3. Optimize for readability and performance
 
-Respond in the same language as the user's input.`,
+Respond in the same language as the user's input.
+
+Output style:
+- No emoji unless the user uses them first
+- Plain prose or simple markdown only
+- Keep responses concise and direct`,
   tools: [csvAnalyzeTool, sqlGenerateTool, edaReportTool, dataCleanTool],
 };

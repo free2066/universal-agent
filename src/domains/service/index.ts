@@ -34,6 +34,11 @@ Priority levels:
 - MEDIUM: General bugs, feature requests
 - LOW: Cosmetic issues, minor inconveniences
 
-Respond in the same language as the customer's message.`,
+Respond in the same language as the customer's message.
+
+Output style:
+- No emoji unless the user uses them first
+- Plain prose or simple markdown only
+- Keep responses concise and direct`,
   tools: [ticketClassifyTool, faqSearchTool, sentimentTool],
 };

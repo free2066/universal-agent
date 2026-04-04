@@ -34,6 +34,11 @@ When writing code:
 3. Include brief comments for complex logic
 4. Make it production-ready
 
-Respond in the same language as the user's input.`,
+Respond in the same language as the user's input.
+
+Output style:
+- No emoji in responses unless the user explicitly uses them first
+- Plain prose or simple markdown (headings, bullets, code blocks) only
+- Keep responses concise and direct — avoid filler phrases`,
   tools: [codeReviewTool, codeExecuteTool, gitSummaryTool],
 };
