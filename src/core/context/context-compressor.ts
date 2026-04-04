@@ -23,8 +23,16 @@ import { modelManager } from '../../models/model-manager.js';
 
 // ── Environment overrides ──────────────────────────────────────────────────────
 
-/** Set DISABLE_AUTO_COMPACT=1 to skip all LLM-based compaction (e.g. in CI or batch mode) */
-export const AUTO_COMPACT_DISABLED = process.env.DISABLE_AUTO_COMPACT === '1';
+/** Set DISABLE_AUTO_COMPACT=1 to skip all LLM-based compaction (e.g. in CI or batch mode)
+ *  or set `autoCompact: false` in .codeflicker/config.json */
+export const AUTO_COMPACT_DISABLED = (() => {
+  if (process.env.DISABLE_AUTO_COMPACT === '1') return true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { loadConfig } = require('../../cli/config-store.js') as typeof import('../../cli/config-store.js');
+    return loadConfig().autoCompact === false;
+  } catch { return false; }
+})();
 
 /**
  * Override the compaction threshold fraction via AGENT_COMPACT_PCT_OVERRIDE.

@@ -144,8 +144,10 @@ export interface AgentOptions {
   systemPromptOverride?: string;
   /** Append extra text to the system prompt */
   appendSystemPrompt?: string;
-  /** Claude extended-thinking level: 'low' | 'medium' | 'high' */
-  thinkingLevel?: 'low' | 'medium' | 'high';
+  /** Claude extended-thinking level: 'low' | 'medium' | 'high' | 'max' | 'xhigh' | 'maxOrXhigh' */
+  thinkingLevel?: import('../models/types.js').ThinkingLevel;
+  /** Approval mode: 'default' | 'autoEdit' | 'yolo' */
+  approvalMode?: 'default' | 'autoEdit' | 'yolo';
 }
 
 export class AgentCore {
@@ -168,8 +170,8 @@ export class AgentCore {
   private _systemPromptOverride: string | null = null;
   /** Appended text for --append-system-prompt option */
   private _appendSystemPrompt: string | null = null;
-  /** Extended-thinking level for Claude models ('low' | 'medium' | 'high') */
-  private _thinkingLevel: 'low' | 'medium' | 'high' | undefined = undefined;
+  /** Extended-thinking level for Claude models */
+  private _thinkingLevel: import('../models/types.js').ThinkingLevel | undefined = undefined;
   /** Accumulated [UNCERTAIN] items across the session (kstack article #15310 confidence mechanism) */
   private uncertainItems: string[] = [];
   /**
@@ -256,8 +258,19 @@ export class AgentCore {
     this.registry.register(coordinatorRunTool);
     this.registry.register(businessDefectDetectorTool);
     this.registry.register(reverseAnalyzeTool);
-    // s03 — in-session todo tracking with nag reminder
-    this.registry.register(todoWriteTool);
+    // s03 — in-session todo tracking with nag reminder (controlled by config todo field)
+    {
+      // Use sync require — config-store only uses synchronous fs ops
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      let todoEnabled = true;
+      try {
+        const cs = require('../cli/config-store.js') as typeof import('../cli/config-store.js');
+        todoEnabled = cs.loadConfig().todo !== false;
+      } catch { /* config unavailable → default ON */ }
+      if (todoEnabled) {
+        this.registry.register(todoWriteTool);
+      }
+    }
 
     // s05 — on-demand skill loading (Prompt + Program paradigm, kstack #15366)
     this.registry.register(loadSkillTool);

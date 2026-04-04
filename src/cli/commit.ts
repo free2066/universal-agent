@@ -73,8 +73,19 @@ export async function runCommit(opts: CommitOptions): Promise<void> {
   const model = opts.model || modelManager.getCurrentModel('main') ||
     await modelManager.autoSelectFreeModel(true).then(() => modelManager.getCurrentModel('main'));
 
+  // Read commit.language default from config file (CLI flag takes precedence)
+  let language = opts.language;
+  if (!language) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { loadConfig } = require('./config-store.js') as typeof import('./config-store.js');
+      language = loadConfig().commit?.language ?? undefined;
+    } catch { /* config-store unavailable */ }
+  }
+  const effectiveOpts = { ...opts, language };
+
   // Get diff
-  const stat = getDiff(opts.stage ?? false);
+  const stat = getDiff(effectiveOpts.stage ?? false);
   if (!stat) {
     console.log(chalk.yellow('\n  No staged changes found. Use -s to stage all changes first.\n'));
     process.exit(0);

@@ -22,6 +22,8 @@ export interface ReplExtra {
   initialPrompt?: string;
   continueSession?: boolean;
   inferProviderEnvKey?: (msg: string) => string | undefined;
+  /** notification config value — if set, trigger notification on session end */
+  notification?: boolean | string;
 }
 
 export async function runREPL(
@@ -32,6 +34,7 @@ export async function runREPL(
   const hookRunner = new HookRunner(process.cwd());
   const { loadLastSnapshot, saveSnapshot, formatAge } = await import('../../core/memory/session-snapshot.js');
   const { SessionLogger } = await import('../session-logger.js');
+  const { notification } = extra;
 
   // Unique session ID for this run
   const SESSION_ID = `session-${Date.now()}`;
@@ -360,6 +363,13 @@ export async function runREPL(
     const history = agent.getHistory();
     if (history.length >= 2) {
       try { saveSnapshot(SESSION_ID, history); } catch (err) { process.stderr.write(`[repl] Failed to save session snapshot: ${String(err)}\n`); }
+    }
+    // Trigger notification on session end (if configured)
+    const notifyValue = notification;
+    if (notifyValue !== undefined && notifyValue !== false) {
+      import('../notification.js').then(({ triggerNotification }) => {
+        triggerNotification(notifyValue).catch(() => {/* non-fatal */});
+      }).catch(() => {});
     }
     if (history.length >= 4) {
       (async () => {

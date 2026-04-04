@@ -154,7 +154,12 @@ class OpenAIClient implements LLMClient {
     const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
     const extraOpts: Record<string, unknown> = {};
     if (options.thinkingLevel && isReasoning) {
-      extraOpts.reasoning_effort = options.thinkingLevel; // 'low'|'medium'|'high' all valid
+      // max/xhigh/maxOrXhigh all map to 'high' for OpenAI (highest available effort)
+      const effortMap: Record<string, string> = {
+        low: 'low', medium: 'medium', high: 'high',
+        max: 'high', xhigh: 'high', maxOrXhigh: 'high',
+      };
+      extraOpts.reasoning_effort = effortMap[options.thinkingLevel] ?? options.thinkingLevel;
     }
 
     const response = (await this.client.chat.completions.create({
@@ -192,7 +197,12 @@ class OpenAIClient implements LLMClient {
       const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
       const extraOpts: Record<string, unknown> = {};
       if (options.thinkingLevel && isReasoning) {
-        extraOpts.reasoning_effort = options.thinkingLevel;
+        // max/xhigh/maxOrXhigh all map to 'high' for OpenAI (highest available effort)
+        const effortMap: Record<string, string> = {
+          low: 'low', medium: 'medium', high: 'high',
+          max: 'high', xhigh: 'high', maxOrXhigh: 'high',
+        };
+        extraOpts.reasoning_effort = effortMap[options.thinkingLevel] ?? options.thinkingLevel;
       }
       // Pass AbortSignal via httpAgent option — OpenAI SDK v4 accepts signal in
       // the request options object (second argument to create()).
@@ -412,8 +422,11 @@ class AnthropicClient implements LLMClient {
     const hasTools = (options.tools?.length ?? 0) > 0;
     const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
     const thinking = options.thinkingLevel;
-    const budgets: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
-    const budgetTokens = thinking ? budgets[thinking] ?? 1024 : undefined;
+    const budgets: Record<string, number> = {
+      low: 1024, medium: 8000, high: 16000,
+      max: 32000, xhigh: 32000, maxOrXhigh: 32000,
+    };
+    const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
     // Extended thinking requires a higher max_tokens (must exceed budget_tokens)
     const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
@@ -461,8 +474,11 @@ class AnthropicClient implements LLMClient {
       const messages = this.convertMessages(options.messages);
       const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
       const thinking = options.thinkingLevel;
-      const budgets: Record<string, number> = { low: 1024, medium: 8000, high: 16000 };
-      const budgetTokens = thinking ? budgets[thinking] ?? 1024 : undefined;
+      const budgets: Record<string, number> = {
+        low: 1024, medium: 8000, high: 16000,
+        max: 32000, xhigh: 32000, maxOrXhigh: 32000,
+      };
+      const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
       const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
       const stream = this.client.messages.stream({

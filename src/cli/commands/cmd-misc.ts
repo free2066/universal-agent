@@ -132,7 +132,75 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
     });
 
   // ── config ───────────────────────────────────────────────
-  program.command('config').description('Configure API keys and settings').action(async () => {
+  // Top-level `uagent config` (no subcommand) → API key wizard (backward compat)
+  const configCmd = program
+    .command('config')
+    .description('Configure API keys and settings (or use subcommands: ls/get/set/add/rm)');
+
+  // uagent config ls
+  configCmd
+    .command('ls')
+    .description('List all resolved settings')
+    .action(() => {
+      const { formatConfigList } = require('../config-store.js') as typeof import('../config-store.js');
+      console.log(formatConfigList());
+    });
+
+  // uagent config get <key>
+  configCmd
+    .command('get <key>')
+    .description('Get a specific setting value')
+    .action((key: string) => {
+      const { getConfigValue } = require('../config-store.js') as typeof import('../config-store.js');
+      const val = getConfigValue(key as never);
+      if (val === undefined) {
+        console.log(chalk.gray(`(not set: ${key})`));
+      } else {
+        console.log(JSON.stringify(val));
+      }
+    });
+
+  // uagent config set <key> <value> [-g]
+  configCmd
+    .command('set <key> <value>')
+    .description('Set a setting value (project-level by default)')
+    .option('-g, --global', 'Write to global config (~/.codeflicker/config.json)')
+    .action((key: string, rawValue: string, opts: { global?: boolean }) => {
+      const { setConfigValue, parseCliValue } = require('../config-store.js') as typeof import('../config-store.js');
+      const value = parseCliValue(rawValue);
+      setConfigValue(key, value, opts.global ?? false);
+      const scope = opts.global ? chalk.cyan('global') : chalk.yellow('project');
+      console.log(chalk.green(`✓ Set ${key}=${JSON.stringify(value)} [${scope}]`));
+    });
+
+  // uagent config add <key> <value>
+  configCmd
+    .command('add <key> <value>')
+    .description('Append a value to an array-typed setting')
+    .action((key: string, rawValue: string) => {
+      const { addConfigValue, parseCliValue } = require('../config-store.js') as typeof import('../config-store.js');
+      const value = parseCliValue(rawValue);
+      addConfigValue(key, value);
+      console.log(chalk.green(`✓ Added ${JSON.stringify(value)} to ${key}`));
+    });
+
+  // uagent config rm <key> [value]
+  configCmd
+    .command('rm <key> [value]')
+    .description('Remove a setting key (or one item from an array)')
+    .action((key: string, rawValue?: string) => {
+      const { removeConfigValue, parseCliValue } = require('../config-store.js') as typeof import('../config-store.js');
+      const value = rawValue !== undefined ? parseCliValue(rawValue) : undefined;
+      removeConfigValue(key, value);
+      if (value !== undefined) {
+        console.log(chalk.green(`✓ Removed ${JSON.stringify(value)} from ${key}`));
+      } else {
+        console.log(chalk.green(`✓ Deleted ${key}`));
+      }
+    });
+
+  // Default action when no subcommand given → API key wizard
+  configCmd.action(async () => {
     const { configureAgent } = await import('../configure.js');
     await configureAgent();
   });

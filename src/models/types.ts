@@ -34,13 +34,18 @@ export interface ParameterSchema {
 }
 
 /** Claude extended-thinking budget levels */
-export type ThinkingLevel = 'low' | 'medium' | 'high';
+export type ThinkingLevel =
+  | 'low' | 'medium' | 'high'    // all providers
+  | 'max' | 'xhigh' | 'maxOrXhigh'; // extended (Claude / advanced)
 
 /** Budget tokens per level (aligns with Anthropic docs) */
 export const THINKING_BUDGETS: Record<ThinkingLevel, number> = {
-  low:    1_024,
-  medium: 8_000,
-  high:   16_000,
+  low:          1_024,
+  medium:       8_000,
+  high:        16_000,
+  max:         32_000,
+  xhigh:       32_000,
+  maxOrXhigh:  32_000,   // prefer xhigh; fall back to max on unsupported models
 };
 
 export interface ChatOptions {

@@ -18,6 +18,7 @@
  * the CLI always starts normally.
  *
  * Opt-out: UAGENT_NO_AUTO_UPDATE=1
+ *         or set `autoUpdate: false` in ~/.codeflicker/config.json / .codeflicker/config.json
  */
 
 import { execFileSync, spawnSync } from 'child_process';
@@ -63,6 +64,13 @@ function getStdout(cmd: string, args: string[], cwd: string, timeoutMs = 8_000):
  * Returns false if already up-to-date or any step failed.
  */
 export async function checkAndUpdate(): Promise<boolean> {
+  // Opt-out via config file: autoUpdate: false
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { loadConfig } = require('./config-store.js') as typeof import('./config-store.js');
+    if (loadConfig().autoUpdate === false) return false;
+  } catch { /* config-store not built yet — fall through */ }
+
   if (process.env.UAGENT_NO_AUTO_UPDATE === '1') return false;
 
   const root = findRepoRoot();

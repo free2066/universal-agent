@@ -231,8 +231,21 @@ describe('withToolRetry', () => {
 // 5. withApiRateLimitRetry
 // ─────────────────────────────────────────────────────────────────────────────
 describe('withApiRateLimitRetry', () => {
+  beforeEach(() => {
+    // Guarantee real timers for every test in this describe block.
+    // withToolRetry tests (above) install fake timers via their own beforeEach.
+    // Because Vitest schedules async tests co-operatively (yielding at every
+    // `await`), a withToolRetry test that is mid-flight during a fake-timer
+    // advance can overlap with the start of a withApiRateLimitRetry test.
+    // Calling vi.useRealTimers() here ensures we always start from a clean
+    // real-clock state, regardless of what the previous test left behind.
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
     delete process.env.AGENT_UNATTENDED_RETRY;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('returns immediately on success', async () => {
@@ -249,43 +262,66 @@ describe('withApiRateLimitRetry', () => {
   });
 
   it('throws rate-limit error after interactive retries when AGENT_UNATTENDED_RETRY is not set', async () => {
-    // In interactive mode withApiRateLimitRetry retries up to INTERACTIVE_RATE_LIMIT_MAX_RETRIES
-    // (3) with exponential backoff before giving up.  Use fake timers to skip the waits.
-    vi.useFakeTimers();
+    // In interactive mode withApiRateLimitRetry retries INTERACTIVE_RATE_LIMIT_MAX_RETRIES (3)
+    // times with exponential backoff before giving up.
+    //
+    // WHY NOT vi.useFakeTimers():
+    // The withToolRetry describe block above runs its tests with vi.useFakeTimers() via beforeEach.
+    // Vitest schedules async tests co-operatively — when this test reaches its first `await`,
+    // a withToolRetry test may still be in-flight with fake timers active.  The shared global
+    // fake-clock causes Node.js to emit PromiseRejectionHandledWarning (a Promise.reject() created
+    // under fake-timer scheduling is caught asynchronously w.r.t. the fake-clock tick boundary).
+    // Vitest treats that warning as a suite-level Error even though all assertions pass.
+    //
+    // SOLUTION: stub setTimeout to 0ms delay so retries complete instantly without touching the
+    // global fake-clock.  vi.spyOn replaces the real implementation; vi.restoreAllMocks() in
+    // afterEach cleans up automatically.
+    const originalSetTimeout = globalThis.setTimeout;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn: any, _ms?: any, ...args: any[]) => {
+      return originalSetTimeout(fn, 0, ...args);
+    });
 
-    const fn = vi.fn().mockRejectedValue(new Error('429 Too Many Requests'));
-    const promise = withApiRateLimitRetry(fn);
-
-    // Advance well past all three backoff windows (5s + 10s + 20s = 35s total max)
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    await expect(promise).rejects.toThrow('429 Too Many Requests');
+    // Use mockImplementation so each call creates a fresh rejected Promise lazily at call-time.
+    // mockRejectedValue stores an already-rejected Promise object; Node.js detects the rejection
+    // as "unhandled" in the microtask gap before withApiRateLimitRetry's await-catch is scheduled.
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error('429 Too Many Requests')));
+    await expect(withApiRateLimitRetry(fn)).rejects.toThrow('429 Too Many Requests');
     // 1 initial + 3 retries = 4 calls
     expect(fn).toHaveBeenCalledTimes(4);
-
-    vi.useRealTimers();
   });
 
   it('retries on rate-limit when AGENT_UNATTENDED_RETRY=1', async () => {
     process.env.AGENT_UNATTENDED_RETRY = '1';
-    vi.useFakeTimers();
 
-    const fn = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('429 rate limit'))
-      .mockResolvedValue('eventual success');
+    // Do NOT use vi.useFakeTimers() here: this test runs concurrently with withToolRetry
+    // tests that also install fake timers via beforeEach.  Sharing the global fake-clock
+    // across concurrent tests causes PromiseRejectionHandledWarning (Node.js detects a
+    // rejection created inside one test's fake-timer context being handled asynchronously
+    // by another test's microtask queue).
+    //
+    // Instead, stub setTimeout directly so the 30s heartbeat resolves immediately,
+    // while leaving vi.useFakeTimers() inactive for this test.
+    const originalSetTimeout = globalThis.setTimeout;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn: any, _ms?: any, ...args: any[]) => {
+      return originalSetTimeout(fn, 0, ...args);
+    });
 
-    const heartbeats: number[] = [];
-    const promise = withApiRateLimitRetry(fn, (waited) => heartbeats.push(waited));
+    try {
+      const fn = vi
+        .fn()
+        .mockImplementationOnce(() => Promise.reject(new Error('429 rate limit')))
+        .mockResolvedValue('eventual success');
 
-    // Advance past one heartbeat interval (30s)
-    await vi.advanceTimersByTimeAsync(35_000);
-    const result = await promise;
+      const heartbeats: number[] = [];
+      const result = await withApiRateLimitRetry(fn, (waited) => heartbeats.push(waited));
 
-    expect(result).toBe('eventual success');
-    expect(fn).toHaveBeenCalledTimes(2);
-    expect(heartbeats.length).toBeGreaterThan(0);
-
-    vi.useRealTimers();
+      expect(result).toBe('eventual success');
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(heartbeats.length).toBeGreaterThan(0);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

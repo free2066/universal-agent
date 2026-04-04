@@ -16,6 +16,7 @@ import { config } from 'dotenv';
 import { AgentCore } from '../core/agent.js';
 import { modelManager } from '../models/model-manager.js';
 import { printBanner } from './ui-enhanced.js';
+import { loadConfig } from './config-store.js';
 
 // Command module registrations
 import { validateDomain, validateModel, inferProviderEnvKey } from './commands/shared.js';
@@ -60,11 +61,11 @@ program
   .option('-v, --verbose', 'Show tool call details')
   .option('--system-prompt <text>', 'Override system prompt')
   .option('--append-system-prompt <text>', 'Append text to the system prompt')
-  .option('--thinking <level>', 'Claude extended-thinking level: low | medium | high')
+  .option('--thinking <level>', 'Claude extended-thinking level: low | medium | high | max | xhigh | maxOrXhigh')
   .option('--output-format <fmt>', 'Output format: text | stream-json | json', 'text')
   .option('--language <lang>', 'Response language (e.g. Chinese, English)')
   .option('--cwd <path>', 'Set working directory')
-  .option('--approval-mode <mode>', 'Approval mode: default | autoEdit | yolo', 'default')
+  .option('--approval-mode <mode>', 'Approval mode: default | autoEdit | yolo')
   .action(async (promptArg: string | undefined, options: {
     domain: string; model?: string; quiet?: boolean; continue?: boolean;
     safe: boolean; verbose?: boolean; systemPrompt?: string;
@@ -74,7 +75,11 @@ program
     if (options.cwd) process.chdir(options.cwd);
     validateDomain(options.domain);
 
-    let resolvedModel = options.model ?? '';
+    // ── Read config defaults (CLI flags take precedence over config file) ──
+    const cfg = loadConfig();
+
+    // Model: CLI flag > config file > auto-select
+    let resolvedModel = options.model ?? cfg.model ?? '';
     if (!resolvedModel) {
       await modelManager.autoSelectFreeModel(options.quiet ?? false);
       resolvedModel = modelManager.getCurrentModel('main');
@@ -82,18 +87,26 @@ program
       validateModel(resolvedModel);
     }
 
+    // Other options resolved from config
+    const resolvedSystemPrompt   = options.systemPrompt  ?? cfg.systemPrompt;
+    const resolvedLanguage       = options.language       ?? cfg.language;
+    const resolvedApprovalMode   = options.approvalMode   ?? cfg.approvalMode  ?? 'default';
+    const resolvedThinkingLevel  = (options.thinking      ?? cfg.thinkingLevel) as
+      import('./config-store.js').ThinkingLevelExtended | undefined;
+
     // --quiet (-q): one-shot non-interactive mode
     if (options.quiet && promptArg) {
       const agent = new AgentCore({
         domain: options.domain, model: resolvedModel,
         stream: true, verbose: false, safeMode: options.safe,
-        systemPromptOverride: options.systemPrompt,
+        systemPromptOverride: resolvedSystemPrompt,
         appendSystemPrompt: options.appendSystemPrompt,
-        thinkingLevel: options.thinking as 'low' | 'medium' | 'high' | undefined,
+        thinkingLevel: resolvedThinkingLevel,
+        approvalMode: resolvedApprovalMode as 'default' | 'autoEdit' | 'yolo',
       });
       await agent.initMCP().catch(() => {});
       let finalPrompt = promptArg;
-      if (options.language) finalPrompt += `\n\nRespond in ${options.language}.`;
+      if (resolvedLanguage) finalPrompt += `\n\nRespond in ${resolvedLanguage}.`;
       await agent.runStream(finalPrompt, (chunk) => process.stdout.write(chunk));
       process.stdout.write('\n');
       process.exit(0);
@@ -109,15 +122,17 @@ program
     const agent = new AgentCore({
       domain: options.domain, model: resolvedModel,
       stream: true, verbose: options.verbose ?? false, safeMode: options.safe,
-      systemPromptOverride: options.systemPrompt,
+      systemPromptOverride: resolvedSystemPrompt,
       appendSystemPrompt: options.appendSystemPrompt,
-      thinkingLevel: options.thinking as 'low' | 'medium' | 'high' | undefined,
+      thinkingLevel: resolvedThinkingLevel,
+      approvalMode: resolvedApprovalMode as 'default' | 'autoEdit' | 'yolo',
     });
     await agent.initMCP().catch(() => {});
     await runREPL(agent, options, {
       initialPrompt: promptArg,
       continueSession: options.continue ?? false,
       inferProviderEnvKey,
+      notification: cfg.notification,
     });
   });
 
