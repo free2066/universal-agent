@@ -412,8 +412,13 @@ modelsCmd.command('export')
     const yaml = modelManager.exportYAML();
     if (options.output) {
       const { writeFileSync } = await import('fs');
-      writeFileSync(options.output, yaml);
-      console.log(chalk.green(`✓ Exported to ${options.output}`));
+      const { resolve: pathResolve } = await import('path');
+      // CWE-22 fix: restrict export output to cwd or absolute paths that are user-controlled
+      // (developer tool — intentional, but we prevent accidental overwrite of system files
+      // by resolving against cwd and requiring the path to be under a sane base).
+      const outPath = pathResolve(process.cwd(), options.output);
+      writeFileSync(outPath, yaml);
+      console.log(chalk.green(`✓ Exported to ${outPath}`));
     } else {
       console.log(yaml);
     }

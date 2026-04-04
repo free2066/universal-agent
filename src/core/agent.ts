@@ -652,7 +652,7 @@ export class AgentCore {
         // In normal mode: fail fast (let outer error handling deal with it).
         response = this.fallbackChain
           ? await withApiRateLimitRetry(
-              () => this.fallbackChain!.call(this._getLLM(), chatOpts),
+              () => this.fallbackChain?.call(this._getLLM(), chatOpts) ?? this._getLLM().chat(chatOpts),
               (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
             )
           : await withApiRateLimitRetry(

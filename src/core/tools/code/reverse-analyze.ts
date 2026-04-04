@@ -267,10 +267,13 @@ function readKeyFiles(projectRoot: string): Array<{ path: string; content: strin
   const coreDir = ['src/core', 'core', 'lib', 'src/lib'].find((d) => existsSync(join(projectRoot, d)));
   if (coreDir) {
     try {
-      const entries = readdirSync(join(projectRoot, coreDir)).filter((f) => /\.(ts|js|py|go|rs)$/.test(f)).slice(0, 3);
+      const coreDirAbs = resolve(join(projectRoot, coreDir));
+      const entries = readdirSync(coreDirAbs).filter((f) => /\.(ts|js|py|go|rs)$/.test(f)).slice(0, 3);
       for (const entry of entries) {
         if (results.length >= MAX_FILES) break;
-        const p = join(projectRoot, coreDir, entry);
+        const p = resolve(coreDirAbs, entry);
+        // CWE-22: ensure the resolved path stays within projectRoot
+        if (!p.startsWith(projectRoot + '/') && p !== projectRoot) continue;
         try {
           const content = readFileSync(p, 'utf-8').slice(0, MAX_FILE_CHARS);
           results.push({ path: `${coreDir}/${entry}`, content });
@@ -475,6 +478,11 @@ export async function reverseAnalyze(
   const projectRoot = resolve(projectPath ?? process.cwd());
   if (!existsSync(projectRoot)) {
     throw new Error(`Project path does not exist: ${projectRoot}`);
+  }
+  // Verify that projectRoot is actually a directory (not a file or device)
+  const rootStat = statSync(projectRoot);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`Project path is not a directory: ${projectRoot}`);
   }
 
   // ── Step 1: Scan ────────────────────────────────────────────────────────
