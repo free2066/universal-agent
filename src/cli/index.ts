@@ -2009,14 +2009,16 @@ async function runREPL(
 
       // ── runStream 结束，清理收尾 ────────────────────────────────────────────
       if (firstChunk) {
-        // 整个 turn 没有文本输出（纯工具调用）：保留工具行，补一个换行
+        // 整个 turn 没有文本输出（纯工具调用）：保留工具行后换行
         spinner.stop(true);
+        process.stdout.write('\n');
       } else {
-        // 有文本输出：spinner 已在首 chunk 时 stop(true)，现在只需确保清掉残留
+        // 有文本输出：spinner 已在首 chunk 时 stop(true)
+        // 结尾：文字最后一个字符 → \n → 分隔线（不额外加空行）
         spinner.stop(false);
         if (charCount > 0) {
           process.stdout.write(
-            '\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80)))
+            '\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))) + '\n'
           );
         }
       }
@@ -2026,7 +2028,6 @@ async function runREPL(
         updateStatusBar({ isThinking: 'none', estimatedTokens: est });
         rl.setPrompt(makePrompt(options.domain));
       } catch { updateStatusBar({ isThinking: 'none' }); rl.setPrompt(makePrompt(options.domain)); }
-      process.stdout.write('\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isAuthError =
