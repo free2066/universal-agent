@@ -436,10 +436,23 @@ async function spawnAndRun(
       process.env.UAGENT_SPAWN_DEPTH = prevDepth;
     }
   });
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`SpawnAgent timed out after ${timeoutMs / 1000}s`)), timeoutMs),
-  );
-  const result = await Promise.race([runPromise, timeoutPromise]);
+
+  // Use an explicit timer handle so we can clearTimeout() regardless of which
+  // promise wins the race — avoids a timer leak when runPromise finishes first.
+  let _timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    _timeoutHandle = setTimeout(
+      () => reject(new Error(`SpawnAgent timed out after ${timeoutMs / 1000}s`)),
+      timeoutMs,
+    );
+  });
+
+  let result: string;
+  try {
+    result = await Promise.race([runPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(_timeoutHandle);
+  }
   writeContextFile(root, taskId, result);
   return result;
 }

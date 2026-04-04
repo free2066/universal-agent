@@ -96,7 +96,7 @@ async function executeSQLite(sql: string, filePath: string): Promise<QueryResult
   };
   try {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore — optional peer dependency
+    // @ts-expect-error — better-sqlite3 is an optional peer dependency not in devDependencies
     const mod = await import('better-sqlite3');
     Database = mod.default as typeof Database;
   } catch {
@@ -132,7 +132,7 @@ async function executeMySQL(sql: string, url: string): Promise<QueryResult> {
 
   try {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore — optional peer dependency
+    // @ts-expect-error — mysql2 is an optional peer dependency not in devDependencies
     const mod = await import('mysql2/promise');
     createConnection = (mod as unknown as {
       createConnection: typeof createConnection;
@@ -171,7 +171,7 @@ async function executePostgreSQL(sql: string, url: string): Promise<QueryResult>
 
   try {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore — optional peer dependency
+    // @ts-expect-error — pg is an optional peer dependency not in devDependencies
     const mod = await import('pg');
     Client = (mod as unknown as { Client: typeof Client }).Client;
   } catch {

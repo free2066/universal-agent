@@ -114,6 +114,11 @@ class WsMcpServer {
           const key = buffer.match(/Sec-WebSocket-Key:\s*([^\r\n]+)/i)?.[1]?.trim();
           if (!key) { socket.destroy(); return; }
 
+          // SHA-1 is REQUIRED here by RFC 6455 §4.2.2 — the WebSocket handshake
+          // algorithm is: SHA1(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"), base64.
+          // This is NOT a cryptographic/security use — every browser and WS client
+          // expects exactly this algorithm. Replacing with SHA-256 would break all
+          // WebSocket clients. Static analysers that flag this are producing a false positive.
           const accept = createHash('sha1')
             .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
             .digest('base64');
