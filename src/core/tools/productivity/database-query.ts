@@ -25,10 +25,23 @@
  *   DatabaseQuery — Execute a SQL query against SQLite, PostgreSQL, or MySQL
  */
 
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import type { ToolRegistration } from '../../../models/types.js';
+
+const execFileAsync = promisify(execFile);
+
+// ── Constants ────────────────────────────────────────────────────────────────
+const DB_DEFAULT_TIMEOUT_MS = 15000;
+const DB_DEFAULT_LIMIT = 20;
+const DB_MAX_LIMIT = 200;
+const POSTGRESQL_DEFAULT_PORT = 5432;
+const MYSQL_DEFAULT_PORT = 3306;
+const TABLE_MAX_DISPLAY_ROWS = 30;
+const CSV_MAX_DISPLAY_ROWS = 50;
+const COL_MAX_WIDTH = 40;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -87,7 +100,7 @@ function parseDbUrl(url: string): Partial<DbConfig> {
     return {
       type,
       host: u.hostname || 'localhost',
-      port: u.port ? parseInt(u.port) : (type === 'postgresql' ? 5432 : 3306),
+      port: u.port ? parseInt(u.port) : (type === 'postgresql' ? POSTGRESQL_DEFAULT_PORT : MYSQL_DEFAULT_PORT),
       database: u.pathname.slice(1) || undefined,
       user: u.username || undefined,
       password: u.password || undefined,
@@ -119,7 +132,7 @@ function buildConfig(args: Record<string, unknown>): DbConfig {
   return {
     type,
     host: args.host ? String(args.host) : (process.env.DB_HOST ?? 'localhost'),
-    port: args.port ? Number(args.port) : (type === 'postgresql' ? 5432 : 3306),
+    port: args.port ? Number(args.port) : (type === 'postgresql' ? POSTGRESQL_DEFAULT_PORT : MYSQL_DEFAULT_PORT),
     database: args.database ? String(args.database) : (process.env.DB_NAME ?? ''),
     user: args.user ? String(args.user) : (process.env.DB_USER ?? ''),
     password: args.password ? String(args.password) : (process.env.DB_PASSWORD ?? ''),
@@ -129,7 +142,7 @@ function buildConfig(args: Record<string, unknown>): DbConfig {
 
 // ── Query executors ───────────────────────────────────────────────────────────
 
-function runSqlite(config: DbConfig, sql: string, limit: number): QueryResult {
+async function runSqlite(config: DbConfig, sql: string, limit: number): Promise<QueryResult> {
   const file = config.file || ':memory:';
 
   // Check file exists (skip for :memory:)
@@ -144,11 +157,11 @@ function runSqlite(config: DbConfig, sql: string, limit: number): QueryResult {
 
   const startMs = Date.now();
   try {
-    const raw = execSync(cmd, {
+    const { stdout } = await execFileAsync('sh', ['-c', cmd], {
       encoding: 'utf-8',
-      timeout: 15000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
+      timeout: DB_DEFAULT_TIMEOUT_MS,
+    });
+    const raw = stdout.trim();
     const queryMs = Date.now() - startMs;
 
     if (!raw) return { rows: [], rowCount: 0, columns: [], truncated: false, queryMs, raw: '' };
@@ -168,9 +181,9 @@ function runSqlite(config: DbConfig, sql: string, limit: number): QueryResult {
   }
 }
 
-function runPostgres(config: DbConfig, sql: string, limit: number): QueryResult {
+async function runPostgres(config: DbConfig, sql: string, limit: number): Promise<QueryResult> {
   const host = config.host ?? 'localhost';
-  const port = config.port ?? 5432;
+  const port = config.port ?? POSTGRESQL_DEFAULT_PORT;
   const db = config.database ?? '';
   const user = config.user ?? '';
   const pass = config.password ?? '';
@@ -192,12 +205,12 @@ function runPostgres(config: DbConfig, sql: string, limit: number): QueryResult 
 
   const startMs = Date.now();
   try {
-    const raw = execSync(cmd, {
+    const { stdout } = await execFileAsync('sh', ['-c', cmd], {
       encoding: 'utf-8',
-      timeout: 15000,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: DB_DEFAULT_TIMEOUT_MS,
       env: { ...process.env as Record<string, string>, PGPASSWORD: pass },
-    }).trim();
+    });
+    const raw = stdout.trim();
     const queryMs = Date.now() - startMs;
 
     if (!raw) return { rows: [], rowCount: 0, columns: [], truncated: false, queryMs, raw: '' };
@@ -227,9 +240,9 @@ function runPostgres(config: DbConfig, sql: string, limit: number): QueryResult 
   }
 }
 
-function runMysql(config: DbConfig, sql: string, limit: number): QueryResult {
+async function runMysql(config: DbConfig, sql: string, limit: number): Promise<QueryResult> {
   const host = config.host ?? 'localhost';
-  const port = config.port ?? 3306;
+  const port = config.port ?? MYSQL_DEFAULT_PORT;
   const db = config.database ?? '';
   const user = config.user ?? '';
   const pass = config.password ?? '';
@@ -250,11 +263,11 @@ function runMysql(config: DbConfig, sql: string, limit: number): QueryResult {
 
   const startMs = Date.now();
   try {
-    const raw = execSync(cmd, {
+    const { stdout } = await execFileAsync('sh', ['-c', cmd], {
       encoding: 'utf-8',
-      timeout: 15000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
+      timeout: DB_DEFAULT_TIMEOUT_MS,
+    });
+    const raw = stdout.trim();
     const queryMs = Date.now() - startMs;
 
     if (!raw) return { rows: [], rowCount: 0, columns: [], truncated: false, queryMs, raw: '' };
@@ -314,13 +327,13 @@ function formatQueryResult(result: QueryResult, config: DbConfig, sql: string, f
       colWidths[col] = col.length;
       for (const row of result.rows) {
         const val = String(row[col] ?? 'NULL');
-        colWidths[col] = Math.min(Math.max(colWidths[col], val.length), 40);
+        colWidths[col] = Math.min(Math.max(colWidths[col], val.length), COL_MAX_WIDTH);
       }
     }
     const separator = '+-' + result.columns.map((c) => '-'.repeat(colWidths[c])).join('-+-') + '-+';
     const header = '| ' + result.columns.map((c) => c.padEnd(colWidths[c])).join(' | ') + ' |';
     lines.push(separator, header, separator);
-    for (const row of result.rows.slice(0, 30)) {
+    for (const row of result.rows.slice(0, TABLE_MAX_DISPLAY_ROWS)) {
       const rowLine = '| ' + result.columns.map((c) => {
         const val = String(row[c] ?? 'NULL');
         return (val.length > colWidths[c] ? val.slice(0, colWidths[c] - 1) + '…' : val).padEnd(colWidths[c]);
@@ -328,12 +341,12 @@ function formatQueryResult(result: QueryResult, config: DbConfig, sql: string, f
       lines.push(rowLine);
     }
     lines.push(separator);
-    if (result.rows.length > 30) lines.push(`... and ${result.rows.length - 30} more rows`);
+    if (result.rows.length > TABLE_MAX_DISPLAY_ROWS) lines.push(`... and ${result.rows.length - TABLE_MAX_DISPLAY_ROWS} more rows`);
   } else {
     // CSV-like
     lines.push('📊 Results (CSV):');
     lines.push(result.columns.join(','));
-    for (const row of result.rows.slice(0, 50)) {
+    for (const row of result.rows.slice(0, CSV_MAX_DISPLAY_ROWS)) {
       lines.push(result.columns.map((c) => {
         const v = String(row[c] ?? '');
         return v.includes(',') || v.includes('"') ? `"${v.replace(/"/g, '""')}"` : v;
@@ -422,7 +435,7 @@ export const databaseQueryTool: ToolRegistration = {
     const sql = String(args.sql ?? '').trim();
     if (!sql) return 'Error: sql parameter is required.';
 
-    const limit = Math.min(Number(args.limit ?? 20), 200);
+    const limit = Math.min(Number(args.limit ?? DB_DEFAULT_LIMIT), DB_MAX_LIMIT);
     const format = String(args.format ?? 'table') as 'table' | 'json' | 'csv';
     const assertRowCount = args.assert_row_count !== undefined ? Number(args.assert_row_count) : null;
     const assertField = (args.assert_field && typeof args.assert_field === 'object')
@@ -441,14 +454,14 @@ export const databaseQueryTool: ToolRegistration = {
     try {
       switch (config.type) {
         case 'sqlite':
-          result = runSqlite(config, sql, limit);
+          result = await runSqlite(config, sql, limit);
           break;
         case 'postgresql':
-          result = runPostgres(config, sql, limit);
+          result = await runPostgres(config, sql, limit);
           break;
         case 'mysql':
         case 'mariadb':
-          result = runMysql(config, sql, limit);
+          result = await runMysql(config, sql, limit);
           break;
         default:
           return `Error: Unknown database type "${config.type}". Use sqlite, postgresql, or mysql.`;

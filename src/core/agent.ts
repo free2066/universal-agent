@@ -83,6 +83,19 @@ import { selectTools } from './tool-selector.js';
 
 const log = createLogger('agent');
 
+// ─── Agent Loop Constants ────────────────────────────────────────────────────
+
+/** Default maximum LLM iterations per runStream() call */
+const DEFAULT_MAX_ITERATIONS = 15;
+/** Default maximum unattended-retry rounds (CI mode) */
+const DEFAULT_MAX_UNATTENDED_RETRIES = 2;
+/** Default wait between unattended retries (ms) */
+const DEFAULT_UNATTENDED_RETRY_DELAY_MS = 30_000;
+/** Hard ceiling for unattended retry wait to prevent indefinite blocking */
+const MAX_UNATTENDED_RETRY_DELAY_MS = 5 * 60 * 1000;
+/** TodoWrite nag reminder fires after this many rounds without a TodoWrite call */
+const TODO_NAG_ROUNDS = 3;
+
 /**
  * AgentEvents — CLI 层感知工具调用生命周期的回调接口
  *
@@ -535,7 +548,7 @@ export class AgentCore {
     let iteration = 0;
     // Allow override via AGENT_MAX_ITERATIONS env var for power users
     // who need more turns for complex multi-step tasks (default: 15).
-    const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? '15', 10);
+    const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? String(DEFAULT_MAX_ITERATIONS), 10);
 
     // ── AGENT_UNATTENDED_RETRY (kstack article #15375: Claude Code 无人值守重试模式) ──
     // When AGENT_UNATTENDED_RETRY=1 (e.g. in CI/batch mode), the agent may retry
@@ -543,10 +556,11 @@ export class AgentCore {
     // Safety: max 5 minutes between retry attempts to avoid infinite loops.
     const unattendedRetry = process.env.AGENT_UNATTENDED_RETRY === '1';
     let unattendedRetryCount = 0;
-    const MAX_UNATTENDED_RETRIES = parseInt(process.env.AGENT_MAX_UNATTENDED_RETRIES ?? '2', 10);
+    const MAX_UNATTENDED_RETRIES = parseInt(
+      process.env.AGENT_MAX_UNATTENDED_RETRIES ?? String(DEFAULT_MAX_UNATTENDED_RETRIES), 10);
     const UNATTENDED_RETRY_DELAY_MS = Math.min(
-      parseInt(process.env.AGENT_UNATTENDED_RETRY_DELAY_MS ?? '30000', 10),
-      5 * 60 * 1000, // Hard cap: 5 minutes max wait (prevents infinite blocking)
+      parseInt(process.env.AGENT_UNATTENDED_RETRY_DELAY_MS ?? String(DEFAULT_UNATTENDED_RETRY_DELAY_MS), 10),
+      MAX_UNATTENDED_RETRY_DELAY_MS,
     );
 
     // s03: track rounds since last TodoWrite call; inject nag reminder after 3 rounds
@@ -830,7 +844,7 @@ export class AgentCore {
         // s03: track TodoWrite usage; inject nag reminder if not used for ≥3 rounds
         const usedTodo = response.toolCalls.some((tc) => tc.name === 'TodoWrite');
         roundsWithoutTodo = usedTodo ? 0 : roundsWithoutTodo + 1;
-        if (todoManager.hasOpenItems() && roundsWithoutTodo >= 3) {
+        if (todoManager.hasOpenItems() && roundsWithoutTodo >= TODO_NAG_ROUNDS) {
           this.history.push({ role: 'user', content: '<reminder>Update your TodoWrite list.</reminder>' });
           roundsWithoutTodo = 0;
         }

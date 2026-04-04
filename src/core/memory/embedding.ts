@@ -15,7 +15,7 @@
  *
  * Embedding cache:
  *   Results are stored in an in-process LRU cache (max 2000 entries).
- *   Cache key = sha1(text). On process restart the cache is cold — this is
+ *   Cache key = sha256(text). On process restart the cache is cold — this is
  *   intentional: embedding model versions may change across restarts.
  *
  * Cosine similarity:
@@ -65,10 +65,10 @@ export interface EmbeddingProvider {
 // ── LRU Cache ─────────────────────────────────────────────────────────────────
 
 const MAX_CACHE_SIZE = 2000;
-const _cache = new Map<string, number[]>(); // sha1(text) → vector
+const _cache = new Map<string, number[]>(); // sha256(text) → vector
 
 function cacheKey(text: string): string {
-  return createHash('sha1').update(text).digest('hex').slice(0, 16);
+  return createHash('sha256').update(text).digest('hex').slice(0, 16);
 }
 
 function cacheGet(text: string): number[] | undefined {

@@ -52,7 +52,13 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { resolve, join } from 'path';
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const SHELL_HOOK_DEFAULT_TIMEOUT_MS = 5000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -300,7 +306,7 @@ export class HookRunner {
   ): Promise<HookResult> {
     if (!hook.command_line) return { proceed: true };
 
-    const timeout = hook.timeout_ms ?? 5000;
+    const timeout = hook.timeout_ms ?? SHELL_HOOK_DEFAULT_TIMEOUT_MS;
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       HOOK_EVENT: ctx.event,
@@ -318,14 +324,16 @@ export class HookRunner {
     };
 
     try {
-      const output = execSync(hook.command_line, {
+      // Use execFileAsync (async) with 'sh' to avoid blocking the event loop.
+      // stdin input is passed via HOOK_CURRENT_VALUE env var (stdin pipe not
+      // supported by execFile directly; use spawn if stdin piping is required).
+      const { stdout } = await execFileAsync('sh', ['-c', hook.command_line], {
         cwd: this.cwd,
-        encoding: 'utf-8',
+        encoding: 'utf-8' as BufferEncoding,
         timeout,
         env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        input: currentValue,  // pass current value to stdin
-      }).trim();
+      });
+      const output = stdout.trim();
 
       // If shell hook prints output, treat it as the new/additional value
       if (output) {

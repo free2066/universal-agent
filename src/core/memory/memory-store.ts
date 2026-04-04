@@ -22,7 +22,7 @@ import {
   readFileSync, writeFileSync,
 } from 'fs';
 import { resolve, join } from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 import { modelManager } from '../../models/model-manager.js';
 import { rankMemories } from './memory-search.js';
@@ -83,13 +83,13 @@ const DEDUP_THRESHOLD = 0.8;
 // ─── ID Generation ───────────────────────────────────────────────────────────
 
 function generateId(): string {
-  return Math.random().toString(36).slice(2, 12);
+  return randomUUID();
 }
 
 // ─── Project Hashing ─────────────────────────────────────────────────────────
 
 function projectHash(projectRoot: string): string {
-  return createHash('sha1').update(projectRoot).digest('hex').slice(0, 8);
+  return createHash('sha256').update(projectRoot).digest('hex').slice(0, 8);
 }
 
 // ─── MemoryStore ─────────────────────────────────────────────────────────────
