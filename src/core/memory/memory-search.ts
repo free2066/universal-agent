@@ -44,30 +44,77 @@ function tf(term: string, tokens: string[]): number {
 }
 
 /**
- * Inverse Document Frequency: log(N / (1 + df))
- * `docs` is the full corpus of tokenised documents.
+ * Build a document-frequency map from a pre-tokenised corpus.
+ *
+ * Complexity: O(N × D) — one pass over all docs, where N = corpus size and
+ * D = average doc length.  This replaces the previous O(Q × N × D) pattern
+ * where `idf()` was called for every query term, each doing a full corpus scan.
+ *
+ * Each entry maps `term → number of documents containing that term`.
  */
-function idf(term: string, docs: string[][]): number {
-  const df = docs.filter((d) => d.includes(term)).length;
-  return Math.log((docs.length + 1) / (df + 1)) + 1; // smoothed
+export function buildDocFrequency(tokenisedCorpus: string[][]): Map<string, number> {
+  const df = new Map<string, number>();
+  for (const doc of tokenisedCorpus) {
+    const seen = new Set<string>();
+    for (const token of doc) {
+      if (!seen.has(token)) {
+        df.set(token, (df.get(token) ?? 0) + 1);
+        seen.add(token);
+      }
+    }
+  }
+  return df;
+}
+
+/**
+ * Inverse Document Frequency using a pre-built frequency map.
+ * O(1) per term — no corpus scan needed.
+ */
+function idfFromMap(term: string, docFreq: Map<string, number>, corpusSize: number): number {
+  const df = docFreq.get(term) ?? 0;
+  return Math.log((corpusSize + 1) / (df + 1)) + 1; // smoothed BM25-style
 }
 
 /**
  * Compute TF-IDF similarity score between a query and a document.
- * Returns a non-negative float; higher = more similar.
+ *
+ * @param query        Raw query string
+ * @param doc          Raw document string
+ * @param docFreq      Pre-built document-frequency map (from buildDocFrequency)
+ * @param corpusSize   Total number of documents in the corpus
+ *
+ * Accepts the pre-computed `docFreq` map so callers can build it once and
+ * reuse it across multiple documents, reducing complexity from O(Q×N×D) to
+ * O(Q×D) for a full corpus ranking pass.
  */
-export function tfidfScore(query: string, doc: string, corpus: string[]): number {
+export function tfidfScore(
+  query: string,
+  doc: string,
+  docFreq: Map<string, number>,
+  corpusSize: number,
+): number {
   const queryTokens = tokenize(query);
   const docTokens = tokenize(doc);
-  const corpusTokens = [docTokens, ...corpus.map(tokenize)];
 
   let score = 0;
   for (const term of queryTokens) {
-    const termTf = tf(term, docTokens);
-    const termIdf = idf(term, corpusTokens);
-    score += termTf * termIdf;
+    score += tf(term, docTokens) * idfFromMap(term, docFreq, corpusSize);
   }
   return score;
+}
+
+/**
+ * Convenience overload: accepts a raw string corpus and builds the docFreq
+ * map internally.  Use for one-off scoring; for bulk ranking prefer building
+ * the map once with buildDocFrequency().
+ *
+ * @deprecated Prefer the (query, doc, docFreq, corpusSize) overload for
+ *   repeated calls — this one rebuilds the frequency map on every invocation.
+ */
+export function tfidfScoreOnce(query: string, doc: string, corpus: string[]): number {
+  const allTokens = [tokenize(doc), ...corpus.map(tokenize)];
+  const df = buildDocFrequency(allTokens);
+  return tfidfScore(query, doc, df, allTokens.length);
 }
 
 /**
@@ -197,8 +244,6 @@ export async function rankMemories(
 ): Promise<RankedMemory[]> {
   if (items.length === 0) return [];
 
-  const corpus = items.map((m) => m.content);
-
   // ── List A: tag / keyword exact match ──────────────────────────────────────
   const listA = items
     .map((m, i) => {
@@ -213,8 +258,15 @@ export async function rankMemories(
     .map((r) => items[r.idx].id);
 
   // ── List B: TF-IDF full-text ───────────────────────────────────────────────
+  // Pre-compute document-frequency map once (O(N×D)) so each per-item tfidfScore
+  // call is O(Q×D) rather than O(Q×N×D), reducing overall complexity from
+  // O(Q×N²×D) to O(N×D + Q×N×D).
+  const corpusTokenised = items.map((m) => tokenize(m.content));
+  const corpusDocFreq = buildDocFrequency(corpusTokenised);
+  const corpusSize = corpusTokenised.length;
+
   const listB = items
-    .map((m, i) => ({ idx: i, score: tfidfScore(query, m.content, corpus) }))
+    .map((m, i) => ({ idx: i, score: tfidfScore(query, m.content, corpusDocFreq, corpusSize) }))
     .sort((a, b) => b.score - a.score)
     .map((r) => items[r.idx].id);
 

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { tokenize, tfidfScore, keywordScore, applyDecay, rrfMerge, rankMemories } from '../core/memory/memory-search.js';
+import { tokenize, tfidfScore, tfidfScoreOnce, keywordScore, applyDecay, rrfMerge, rankMemories } from '../core/memory/memory-search.js';
 import type { MemoryItem } from '../core/memory/memory-store.js';
 
 // ── Helper: create a minimal MemoryItem for test ─────────────────────────────
@@ -65,29 +65,29 @@ describe('tokenize', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('tfidfScore', () => {
   it('returns > 0 when query term appears in doc', () => {
-    const score = tfidfScore('JWT', 'JWT authentication module', ['other document']);
+    const score = tfidfScoreOnce('JWT', 'JWT authentication module', ['other document']);
     expect(score).toBeGreaterThan(0);
   });
 
   it('returns 0 for completely unrelated query', () => {
-    const score = tfidfScore('unrelated', 'JWT authentication module', ['JWT auth system']);
+    const score = tfidfScoreOnce('unrelated', 'JWT authentication module', ['JWT auth system']);
     expect(score).toBe(0);
   });
 
   it('higher score for more term overlap', () => {
-    const high = tfidfScore('JWT auth token', 'JWT auth token security', ['other']);
-    const low = tfidfScore('JWT auth token', 'database schema design', ['other']);
+    const high = tfidfScoreOnce('JWT auth token', 'JWT auth token security', ['other']);
+    const low = tfidfScoreOnce('JWT auth token', 'database schema design', ['other']);
     expect(high).toBeGreaterThan(low);
   });
 
   it('handles empty query gracefully', () => {
-    const score = tfidfScore('', 'some document content', ['corpus doc']);
+    const score = tfidfScoreOnce('', 'some document content', ['corpus doc']);
     expect(score).toBeGreaterThanOrEqual(0);
   });
 
   it('is case-insensitive', () => {
-    const s1 = tfidfScore('jwt', 'JWT auth module', ['corpus']);
-    const s2 = tfidfScore('JWT', 'JWT auth module', ['corpus']);
+    const s1 = tfidfScoreOnce('jwt', 'JWT auth module', ['corpus']);
+    const s2 = tfidfScoreOnce('JWT', 'JWT auth module', ['corpus']);
     expect(s1).toBeCloseTo(s2, 5);
   });
 
@@ -98,8 +98,8 @@ describe('tfidfScore', () => {
       'auth module config',
       'rare_keyword only here',
     ];
-    const rareScore = tfidfScore('rare_keyword', 'rare_keyword found here', corpus);
-    const commonScore = tfidfScore('auth', 'auth system', corpus);
+    const rareScore = tfidfScoreOnce('rare_keyword', 'rare_keyword found here', corpus);
+    const commonScore = tfidfScoreOnce('auth', 'auth system', corpus);
     // rare_keyword appears in only 1 doc vs auth in many → IDF should be higher
     expect(rareScore).toBeGreaterThan(0);
     expect(commonScore).toBeGreaterThan(0);

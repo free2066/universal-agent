@@ -341,9 +341,14 @@ export async function autoCompact(
 
     if (readFilePaths.length > 0) {
       const recoveryParts: string[] = [];
+      const cwdResolved = resolve(process.cwd());
       for (const filePath of readFilePaths) {
         try {
-          const absPath = resolve(process.cwd(), filePath);
+          const absPath = resolve(cwdResolved, filePath);
+          // CWE-22: reject path traversal attempts — recovered files must stay
+          // within the current working directory. A filePath like '../../etc/passwd'
+          // could otherwise escape to arbitrary locations on disk.
+          if (!absPath.startsWith(cwdResolved + '/') && absPath !== cwdResolved) continue;
           if (!existsSync(absPath)) continue;
           const content = readFileSync(absPath, 'utf-8');
           const truncated = content.length > MAX_CHARS_PER_FILE
