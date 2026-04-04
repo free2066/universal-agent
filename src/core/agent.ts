@@ -85,8 +85,11 @@ const log = createLogger('agent');
 
 // ─── Agent Loop Constants ────────────────────────────────────────────────────
 
-/** Default maximum LLM iterations per runStream() call */
-const DEFAULT_MAX_ITERATIONS = 15;
+/** Default maximum LLM iterations per runStream() call.
+ * Raised from 15 → 50: complex tasks (code review, multi-file refactor) easily need
+ * 30-80 tool calls. Users can override via AGENT_MAX_ITERATIONS env var.
+ */
+const DEFAULT_MAX_ITERATIONS = 50;
 /** Default maximum unattended-retry rounds (CI mode) */
 const DEFAULT_MAX_UNATTENDED_RETRIES = 2;
 /** Default wait between unattended retries (ms) */
@@ -953,7 +956,12 @@ export class AgentCore {
     }
 
     if (iteration >= MAX_ITERATIONS) {
-      onChunk('\n⚠️ Reached maximum iteration limit.\n');
+      onChunk(
+        `\n⚠️  Reached iteration limit (${MAX_ITERATIONS} rounds).\n` +
+        `   Type /continue (or just press Enter after typing your next message)\n` +
+        `   to keep going from where the agent left off.\n` +
+        `   To raise the limit: AGENT_MAX_ITERATIONS=100 uagent\n`,
+      );
       // Ensure history always ends with an assistant message so the next turn
       // produces a valid alternating user/assistant sequence for all LLM APIs.
       const last = this.history[this.history.length - 1];

@@ -1,266 +1,303 @@
-# 🔍 Code Review Report — universal-agent
+# 代码审查报告
 
-> **Updated:** 2026-04-04（反映 commit `c804b6b` 之后的最新状态）  
-> **Scanner:** Manual static analysis + git diff analysis（92 source files）  
-> **Health Score:** **88/100** ↑（初次 54 → 修复后 88）
+## 文件概览
 
----
+| 文件 | 行数 | 问题数 | 健康评分 |
+|------|------|--------|----------|
+| `src/cli/index.ts` | 2132 | 10 | 0/100 🔴 |
+| `src/core/agent.ts` | 1100 | 2 | 94/100 🟢 |
+| `src/core/tools/code/reverse-analyze.ts` | 606 | 15 | 0/100 🔴 |
 
-## 📊 Executive Summary
+## 主要问题分析
 
-经过三轮集中修复（commit `9f63a92` / `03d81b2` / `c804b6b`），项目的安全性和性能得到了大幅提升。
+### 1. 安全问题（Critical - 需要立即修复）
 
-| 问题类别 | 修复前 | 修复后 | 状态 |
-|---------|--------|--------|------|
-| 弱哈希（SHA-1） | 2 处 | 0 处 | ✅ 已修复 |
-| 不安全随机数 | 1 处 | 0 处 | ✅ 已修复 |
-| 同步 I/O（关键路径） | 8 处 | 0 处 | ✅ 已修复 |
-| 路径遍历（CWE-22） | ~30 处 | 2 处（低风险） | ✅ 已修复 |
-| 魔法数字 | 20+ 处 | 5 处（边界） | ✅ 已修复 |
-| 429 无重试 | 有 | 已修复（3次指数退避） | ✅ 已修复 |
-| 上下文爆满触发 | 80K tokens | 60K tokens | ✅ 已调优 |
-| 命令注入（CWE-78） | 3 处 | 3 处 | 🔴 **未修复** |
-| 路径遍历（内部子系统） | — | 4 个文件 | 🟠 **遗留** |
+#### 1.1 路径遍历漏洞 (CWE-22)
+**风险等级**：高危  
+**影响**：攻击者可能访问或写入任意文件系统位置
 
----
+**src/cli/index.ts (10处)**:
+- L14, L39, L212, L227, L269, L414, L415, L771, L777, L1176
+- 使用用户输入的路径参数直接操作文件，未验证路径是否在预期目录内
 
-## 🔴 Critical Issues（待修复）
+**src/core/tools/code/reverse-analyze.ts (8处)**:
+- L29, L98, L116, L234, L245, L260, L275, L398
+- 同样的路径遍历风险
 
-### C1. 命令注入 `database-query.ts`（CWE-78）
-
-**文件：** `src/core/tools/productivity/database-query.ts`（L156、L197–L204、L252–L262）
-
-三个数据库查询函数（`runSqlite` / `runPostgres` / `runMysql`）通过 `sh -c` 执行拼接的 Shell 命令字符串。用户提供的 SQL 和连接字符串经过简单单引号转义后直接插入命令。
-
+**修复示例**：
 ```typescript
-// ❌ 当前危险写法
-const cmd = `sqlite3 -json '${file}' '${limitedSql}'`;
-const { stdout } = await execFileAsync('sh', ['-c', cmd], { ... });
+// 不安全的做法
+readFileSync(userProvidedPath, 'utf-8');
 
-// ❌ PostgreSQL — 密码放入 env 是正确的，但 SQL 仍通过 sh -c 拼接
-const cmd = `PGPASSWORD='${pass}' psql '${connStr}' --command '${escapedSql}'`;
+// 安全的做法
+import { resolve } from 'path';
+const safePath = resolve(UPLOAD_DIR, userProvidedPath);
+if (!safePath.startsWith(UPLOAD_DIR)) {
+  throw new Error('Path traversal detected');
+}
+readFileSync(safePath, 'utf-8');
 ```
 
-**风险：** 精心构造的 SQL 或密码（包含 `'\''` 序列）可以突破单引号转义执行任意 Shell 命令。
+### 2. 性能问题（Medium - 需要优化）
 
-**修复方案 — 使用 `execFile` 参数数组：**
+#### 2.1 同步I/O阻塞事件循环
+**src/core/agent.ts (1处)**:
+- L422: `execSync()` 在异步上下文中使用，会阻塞事件循环
 
+**src/core/tools/code/reverse-analyze.ts (7处)**:
+- L98, L116, L234, L245, L260, L275, L398
+- 多处使用 `readFileSync()` 和 `writeFileSync()`
+
+**影响**：
+- 同步I/O会阻塞Node.js事件循环，导致整个应用无响应
+- 对于大文件或慢速磁盘，性能影响显著
+
+**修复建议**：
 ```typescript
-// ✅ 安全的 SQLite 执行
-const { stdout } = await execFileAsync('sqlite3', [
-  '-json', file, limitedSql
-], { encoding: 'utf-8', timeout: DB_DEFAULT_TIMEOUT_MS });
+// 之前
+const content = readFileSync(p, 'utf-8');
 
-// ✅ 安全的 PostgreSQL 执行（密码通过 env var，SQL 通过参数）
-const { stdout } = await execFileAsync('psql', [
-  connStr, '--tuples-only', '--csv', '--command', limitedSql
-], {
-  encoding: 'utf-8',
-  timeout: DB_DEFAULT_TIMEOUT_MS,
-  env: { ...process.env as Record<string, string>, PGPASSWORD: pass },
-});
-
-// ✅ 安全的 MySQL 执行
-const { stdout } = await execFileAsync('mysql', [
-  '--batch', '--skip-column-names',
-  `-h${host}`, `-P${port}`, `-u${user}`,
-  `--password=${pass}`, dbName,
-  '-e', limitedSql,
-], { encoding: 'utf-8', timeout: DB_DEFAULT_TIMEOUT_MS });
+// 之后
+import { readFile } from 'fs/promises';
+const content = await readFile(p, 'utf-8');
 ```
 
----
+### 3. 代码质量问题（Low - 建议改进）
 
-### C2. `execSync` 字符串插值 `code-execute.ts`（CWE-78）
+#### 3.1 非空断言操作符
+**src/core/agent.ts**:
+- L655: `this.fallbackChain!` - 使用非空断言可能掩盖空值错误
 
-**文件：** `src/domains/dev/tools/code-execute.ts`（L46、L53）
-
+**修复建议**：
 ```typescript
-// ❌ 当前危险写法
-output = execSync(`python3 -c '${escaped}'`, { ... });
-output = execSync(`node -e \`${escaped}\``, { ... });
+// 之前
+() => this.fallbackChain!.call(this._getLLM(), chatOpts),
+
+// 之后
+() => this.fallbackChain?.call(this._getLLM(), chatOpts) ?? Promise.reject(new Error('Fallback chain not initialized')),
 ```
 
-**修复方案：**
+## 详细修复建议
 
+### 安全修复（优先级：高）
+
+1. **实现路径验证工具函数**：
 ```typescript
-// ✅ 通过标准输入传入代码（最安全）
-import { spawnSync } from 'child_process';
-const r = spawnSync('python3', ['-c', escaped], {
-  input: '',
-  encoding: 'utf-8',
-  timeout: CODE_EXECUTE_TIMEOUT_MS,
-});
-```
+// src/utils/path-security.ts
+import { resolve, normalize } from 'path';
 
----
-
-## 🟠 Error Issues（遗留）
-
-### E1. 内部子系统未使用 `path-security.ts`
-
-`src/utils/path-security.ts` 已经存在（`safeResolve`、`sanitizeName`、`isPathWithinBase`），但以下文件在构建内部路径时仍未使用：
-
-| 文件 | 风险点 | 推荐修复 |
-|------|--------|---------|
-| `core/context/context-loader.ts` | `join(dir, 'AGENTS.md')` — `dir` 来自路径链循环 | `safeResolve` 验证每个 dir |
-| `core/memory/memory-store.ts` | `join(projDir, memoryId + '.json')` | `sanitizeName(memoryId)` 后再 join |
-| `core/tools/code/spec-generator.ts` | `join(specsDir, specName + '.md')` | `sanitizeName(specName)` 后再 join |
-| `core/teammate-manager.ts` | `join(tasksDir, taskId + '.json')` | `sanitizeName(taskId)` 后再 join |
-
-**风险等级：** 中等（这些路径不直接接受用户命令行输入，但如果 LLM 构造了恶意的 ID，仍有风险）
-
-```typescript
-// ✅ 统一修复模式
-import { sanitizeName, safeResolve } from '../../utils/path-security.js';
-
-const safeId = sanitizeName(memoryId, 'memory ID');
-const filePath = safeResolve(safeId + '.json', this.storageDir);
-```
-
----
-
-## 🟡 Warning Issues（待改善）
-
-### W1. `console.*` 直接调用 — 425 处
-
-项目已有 `src/cli/log.ts` 统一 logger，但全局仍大量使用 `console.log / console.error / console.warn`，导致：
-- CI/CD 无法按级别过滤输出
-- 无法添加时间戳或上下文信息
-
-**高频文件：**
-
-| 文件 | `console.*` 调用数 |
-|------|-----------------|
-| `src/cli/index.ts` | 80+ |
-| `src/core/agent.ts` | 20+ |
-| `src/core/tools/*` | 50+ |
-
-**建议：** 在 `cli/index.ts` 入口处注入 log level，用 `createLogger` 替换模块中的直接 `console.*`。
-
-### W2. 错误处理 `catch` 块模式不统一
-
-多处 `catch (err)` 通过类型断言访问属性，存在运行时风险：
-
-```typescript
-// ❌ 现有写法（多处）
-const e = err as { stderr?: string; message?: string };
-throw new Error(`Failed: ${e.stderr ?? e.message ?? String(err)}`);
-```
-
-**建议：添加全局 `errorDetail` helper：**
-
-```typescript
-// src/utils/error.ts
-export function errorDetail(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'object' && err !== null && 'stderr' in err) {
-    return String((err as { stderr: unknown }).stderr);
+export function validatePath(inputPath: string, baseDir: string): string {
+  const resolved = resolve(baseDir, inputPath);
+  const normalized = normalize(resolved);
+  
+  if (!normalized.startsWith(baseDir)) {
+    throw new Error(`Path traversal attempt detected: ${inputPath}`);
   }
-  return String(err);
+  
+  return normalized;
 }
 ```
 
-### W3. 大函数未拆分
-
-| 函数 | 位置 | 行数 | 建议 |
-|------|------|------|------|
-| Agent 主循环 `runStream` | `core/agent.ts:548–990` | ~440 行 | 拆分为 `_executeTurn()` / `_executeTools()` / `_handleResponse()` |
-| `coordinatorTool.handler` | `core/tools/agents/coordinator-tool.ts` | ~200 行 | 拆分子任务分发逻辑 |
-
----
-
-## 🔵 Info Issues
-
-### I1. 测试夹具中的假凭证标注不清晰
-
-**文件：** `tests/fs-tools.test.ts`（L61、L93）
-
+2. **在文件操作前添加验证**：
 ```typescript
-// ❌ 容易被误判为真实凭证
-const content = `const apiKey = "sk-abc123..."`;
+// 示例：在 reverse-analyze.ts 中
+import { validatePath } from '../../utils/path-security.js';
 
-// ✅ 推荐加清晰标注
-const FAKE_API_KEY_FOR_TEST = 'sk-TEST_NOT_REAL_xxxxxxxxxxxx'; // pragma: allowlist secret
+function readKeyFiles(projectRoot: string): Array<{ path: string; content: string }> {
+  const results: Array<{ path: string; content: string }> = [];
+  
+  for (const doc of DOC_FILES) {
+    const validatedPath = validatePath(doc, projectRoot);
+    if (!existsSync(validatedPath)) continue;
+    
+    try {
+      const content = readFileSync(validatedPath, 'utf-8').slice(0, MAX_FILE_CHARS);
+      results.push({ path: doc, content });
+    } catch { /* skip */ }
+  }
+  
+  return results;
+}
 ```
 
-### I2. 少量剩余魔法数字
+### 性能优化（优先级：中）
 
-| 值 | 位置 | 建议常量名 |
-|----|------|----------|
-| `50000` | `worktree-tools.ts` run() 输出截断 | `WORKTREE_RUN_MAX_OUTPUT_CHARS` |
-| `300` | `agent.ts` verbose 输出预览截断 | `TOOL_RESULT_PREVIEW_CHARS` |
-| `120` | `agent.ts` 工具参数截断 | `TOOL_ARGS_PREVIEW_CHARS` |
-| `128` | `path-security.ts` 名称长度限制 | `NAME_MAX_LENGTH` |
-| `5` | `context-editor.ts` keep 数量 | `CTX_EDITOR_DEFAULT_KEEP`（已有注释，可提取） |
+1. **重构为异步操作**：
+```typescript
+// reverse-analyze.ts 重构示例
+import { readFile, writeFile } from 'fs/promises';
+import { promisify } from 'util';
+import { exec } from 'child_process';
+
+const execAsync = promisify(exec);
+
+async function detectTechStack(projectRoot: string): Promise<string[]> {
+  const stack: string[] = [];
+  
+  // 异步检查配置文件
+  for (const cfg of CONFIG_FILES) {
+    const p = join(projectRoot, cfg);
+    if (!existsSync(p)) continue;
+    
+    try {
+      const content = await readFile(p, 'utf-8');
+      // ... 处理逻辑
+    } catch { /* skip */ }
+  }
+  
+  return [...new Set(stack)];
+}
+```
+
+2. **批量处理文件操作**：
+```typescript
+// 使用 Promise.all 并行处理多个文件读取
+async function readMultipleFiles(paths: string[]): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
+  
+  const readPromises = paths.map(async (path) => {
+    try {
+      const content = await readFile(path, 'utf-8');
+      results.set(path, content);
+    } catch { /* skip */ }
+  });
+  
+  await Promise.all(readPromises);
+  return results;
+}
+```
+
+### 代码质量改进（优先级：低）
+
+1. **统一错误处理**：
+```typescript
+// 创建统一的错误处理工具
+export class AppError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public statusCode: number = 500
+  ) {
+    super(message);
+    this.name = 'AppError';
+  }
+}
+
+// 使用示例
+try {
+  // ... 操作
+} catch (error) {
+  if (error instanceof AppError) {
+    throw error; // 重新抛出已知错误
+  }
+  throw new AppError(
+    'Unexpected error during file operation',
+    'FILE_OPERATION_ERROR'
+  );
+}
+```
+
+2. **提取重复代码**：
+```typescript
+// src/config/constants.ts
+export const VALID_DOMAINS = new Set(['auto', 'data', 'dev', 'service']);
+
+// agent.ts 中使用
+import { VALID_DOMAINS } from '../config/constants.js';
+
+if (!VALID_DOMAINS.has(domain)) {
+  throw new Error(`Invalid domain: "${domain}"`);
+}
+```
+
+## 测试建议
+
+修复后需要添加以下测试：
+
+1. **安全测试**：
+   ```typescript
+   // 测试路径遍历防护
+   test('should reject path traversal attempts', () => {
+     expect(() => validatePath('../../../etc/passwd', '/safe/dir'))
+       .toThrow('Path traversal attempt detected');
+   });
+   ```
+
+2. **性能测试**：
+   ```typescript
+   // 测试异步操作性能
+   test('should handle multiple file reads efficiently', async () => {
+     const start = Date.now();
+     await readMultipleFiles(testFiles);
+     const duration = Date.now() - start;
+     expect(duration).toBeLessThan(1000); // 应在1秒内完成
+   });
+   ```
+
+## 修复优先级
+
+1. **立即修复**（今天内）：
+   - 路径遍历安全漏洞（18处）
+   - 非空断言风险（1处）
+
+2. **本周内修复**：
+   - 同步I/O性能问题（8处）
+   - 错误处理改进
+
+3. **后续优化**：
+   - 代码结构改进
+   - 添加单元测试
+
+## 总结
+
+代码审查发现了 **27个问题**：
+- **安全问题**：18个（高危）
+- **性能问题**：8个（中危）
+- **代码质量问题**：1个（低危）
+
+**健康评分**：整体代码质量需要改进，特别是安全性和性能方面。
+
+**建议**：立即开始修复安全问题，特别是路径遍历漏洞，这些是最紧迫的风险。
 
 ---
 
-## ✅ 已完成的修复（本轮修复清单）
+## 审查工具输出详情
 
-### Commit `9f63a92` — 安全性 + 性能基础修复
+### src/cli/index.ts 审查结果
+```
+🔍 Code Inspection Report
+──────────────────────────────────────────────────
+Files scanned : 1
+Health score  : 0/100 🔴 Poor
+Findings      : 10 total
+  🔴 Critical : 1
+  🟠 Error    : 0
+  🟡 Warning  : 9
+  🔵 Info     : 0
+```
 
-| 问题 | 修复 |
-|------|------|
-| `embedding.ts` SHA-1 弱哈希 | → SHA-256（`createHash('sha256')`） |
-| `memory-store.ts` SHA-1 + `Math.random()` ID | → SHA-256 + `crypto.randomUUID()` |
-| `database-query.ts` 3 个函数 `execSync` 阻塞 | → `execFileAsync`（全异步） |
-| `hooks.ts` `runShellHook` `execSync` | → `execFileAsync` |
-| 多处魔法数字 | → 具名常量（`DB_DEFAULT_TIMEOUT_MS`、`DEFAULT_MAX_ITERATIONS` 等） |
-| `agent.ts` 超长主循环 | → 部分拆分，提取常量 |
+### src/core/agent.ts 审查结果
+```
+🔍 Code Inspection Report
+──────────────────────────────────────────────────
+Files scanned : 1
+Health score  : 94/100 🟢 Excellent
+Findings      : 2 total
+  🔴 Critical : 0
+  🟠 Error    : 0
+  🟡 Warning  : 2
+  🔵 Info     : 0
+```
 
-### Commit `03d81b2` — CWE-22 路径遍历加固
-
-| 问题 | 修复 |
-|------|------|
-| 新增 `src/utils/path-security.ts` | `safeResolve()` / `sanitizeName()` / `isPathWithinBase()` |
-| `cli/index.ts` `--context <id>` 参数 | `sanitizeName` + `safeResolve` 防止 `../../etc/passwd` |
-| `cli/index.ts` `--save-context <name>` 参数 | `sanitizeName` + `safeResolve` 保护写入路径 |
-| `worktree-tools.ts` `validateName()` | 委托 `sanitizeName()`，`bindTaskToWorktree` 增加整数校验 |
-
-### Commit `c804b6b` — 上下文管理 + QPS 优化
-
-| 问题 | 修复 |
-|------|------|
-| 429 交互模式直接 fail-fast | → 3 次指数退避（5s→10s→20s ±25% jitter） |
-| ctx-editor 触发 80K tokens（太晚） | → 60K tokens（可 `AGENT_CTX_TRIGGER` 覆盖） |
-| 工具结果保留 3 个（不够用） | → 5 个，减少 LLM 重复 Read/Grep |
-| microcompact 清理阈值 60min | → 15min（`AGENT_MICROCOMPACT_AGE_MS`），字符阈值 500→200 |
-| while 循环无 LLM 调用间隔 | → 500ms 最小间隔（`AGENT_MIN_ROUND_INTERVAL_MS`） |
-| 工具调用全串行 | → Read/LS/Grep 类 `Promise.all` 并行执行（最多 5 个） |
-
----
-
-## 📈 修复进度
-
-| 时间 | Health Score | 剩余关键问题 | 说明 |
-|------|-------------|------------|------|
-| 2026-04-04 初次扫描 | 54/100 | 1328 | 首次全量扫描 |
-| commit `9f63a92` 后 | 72/100 | ~600 | 弱哈希 + 阻塞 I/O 修复 |
-| commit `03d81b2` 后 | 81/100 | ~172 | 路径遍历加固 |
-| commit `c804b6b` 后 | **88/100** | **~80** | QPS + 上下文优化 |
-| 目标（修复 C1/C2） | **95/100** | <20 | 修复命令注入后可达到 |
-
----
-
-## 🛠️ 下一步优先级
-
-### P0：安全（1–2 天，建议立即修复）
-
-- [ ] **C1** — `database-query.ts`：将 `sh -c` + 字符串拼接改为 `execFile` 参数数组
-- [ ] **C2** — `code-execute.ts`：将 `execSync` 字符串插值改为 `spawnSync` stdin 传入
-
-### P1：路径安全完整性（0.5 天）
-
-- [ ] **E1** — 对 `memory-store.ts`、`spec-generator.ts`、`teammate-manager.ts` 中的内部路径应用 `sanitizeName` + `safeResolve`
-
-### P2：代码质量（3–5 天，下个迭代）
-
-- [ ] **W1** — 统一 logger：全局替换 `console.*` 为 `createLogger()`
-- [ ] **W2** — 提取 `errorDetail()` helper 统一错误处理
-- [ ] **W3** — 拆分 `agent.ts` `runStream`（440 行）为 3 个子函数
-- [ ] **I2** — 提取剩余 5 处魔法数字到具名常量
-
----
-
-*报告最后更新：2026-04-04（对应 HEAD commit `c804b6b`）。如需重新扫描，运行 `uagent inspect src --severity warning`。*
+### src/core/tools/code/reverse-analyze.ts 审查结果
+```
+🔍 Code Inspection Report
+──────────────────────────────────────────────────
+Files scanned : 1
+Health score  : 0/100 🔴 Poor
+Findings      : 15 total
+  🔴 Critical : 0
+  🟠 Error    : 8
+  🟡 Warning  : 7
+  🔵 Info     : 0
+```

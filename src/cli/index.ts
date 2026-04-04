@@ -1212,7 +1212,7 @@ async function runREPL(
 
   const SLASH_COMPLETIONS = [
     '/help', '/clear', '/exit', '/resume', '/compact', '/tokens', '/cost',
-    '/model', '/models', '/domain',
+    '/model', '/models', '/domain', '/continue',
     '/review', '/inspect', '/purify', '/spec',
     '/agents', '/team', '/tasks', '/inbox',
     '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
@@ -1351,6 +1351,21 @@ async function runREPL(
     }
 
     // ── slash commands ──
+
+    // /continue — resume after hitting the iteration limit.
+    // Agent history is preserved between runStream() calls, so injecting a
+    // lightweight continuation message is enough to restart another MAX_ITERATIONS rounds.
+    if (input === '/continue') {
+      const h = agent.getHistory();
+      if (h.length < 2) {
+        console.log(chalk.gray('\n  Nothing to continue (no active session).\n'));
+        rl.prompt(); printStatusBar(); return;
+      }
+      // Emit a system nudge that continues from the last iteration
+      setTimeout(() => rl.emit('line', '[SYSTEM] Continue from where you left off — complete any remaining tasks.'), 50);
+      return;
+    }
+
     if (input === '/exit' || input === '/quit') {
       clearStatusBar();
       process.stdout.write('\n' + chalk.dim('  Bye!') + '\n');

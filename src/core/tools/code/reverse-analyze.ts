@@ -28,7 +28,7 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { basename, join, resolve } from 'path';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { modelManager } from '../../../models/model-manager.js';
 import type { ToolRegistration } from '../../../models/types.js';
 
@@ -130,11 +130,14 @@ function detectTechStack(projectRoot: string): string[] {
   }
 
   if (stack.length === 0) {
-    // Fallback: detect from source file extensions
+    // Fallback: detect from source file extensions using Node.js readdirSync (no shell needed)
     try {
-      const files = execSync(`find ${projectRoot} -maxdepth 3 -name "*.ts" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" 2>/dev/null | head -20`, {
-        encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
-      }).trim();
+      const result = spawnSync('find', [
+        projectRoot, '-maxdepth', '3',
+        '(', '-name', '*.ts', '-o', '-name', '*.py', '-o',
+             '-name', '*.go', '-o', '-name', '*.rs', '-o', '-name', '*.java', ')',
+      ], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+      const files = (result.stdout ?? '').trim();
       if (files.includes('.ts')) stack.push('TypeScript');
       else if (files.includes('.py')) stack.push('Python');
       else if (files.includes('.go')) stack.push('Go');
