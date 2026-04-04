@@ -285,34 +285,6 @@ async function scanFileAsync(filePath: string, rootDir: string): Promise<Finding
   return findings;
 }
 
-/** @deprecated Use scanFileAsync — kept for test compatibility only */
-function scanFile(filePath: string, rootDir: string): Finding[] {
-  const findings: Finding[] = [];
-  let content: string;
-  try { content = readFileSync(filePath, 'utf-8'); } catch { return findings; }
-  const lines = content.split('\n');
-  const relFile = relative(rootDir, filePath);
-  for (const rule of RULES) {
-    lines.forEach((line, lineIdx) => {
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith('//') && rule.id !== 'todo-fixme') return;
-      if (trimmed.startsWith('*')) return;
-      const re = rule.pattern();
-      const match = re.exec(line);
-      if (match) {
-        findings.push({
-          file: relFile, line: lineIdx + 1, column: match.index + 1,
-          severity: rule.severity, category: rule.category,
-          rule: rule.id, message: rule.message,
-          snippet: line.trim().slice(0, 120), suggestion: rule.suggestion,
-        });
-      }
-    });
-  }
-  findings.push(...detectLongFunctions(lines, relFile));
-  return findings;
-}
-
 /**
  * Detect functions with more than LONG_FN_THRESHOLD lines by tracking brace depth.
  * Accepts already-split lines to avoid a redundant content.split('\n') call

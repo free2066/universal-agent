@@ -226,7 +226,11 @@ export function mailboxRead(
     if (!existsSync(p)) return [];
     const lines = readFileSync(p, 'utf-8').trim().split('\n').filter(Boolean);
     const msgs: MailboxMessage[] = lines.map((l) => {
-      try { return JSON.parse(l) as MailboxMessage; } catch { return null; }
+      try { return JSON.parse(l) as MailboxMessage; } catch (e) {
+        // Log parse failure so corrupt lines don't silently disappear
+        process.stderr.write(`[mailboxRead] Failed to parse mailbox line: ${e instanceof Error ? e.message : String(e)}\n`);
+        return null;
+      }
     }).filter((m): m is MailboxMessage => m !== null);
 
     if (!filter) return msgs;

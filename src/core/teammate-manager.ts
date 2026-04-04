@@ -116,7 +116,10 @@ export class MessageBus {
     if (!existsSync(path)) return [];
     const lines = readFileSync(path, 'utf-8').trim().split('\n').filter(Boolean);
     const msgs = lines.map((l) => {
-      try { return JSON.parse(l) as InboxMessage; } catch { return null; }
+      try { return JSON.parse(l) as InboxMessage; } catch (e) {
+        log.debug(`[MessageBus] Failed to parse inbox line: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      }
     }).filter(Boolean) as InboxMessage[];
     // Drain: clear inbox after reading
     writeFileSync(path, '', 'utf-8');

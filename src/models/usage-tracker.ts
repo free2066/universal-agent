@@ -113,7 +113,16 @@ export class UsageTracker {
     const path = this.usagePath(date);
     if (existsSync(path)) {
       try {
-        return JSON.parse(readFileSync(path, 'utf-8')) as DailyUsage;
+        const raw = JSON.parse(readFileSync(path, 'utf-8'));
+        // Defensive check: must have the required numeric fields before trusting persisted data
+        if (
+          typeof raw === 'object' && raw !== null &&
+          typeof raw.totalInputTokens === 'number' &&
+          typeof raw.totalOutputTokens === 'number' &&
+          typeof raw.totalCostUSD === 'number'
+        ) {
+          return raw as DailyUsage;
+        }
       } catch { /* corrupt file, start fresh */ }
     }
     return {

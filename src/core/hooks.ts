@@ -186,8 +186,12 @@ export class HookRunner {
       return { hooks: [] };
     }
     try {
-      const raw = readFileSync(this.configPath, 'utf-8');
-      return JSON.parse(raw) as HooksConfig;
+      const raw = JSON.parse(readFileSync(this.configPath, 'utf-8'));
+      // Defensive check: hooks must be an array; reject malformed config silently
+      if (typeof raw !== 'object' || raw === null || !Array.isArray(raw.hooks)) {
+        return { hooks: [] };
+      }
+      return raw as HooksConfig;
     } catch {
       return { hooks: [] };
     }

@@ -69,7 +69,17 @@ export class TaskBoard {
   private load(id: number): Task {
     const p = this.filePath(id);
     if (!existsSync(p)) throw new Error(`Task ${id} not found`);
-    return JSON.parse(readFileSync(p, 'utf-8')) as Task;
+    const raw = JSON.parse(readFileSync(p, 'utf-8'));
+    // Defensive check: ensure required fields are present before trusting the file
+    if (
+      typeof raw !== 'object' || raw === null ||
+      typeof raw.id !== 'number' ||
+      typeof raw.subject !== 'string' ||
+      !['pending', 'in_progress', 'completed'].includes(raw.status)
+    ) {
+      throw new Error(`Task file task_${id}.json has invalid structure`);
+    }
+    return raw as Task;
   }
 
   private save(task: Task): void {
@@ -130,7 +140,12 @@ export class TaskBoard {
   private clearDependency(completedId: number): void {
     const files = readdirSync(this.dir).filter((f) => /^task_\d+\.json$/.test(f));
     for (const f of files) {
-      const task = JSON.parse(readFileSync(join(this.dir, f), 'utf-8')) as Task;
+      let task: Task;
+      try {
+        const raw = JSON.parse(readFileSync(join(this.dir, f), 'utf-8'));
+        if (typeof raw !== 'object' || raw === null || !Array.isArray(raw.blockedBy)) continue;
+        task = raw as Task;
+      } catch { continue; }
       if (task.blockedBy.includes(completedId)) {
         task.blockedBy = task.blockedBy.filter((x) => x !== completedId);
         task.updatedAt = Date.now();
@@ -150,7 +165,13 @@ export class TaskBoard {
 
     if (files.length === 0) return 'No tasks.';
 
-    const tasks = files.map((f) => JSON.parse(readFileSync(join(this.dir, f), 'utf-8')) as Task);
+    const tasks = files.flatMap((f) => {
+      try {
+        const raw = JSON.parse(readFileSync(join(this.dir, f), 'utf-8'));
+        if (typeof raw !== 'object' || raw === null || typeof raw.id !== 'number') return [];
+        return [raw as Task];
+      } catch { return []; }
+    });
     const lines = tasks.map((t) => {
       const marker = { pending: '[ ]', in_progress: '[>]', completed: '[x]' }[t.status] ?? '[?]';
       const blocked = t.blockedBy.length > 0 ? ` (blocked by: ${t.blockedBy.join(', ')})` : '';
@@ -164,7 +185,13 @@ export class TaskBoard {
   unclaimedReady(): Task[] {
     const files = readdirSync(this.dir).filter((f) => /^task_\d+\.json$/.test(f));
     return files
-      .map((f) => JSON.parse(readFileSync(join(this.dir, f), 'utf-8')) as Task)
+      .flatMap((f) => {
+        try {
+          const raw = JSON.parse(readFileSync(join(this.dir, f), 'utf-8'));
+          if (typeof raw !== 'object' || raw === null || typeof raw.id !== 'number') return [];
+          return [raw as Task];
+        } catch { return []; }
+      })
       .filter((t) => t.status === 'pending' && !t.owner && t.blockedBy.length === 0)
       .sort((a, b) => a.id - b.id);
   }
