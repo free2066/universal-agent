@@ -477,11 +477,22 @@ export class AgentCore {
     return chunks.join('');
   }
 
+  /**
+   * Inject a shell command + its output into the conversation history as a
+   * synthetic user→assistant exchange (does NOT call the LLM).
+   * Used by the `!bash` REPL prefix so the context knows what commands ran.
+   */
+  injectContext(text: string): void {
+    this.history.push({ role: 'user', content: `[shell output injected]\n${text}` });
+    this.history.push({ role: 'assistant', content: '(noted)' });
+  }
+
   async runStream(
     prompt: string,
     onChunk: (chunk: string) => void,
     events?: AgentEvents,
-    filePath?: string
+    filePath?: string,
+    abortSignal?: AbortSignal,
   ): Promise<void> {
     // Persist prompt to history file (~/.uagent/history.jsonl)
     addToHistory(prompt);

@@ -5,6 +5,9 @@
 
 import chalk from 'chalk';
 import { createInterface } from 'readline';
+import { readdirSync, statSync, readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs';
+import { join, relative, extname } from 'path';
+import { spawnSync } from 'child_process';
 import type { AgentCore } from '../../core/agent.js';
 import { modelManager } from '../../models/model-manager.js';
 import { subagentSystem } from '../../core/subagent-system.js';
@@ -12,6 +15,58 @@ import { initStatusBar, updateStatusBar, clearStatusBar, buildStatusPrompt, prin
 import { CliSpinner, summarizeArgs } from '../spinner.js';
 import { HookRunner } from '../../core/hooks.js';
 import { handleSlash, type SlashContext } from './slash-handlers.js';
+
+// ── F1: @file fuzzy completion ────────────────────────────────────────────────
+/** Recursively collect relative paths under `root` (depth-limited to 3). */
+function collectFiles(root: string, dir: string, depth: number, results: string[]): void {
+  if (depth > 3 || results.length > 500) return;
+  let entries: string[];
+  try { entries = readdirSync(dir); } catch { return; }
+  const IGNORE = new Set(['node_modules', '.git', 'dist', '.cache', '__pycache__']);
+  for (const entry of entries) {
+    if (IGNORE.has(entry)) continue;
+    const full = join(dir, entry);
+    try {
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        collectFiles(root, full, depth + 1, results);
+      } else {
+        results.push(relative(root, full));
+      }
+    } catch { /* permission denied etc. */ }
+  }
+}
+
+function fuzzyFileComplete(query: string, cwd: string, max = 20): string[] {
+  const all: string[] = [];
+  collectFiles(cwd, cwd, 0, all);
+  const q = query.toLowerCase();
+  const hits = q
+    ? all.filter(f => f.toLowerCase().includes(q))
+    : all;
+  // Prefer shorter paths and paths whose basename matches
+  hits.sort((a, b) => {
+    const aBase = a.toLowerCase().endsWith(q) ? 0 : 1;
+    const bBase = b.toLowerCase().endsWith(q) ? 0 : 1;
+    return aBase - bBase || a.length - b.length;
+  });
+  return hits.slice(0, max);
+}
+
+/** Resolve all @path references in user input, reading file contents. */
+function resolveAtRefs(input: string, cwd: string): string {
+  return input.replace(/@([^\s,;]+)/g, (_match, ref: string) => {
+    // Skip @run-agent-xxx — those are subagent mentions, not file refs
+    if (ref.startsWith('run-agent-') || ref.startsWith('ask-')) return _match;
+    const fullPath = join(cwd, ref);
+    if (!existsSync(fullPath)) return _match;
+    try {
+      const content = readFileSync(fullPath, 'utf-8');
+      const lang = extname(ref).slice(1) || '';
+      return `\n<file path="${ref}">\n\`\`\`${lang}\n${content}\n\`\`\`\n</file>\n`;
+    } catch { return _match; }
+  });
+}
 
 export interface ReplOptions {
   domain: string;
@@ -85,9 +140,13 @@ export async function runREPL(
       return [hits.length ? hits : SLASH_COMPLETIONS, line];
     }
     if (line.startsWith('@')) {
-      const agents = subagentSystem.listAgents().map((a) => `@run-agent-${a.name}`);
-      const hits = agents.filter((a) => a.startsWith(line));
-      return [hits.length ? hits : [], line];
+      const query = line.slice(1);
+      // File path completions
+      const fileSuggestions = fuzzyFileComplete(query, process.cwd(), 15).map(f => `@${f}`);
+      // Subagent completions
+      const agentSuggestions = subagentSystem.listAgents().map((a) => `@run-agent-${a.name}`);
+      const all = [...fileSuggestions, ...agentSuggestions].filter(s => s.startsWith(line));
+      return [all.length ? all : fileSuggestions.length ? fileSuggestions : [], line];
     }
     return [[], line];
   }
@@ -100,45 +159,154 @@ export async function runREPL(
     completer,
   });
 
-  // ── Ctrl+R: reverse history search ──────────────────────────────────────
+  // ── Shared keypress state ────────────────────────────────────────────────
   const _inputHistory: string[] = [];
   let _historySearch = false;
   let _historyQuery = '';
+
+  // F4: Esc abort
+  let _currentAbort: AbortController | null = null;
+
+  // F6: Ctrl+L debug mode
+  let _lastCtrlL = 0;
+
+  // F7: Shift+Tab mode cycle
+  const AGENT_MODES = ['default', 'plan', 'brainstorm', 'auto-edit'] as const;
+  type AgentMode = typeof AGENT_MODES[number];
+  let _modeIdx = 0;
+
+  // F8: Esc×2 rollback
+  let _lastEsc = 0;
+
+  // F3: multiline input buffer
+  const _pendingLines: string[] = [];
+  let _multilineMode = false;
 
   const { emitKeypressEvents } = await import('readline');
   emitKeypressEvents(process.stdin);
   // IMPORTANT: must use setRawMode(true) so that Ctrl+T is delivered as a
   // keypress event instead of being intercepted by macOS as SIGINFO (which
   // prints "load: X.XX  cmd: node ..." lines to the terminal).
-  // We re-enable raw mode here; it is temporarily disabled before spawning
-  // child processes (bash tool) and re-enabled afterwards.
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
 
   // ── Ctrl+T: cycle thinking level ────────────────────────────────────────
-  // Cycles: off → low → medium → high → off → ...
-  // Aligns with CodeFlicker CLI's Ctrl+T toggle.
   const THINKING_CYCLE: Array<import('../../models/types.js').ThinkingLevel | undefined> = [undefined, 'low', 'medium', 'high'];
   let _thinkingIdx = 0;
 
-  process.stdin.on('keypress', (_ch: unknown, key: { name?: string; ctrl?: boolean; sequence?: string } | undefined) => {
+  process.stdin.on('keypress', (_ch: unknown, key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string } | undefined) => {
     if (!key) return;
+
+    // ── Ctrl+T: cycle thinking level (status bar) ──────────────────────────
     if (key.ctrl && key.name === 't') {
       _thinkingIdx = (_thinkingIdx + 1) % THINKING_CYCLE.length;
       const level = THINKING_CYCLE[_thinkingIdx];
       try { agent.setThinkingLevel(level); } catch { /* not supported */ }
-      // Update status bar: show thinking level inline (e.g. "thinking: low")
-      // Use updateStatusBar so the level is visible in the bottom bar,
-      // not as a new line printed into the content area.
       updateStatusBar({ isThinking: (level ?? false) as import('../statusbar.js').ThinkingLevel });
       rl.prompt(); printStatusBar();
       return;
     }
+
+    // ── Ctrl+R: reverse history search ────────────────────────────────────
     if (key.ctrl && key.name === 'r') {
       _historySearch = true;
       _historyQuery = '';
       process.stdout.write('\r\x1b[2K' + chalk.dim('(reverse-search) ') + chalk.cyan('_'));
       return;
     }
+
+    // ── F4: Esc — abort streaming OR start Esc×2 rollback ─────────────────
+    if (key.name === 'escape' && !_historySearch) {
+      if (_currentAbort) {
+        // Single Esc while streaming → abort LLM output
+        _currentAbort.abort();
+        _currentAbort = null;
+        process.stdout.write(chalk.yellow('\n  [aborted]\n'));
+        rl.resume(); rl.prompt(); printStatusBar();
+        _lastEsc = 0;
+        return;
+      }
+      // F8: Esc×2 — rollback last exchange
+      const now = Date.now();
+      if (now - _lastEsc < 500) {
+        const history = agent.getHistory();
+        if (history.length >= 2) {
+          const removed = history.splice(-2);
+          agent.setHistory(history);
+          const preview = String(
+            (removed[0] as { content?: unknown })?.content ?? ''
+          ).slice(0, 80).replace(/\n/g, ' ');
+          process.stdout.write(chalk.yellow(`\n  ↩ Rolled back: "${preview}"\n`));
+        } else {
+          process.stdout.write(chalk.dim('\n  (nothing to roll back)\n'));
+        }
+        rl.prompt(); printStatusBar();
+        _lastEsc = 0;
+        return;
+      }
+      _lastEsc = now;
+      return;
+    }
+    // Reset Esc timer on any other key
+    if (key.name !== 'escape') _lastEsc = 0;
+
+    // ── F5: Ctrl+G — open $EDITOR to edit current prompt ──────────────────
+    if (key.ctrl && key.name === 'g') {
+      const editor = process.env.EDITOR || process.env.VISUAL || 'vim';
+      const tmpFile = `/tmp/uagent-edit-${Date.now()}.txt`;
+      const curLine = (rl as unknown as { line: string }).line || '';
+      writeFileSync(tmpFile, curLine, 'utf-8');
+      if (process.stdin.isTTY) process.stdin.setRawMode(false);
+      clearStatusBar();
+      spawnSync(editor, [tmpFile], { stdio: 'inherit' });
+      if (process.stdin.isTTY) process.stdin.setRawMode(true);
+      let newContent = '';
+      try { newContent = readFileSync(tmpFile, 'utf-8').replace(/\n$/, ''); } catch { /* */ }
+      try { unlinkSync(tmpFile); } catch { /* */ }
+      // Re-init status bar after editor exit
+      initStatusBar({
+        model: getModelDisplayName(modelManager.getCurrentModel('main')),
+        domain: options.domain,
+        sessionId: SHORT_ID,
+      });
+      // Replace readline's current line buffer
+      (rl as unknown as { line: string }).line = newContent;
+      process.stdout.write('\r\x1b[2K' + makePrompt(options.domain) + newContent);
+      rl.prompt(); printStatusBar();
+      return;
+    }
+
+    // ── F6: Ctrl+L — clear screen (double = toggle debug mode) ────────────
+    if (key.ctrl && key.name === 'l') {
+      const now = Date.now();
+      if (now - _lastCtrlL < 500) {
+        options.verbose = !options.verbose;
+        process.stdout.write(chalk.yellow(`\n  🔍 Debug mode: ${options.verbose ? 'ON' : 'OFF'}\n`));
+      } else {
+        process.stdout.write('\x1b[2J\x1b[H');
+      }
+      _lastCtrlL = now;
+      rl.prompt(); printStatusBar();
+      return;
+    }
+
+    // ── F7: Shift+Tab — cycle agent mode ──────────────────────────────────
+    // Shift+Tab ANSI sequence is \x1b[Z in raw mode
+    if (key.sequence === '\x1b[Z' || (key.shift && key.name === 'tab')) {
+      _modeIdx = (_modeIdx + 1) % AGENT_MODES.length;
+      const mode: AgentMode = AGENT_MODES[_modeIdx];
+      const modePrompts: Record<AgentMode, string> = {
+        'default': '',
+        'plan': 'You are in PLAN mode. Think step by step and produce a detailed plan before taking any action. Do NOT edit files directly — output a plan first.',
+        'brainstorm': 'You are in BRAINSTORM mode. Generate creative ideas and explore multiple approaches freely, without committing to edits or actions.',
+        'auto-edit': 'You are in AUTO-EDIT mode. Apply code edits directly and immediately without asking for confirmation.',
+      };
+      try { agent.setSystemPrompt(modePrompts[mode]); } catch { /* */ }
+      process.stdout.write(chalk.cyan(`\n  ⚙ Mode: ${mode}\n`));
+      rl.prompt(); printStatusBar();
+      return;
+    }
+
+    // ── Reverse-search key handling ────────────────────────────────────────
     if (!_historySearch) return;
     if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
       _historySearch = false;
@@ -254,7 +422,28 @@ export async function runREPL(
   };
 
   rl.on('line', async (line) => {
-    const input = line.trim();
+    // ── F3: multiline input ───────────────────────────────────────────────
+    // \ at end of line continues input; Ctrl+J also triggers continue
+    if (line.endsWith('\\') || _multilineMode) {
+      const seg = line.endsWith('\\') ? line.slice(0, -1) : line;
+      _pendingLines.push(seg);
+      if (line.endsWith('\\')) {
+        // More lines expected
+        _multilineMode = true;
+        rl.setPrompt(chalk.dim('... '));
+        rl.prompt();
+        return;
+      }
+      // Last line of multiline (no trailing \)
+      _multilineMode = false;
+      rl.setPrompt(makePrompt(options.domain));
+    }
+
+    const rawInput = _pendingLines.length > 0
+      ? (_pendingLines.splice(0).join('\n') + (line.length ? '\n' + line : '')).trim()
+      : line.trim();
+
+    const input = rawInput;
     if (!input) { rl.prompt(); printStatusBar(); return; }
 
     if (_historySearch) { _historySearch = false; _historyQuery = ''; }
@@ -264,6 +453,33 @@ export async function runREPL(
     }
 
     sessionLogger.logInput(input);
+
+    // ── F2: !bash prefix — run shell command directly, inject output into context ──
+    if (input.startsWith('!')) {
+      const cmd = input.slice(1).trim();
+      if (!cmd) { rl.prompt(); printStatusBar(); return; }
+      rl.pause();
+      process.stdout.write(chalk.dim(`\n  $ ${cmd}\n`));
+      let shellOutput = '';
+      try {
+        const { execSync } = await import('child_process');
+        shellOutput = execSync(cmd, {
+          cwd: process.cwd(), encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000,
+        });
+        process.stdout.write(shellOutput);
+      } catch (e) {
+        const err = e as { stdout?: string; stderr?: string };
+        shellOutput = (err.stdout ?? '') + (err.stderr ? `\nstderr: ${err.stderr}` : '');
+        if (err.stdout) process.stdout.write(err.stdout);
+        if (err.stderr) process.stdout.write(chalk.red(err.stderr));
+      }
+      // Inject the command + output into agent context (no LLM call)
+      agent.injectContext(`$ ${cmd}\n${shellOutput}`);
+      process.stdout.write('\n');
+      rl.resume(); rl.prompt(); printStatusBar();
+      return;
+    }
 
     // Delegate slash commands to slash-handlers
     if (input.startsWith('/') || input === '/help ' || input === '/exit' || input === '/quit') {
@@ -279,7 +495,8 @@ export async function runREPL(
         event: 'pre_prompt', prompt: input, cwd: process.cwd(),
       }).catch(() => ({ proceed: true, value: undefined, injection: undefined }));
 
-      let finalInput = input;
+      // ── F1: resolve @file references → embed file content ──────────────
+      let finalInput = resolveAtRefs(input, process.cwd());
       if (!hookCtx.proceed) {
         console.log(chalk.yellow(`  [hook] Blocked: ${hookCtx.value ?? 'no reason given'}`));
         rl.resume();
@@ -310,6 +527,8 @@ export async function runREPL(
       let firstChunk = true;
       let charCount = 0;
 
+      // F4: create AbortController for Esc to cancel streaming
+      _currentAbort = new AbortController();
       await agent.runStream(
         finalInput,
         (chunk) => {
@@ -345,7 +564,10 @@ export async function runREPL(
             sessionLogger.logToolEnd(name, success, durationMs);
           },
         },
+        undefined,
+        _currentAbort.signal,
       );
+      _currentAbort = null;
 
       if (firstChunk) {
         spinner.stop(true);
