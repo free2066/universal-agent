@@ -208,9 +208,10 @@ export function addConfigValue(key: string, value: unknown, cwd = process.cwd())
 export function removeConfigValue(
   key: string,
   value?: unknown,
+  global = false,
   cwd = process.cwd(),
 ): void {
-  const filePath = projectConfigPath(cwd);
+  const filePath = global ? globalConfigPath() : projectConfigPath(cwd);
   const data = readJsonSafe(filePath);
   const dataRec = data as unknown as Record<string, unknown>;
 

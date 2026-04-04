@@ -141,8 +141,8 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
   configCmd
     .command('ls')
     .description('List all resolved settings')
-    .action(() => {
-      const { formatConfigList } = require('../config-store.js') as typeof import('../config-store.js');
+    .action(async () => {
+      const { formatConfigList } = await import('../config-store.js') as typeof import('../config-store.js');
       console.log(formatConfigList());
     });
 
@@ -150,8 +150,8 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
   configCmd
     .command('get <key>')
     .description('Get a specific setting value')
-    .action((key: string) => {
-      const { getConfigValue } = require('../config-store.js') as typeof import('../config-store.js');
+    .action(async (key: string) => {
+      const { getConfigValue } = await import('../config-store.js') as typeof import('../config-store.js');
       const val = getConfigValue(key as never);
       if (val === undefined) {
         console.log(chalk.gray(`(not set: ${key})`));
@@ -165,8 +165,8 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
     .command('set <key> <value>')
     .description('Set a setting value (project-level by default)')
     .option('-g, --global', 'Write to global config (~/.codeflicker/config.json)')
-    .action((key: string, rawValue: string, opts: { global?: boolean }) => {
-      const { setConfigValue, parseCliValue } = require('../config-store.js') as typeof import('../config-store.js');
+    .action(async (key: string, rawValue: string, opts: { global?: boolean }) => {
+      const { setConfigValue, parseCliValue } = await import('../config-store.js') as typeof import('../config-store.js');
       const value = parseCliValue(rawValue);
       setConfigValue(key, value, opts.global ?? false);
       const scope = opts.global ? chalk.cyan('global') : chalk.yellow('project');
@@ -177,25 +177,27 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
   configCmd
     .command('add <key> <value>')
     .description('Append a value to an array-typed setting')
-    .action((key: string, rawValue: string) => {
-      const { addConfigValue, parseCliValue } = require('../config-store.js') as typeof import('../config-store.js');
+    .action(async (key: string, rawValue: string) => {
+      const { addConfigValue, parseCliValue } = await import('../config-store.js') as typeof import('../config-store.js');
       const value = parseCliValue(rawValue);
       addConfigValue(key, value);
       console.log(chalk.green(`✓ Added ${JSON.stringify(value)} to ${key}`));
     });
 
-  // uagent config rm <key> [value]
+  // uagent config rm <key> [value] [-g]
   configCmd
     .command('rm <key> [value]')
     .description('Remove a setting key (or one item from an array)')
-    .action((key: string, rawValue?: string) => {
-      const { removeConfigValue, parseCliValue } = require('../config-store.js') as typeof import('../config-store.js');
+    .option('-g, --global', 'Remove from global config (~/.codeflicker/config.json)')
+    .action(async (key: string, rawValue: string | undefined, opts: { global?: boolean }) => {
+      const { removeConfigValue, parseCliValue } = await import('../config-store.js') as typeof import('../config-store.js');
       const value = rawValue !== undefined ? parseCliValue(rawValue) : undefined;
-      removeConfigValue(key, value);
+      removeConfigValue(key, value, opts.global ?? false);
+      const scope = opts.global ? chalk.cyan('global') : chalk.yellow('project');
       if (value !== undefined) {
-        console.log(chalk.green(`✓ Removed ${JSON.stringify(value)} from ${key}`));
+        console.log(chalk.green(`✓ Removed ${JSON.stringify(value)} from ${key} [${scope}]`));
       } else {
-        console.log(chalk.green(`✓ Deleted ${key}`));
+        console.log(chalk.green(`✓ Deleted ${key} [${scope}]`));
       }
     });
 
