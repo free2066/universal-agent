@@ -73,6 +73,7 @@ export async function runREPL(
     '/review', '/inspect', '/purify', '/spec',
     '/agents', '/team', '/tasks', '/inbox',
     '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
+    '/mcp',
     '/log', '/logs',
   ];
 

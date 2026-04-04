@@ -553,6 +553,38 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
     rl.prompt(); printStatusBar(); return true;
   }
 
+  // /mcp
+  if (input === '/mcp') {
+    const { servers, tools } = agent.getMcpInfo();
+    if (servers.length === 0) {
+      console.log(chalk.gray('\n  No MCP servers configured.'));
+      console.log(chalk.gray('  Run: uagent mcp add -- npx -y <server-package>'));
+      console.log(chalk.gray('  Or:  uagent mcp init --templates  (to see example configs)\n'));
+    } else {
+      console.log(chalk.yellow('\n🔌 MCP Servers:\n'));
+      for (const s of servers) {
+        const status = s.enabled ? chalk.green('✓ enabled ') : chalk.gray('○ disabled');
+        const typeLabel = chalk.gray(`[${s.type ?? 'stdio'}]`);
+        const detail = s.type === 'stdio'
+          ? chalk.gray(`${s.command ?? ''} ${(s.args ?? []).join(' ')}`.trim())
+          : chalk.gray(s.url ?? '');
+        console.log(`  ${status} ${chalk.white(s.name.padEnd(20))} ${typeLabel}  ${detail}`);
+      }
+      if (tools.length > 0) {
+        console.log(chalk.yellow('\n🛠  Active MCP tools (this session):\n'));
+        for (const t of tools) {
+          console.log(chalk.cyan('  ') + chalk.white(t));
+        }
+      } else {
+        console.log(chalk.gray('\n  (No MCP tools connected this session — servers connect at startup)'));
+      }
+      console.log(chalk.gray('\n  uagent mcp list      — show all configured servers'));
+      console.log(chalk.gray('  uagent mcp add       — add a server'));
+      console.log(chalk.gray('  uagent mcp disable   — disable without removing\n'));
+    }
+    rl.prompt(); printStatusBar(); return true;
+  }
+
   // /inspect
   if (input.startsWith('/inspect')) {
     const parts = input.split(/\s+/);

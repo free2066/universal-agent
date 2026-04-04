@@ -429,6 +429,18 @@ export class AgentCore {
     this._systemPromptOverride = prompt;
   }
 
+  /**
+   * Return MCP server configuration and connected tools for /mcp slash command.
+   * Servers come from MCPManager (config file), tools come from the live registry
+   * filtered to those whose names start with 'mcp_'.
+   */
+  getMcpInfo(): { servers: import('./mcp-manager.js').MCPServer[]; tools: string[] } {
+    const servers = this.mcpManager.listServers();
+    // registry.list() returns tool names (string[])
+    const tools = this.registry.list().filter((n) => n.startsWith('mcp_'));
+    return { servers, tools };
+  }
+
   /** Return the current LLM client, initialising it on first use (lazy init). */
   private _getLLM(): LLMClient {
     if (!this.llm) this.llm = modelManager.getClient('main');
