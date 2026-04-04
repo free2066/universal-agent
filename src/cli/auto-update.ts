@@ -1,17 +1,21 @@
 /**
- * auto-update.ts — Check for updates and notify user
+ * auto-update.ts — Check for upstream git updates, install deps, rebuild, restart.
  *
  * On every `uagent` startup:
  *  1. Run `git fetch --quiet` to check for new commits (best-effort, 8s timeout)
  *  2. Compare local HEAD vs origin/<current-branch>
  *  3. If behind AND fast-forward is possible:
  *     a. git pull --ff-only
- *     b. npm run build
- *     c. Print a banner: "✅ Updated to vX! Please restart uagent."
- *     (We do NOT auto-restart — user restarts at their own pace)
+ *     b. npm install        ← installs any new/updated npm dependencies from package.json
+ *                             This is the key step that keeps npm package versions current:
+ *                             when package.json is bumped upstream (e.g. @anthropic-ai/sdk
+ *                             from ^0.82.0 to ^0.83.0), `npm install` downloads the new
+ *                             version so the build uses the latest SDK.
+ *     c. npm run build
+ *     d. Print restart banner (user restarts at their own pace)
  *
- * Any error (offline, diverged, build failure) is silently ignored so the
- * CLI always starts normally.
+ * Any error (offline, diverged, install/build failure) is silently ignored so
+ * the CLI always starts normally.
  *
  * Opt-out: UAGENT_NO_AUTO_UPDATE=1
  */
@@ -50,9 +54,13 @@ function getStdout(cmd: string, args: string[], cwd: string, timeoutMs = 8_000):
 }
 
 /**
- * Check for upstream updates, pull + rebuild if available, then print a
- * restart-prompt.  Returns true if an update was applied (so caller can
- * show the banner after other startup output).
+ * Check for upstream updates.  If new commits are available and can be fast-forwarded:
+ *   1. git pull
+ *   2. npm install   (updates npm dependencies per the new package.json)
+ *   3. npm run build
+ *
+ * Returns true if an update was applied (caller should show the restart banner).
+ * Returns false if already up-to-date or any step failed.
  */
 export async function checkAndUpdate(): Promise<boolean> {
   if (process.env.UAGENT_NO_AUTO_UPDATE === '1') return false;
@@ -74,9 +82,9 @@ export async function checkAndUpdate(): Promise<boolean> {
     const remoteRef = getStdout('git', ['rev-parse', `origin/${branch}`], root);
     if (!localRef || !remoteRef || localRef === remoteRef) return false;   // up-to-date
 
-    // 4. Only fast-forward
+    // 4. Only fast-forward (don't touch diverged branches)
     const mergeBase = getStdout('git', ['merge-base', 'HEAD', `origin/${branch}`], root);
-    if (mergeBase !== localRef) return false;   // diverged — skip
+    if (mergeBase !== localRef) return false;
 
     // 5. Pull
     process.stdout.write('🔄 New version available — updating...\n');
@@ -86,7 +94,20 @@ export async function checkAndUpdate(): Promise<boolean> {
       return false;
     }
 
-    // 6. Rebuild
+    // 6. Install dependencies
+    //    When package.json is updated upstream (e.g. @anthropic-ai/sdk bumped
+    //    from ^0.82.0 to ^0.83.0), npm install will pull the new package into
+    //    node_modules.  Without this step the old version stays installed even
+    //    after git pull, and the build would use the stale package.
+    process.stdout.write('📦 Installing dependencies...\n');
+    const installed = run('npm', ['install', '--silent'], root, 120_000);
+    if (!installed) {
+      process.stdout.write('⚠️  npm install failed — rolling back.\n\n');
+      run('git', ['reset', '--hard', localRef], root);
+      return false;
+    }
+
+    // 7. Rebuild with new deps
     process.stdout.write('🔨 Building new version...\n');
     const built = run('npm', ['run', 'build', '--silent'], root, 60_000);
     if (!built) {
@@ -95,17 +116,15 @@ export async function checkAndUpdate(): Promise<boolean> {
       return false;
     }
 
-    // 7. Done — let caller print the restart banner after other startup output
+    // Done — tell the caller to show the "please restart" banner
     return true;
   } catch (err) {
-    // Surface the error so users can diagnose root causes (disk full, permission denied,
-    // compilation errors, etc.) rather than silently seeing "up to date".
     process.stderr.write(`[auto-update] Update failed unexpectedly: ${String(err)}\n`);
     return false;
   }
 }
 
-/** Print the "please restart" banner. Call after all other startup output. */
+/** Print the "please restart" banner. Called by index.ts after startup output. */
 export function printUpdateBanner(): void {
   const line = '─'.repeat(50);
   process.stdout.write(`\n${line}\n`);
