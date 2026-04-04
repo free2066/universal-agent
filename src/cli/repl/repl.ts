@@ -359,7 +359,7 @@ export async function runREPL(
     sessionLogger.close();
     const history = agent.getHistory();
     if (history.length >= 2) {
-      try { saveSnapshot(SESSION_ID, history); } catch { /* non-fatal */ }
+      try { saveSnapshot(SESSION_ID, history); } catch (err) { process.stderr.write(`[repl] Failed to save session snapshot: ${String(err)}\n`); }
     }
     if (history.length >= 4) {
       (async () => {
@@ -370,7 +370,7 @@ export async function runREPL(
           if (result.added > 0) {
             process.stdout.write(chalk.gray(`\n🌙 Dream Mode: +${result.added} insights saved to memory.\n`));
           }
-        } catch { /* non-fatal */ }
+        } catch (err) { process.stderr.write(`[repl] Memory ingest failed: ${String(err)}\n`); }
       })().finally(() => {
         clearStatusBar();
         console.log(chalk.dim('\nGoodbye!'));

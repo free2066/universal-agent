@@ -192,7 +192,10 @@ export class HookRunner {
         return { hooks: [] };
       }
       return raw as HooksConfig;
-    } catch {
+    } catch (err) {
+      // Hooks config exists but failed to parse — warn loudly so the user knows
+      // their hooks are NOT running (silent fallback to [] would be invisible).
+      console.warn(`[hooks] Failed to parse hooks config at ${this.configPath}, running without hooks. Error: ${String(err)}`);
       return { hooks: [] };
     }
   }
@@ -324,21 +327,26 @@ export class HookRunner {
     }
 
     const rawCmd = String(ctx.toolArgs?.command ?? ctx.toolArgs?.cmd ?? '');
+    // #19 Security: All user-controlled env values are shell-escaped to prevent
+    // indirect command injection when hook scripts use $HOOK_PROMPT etc.
+    // in sh -c context (e.g., `echo $HOOK_PROMPT` with malicious prompt input).
+    // shellEscape wraps values in single-quotes and escapes embedded single-quotes,
+    // neutralising ;, |, &, $(...), `...`, and newline injection.
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       HOOK_EVENT: ctx.event,
       HOOK_CWD: this.cwd,
-      HOOK_PROMPT: ctx.prompt ?? '',
-      HOOK_RESPONSE: ctx.response ?? '',
+      HOOK_PROMPT: shellEscape(ctx.prompt ?? ''),
+      HOOK_RESPONSE: shellEscape(ctx.response ?? ''),
       HOOK_TOOL_NAME: ctx.toolName ?? '',
-      HOOK_TOOL_ARGS: ctx.toolArgs ? JSON.stringify(ctx.toolArgs) : '',
+      HOOK_TOOL_ARGS: shellEscape(ctx.toolArgs ? JSON.stringify(ctx.toolArgs) : ''),
       TOOL_NAME: ctx.toolName ?? '',
-      TOOL_ARGS: ctx.toolArgs ? JSON.stringify(ctx.toolArgs) : '',
+      TOOL_ARGS: shellEscape(ctx.toolArgs ? JSON.stringify(ctx.toolArgs) : ''),
       // Shell-escaped so that $TOOL_ARGS_CMD in hook scripts cannot inject commands
       TOOL_ARGS_CMD: shellEscape(rawCmd),
-      HOOK_SLASH_CMD: ctx.slashCmd ?? '',
-      HOOK_FILE_PATH: ctx.filePath ?? '',
-      HOOK_CURRENT_VALUE: currentValue,
+      HOOK_SLASH_CMD: shellEscape(ctx.slashCmd ?? ''),
+      HOOK_FILE_PATH: shellEscape(ctx.filePath ?? ''),
+      HOOK_CURRENT_VALUE: shellEscape(currentValue),
     };
 
     try {

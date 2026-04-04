@@ -171,7 +171,11 @@ export class ModelManager {
           }
         }
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      // Model config is corrupt or missing — warn so users know their configured
+      // profiles (custom model names, API endpoints, pointers) were NOT loaded.
+      console.warn(`[model-manager] Failed to load model config from ${CONFIG_FILE}, using defaults. Error: ${String(err)}`);
+    }
   }
 
   saveToDisk() {

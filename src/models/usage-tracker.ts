@@ -88,7 +88,11 @@ export class UsageTracker {
       try {
         const fromFile = JSON.parse(readFileSync(LIMITS_FILE, 'utf-8'));
         return { ...defaults, ...fromFile };
-      } catch { /* ignore */ }
+      } catch (err) {
+        // Limits config is corrupt — fall back to defaults but warn so users know
+        // their manually configured budget caps (dailyCostLimitUSD etc.) are NOT active.
+        console.warn(`[usage-tracker] Failed to parse limits config at ${LIMITS_FILE}, using defaults. Error: ${String(err)}`);
+      }
     }
     return defaults;
   }
@@ -123,7 +127,11 @@ export class UsageTracker {
         ) {
           return raw as DailyUsage;
         }
-      } catch { /* corrupt file, start fresh */ }
+      } catch (err) {
+        // Usage file is corrupt — start fresh for today, but warn so users know
+        // accumulated token counts were lost (relevant for daily limit enforcement).
+        console.warn(`[usage-tracker] Usage file at ${path} is corrupt, resetting today's usage. Error: ${String(err)}`);
+      }
     }
     return {
       date,

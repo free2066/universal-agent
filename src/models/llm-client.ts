@@ -502,7 +502,13 @@ class GeminiClient implements LLMClient {
           const chunk = JSON.parse(line.slice(6)) as GeminiResponse;
           const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
           if (text) onChunk(text);
-        } catch { /* skip */ }
+        } catch (err) {
+          // Debug only — malformed SSE lines are expected (empty lines, keep-alive pings, etc.).
+          // Only log if it looks like non-trivial content (length > 10) to avoid log spam.
+          if (line.length > 16) {
+            process.stderr.write(`[llm-client:gemini] Failed to parse SSE chunk (${line.length} chars): ${String(err)}\n`);
+          }
+        }
       }
     }
   }
@@ -636,7 +642,13 @@ class OllamaClient implements LLMClient {
         try {
           const data = JSON.parse(line) as { message?: { content?: string } };
           if (data.message?.content) onChunk(data.message.content);
-        } catch { /* skip malformed line */ }
+        } catch (err) {
+          // Ollama may emit incomplete JSON fragments at chunk boundaries — log
+          // at debug level so operators can diagnose persistent parse failures.
+          if (line.length > 2) {
+            process.stderr.write(`[llm-client:ollama] Failed to parse chunk (${line.length} chars): ${String(err)}\n`);
+          }
+        }
       }
     }
   }

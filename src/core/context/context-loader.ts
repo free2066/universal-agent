@@ -76,8 +76,25 @@ export function loadProjectContext(startDir?: string): AgentsContext {
  *   .uagent/rules/api-style.md    — API naming and response conventions
  *   .uagent/rules/spec-standard.md — Spec document format rules
  */
+
+// Module-level cache for loadRules results.
+// Key = resolved cwd; value = { result, timestamp }.
+// TTL = 5 minutes — balances freshness vs. I/O savings.
+// Note: in normal agent usage the parent agent already builds the system prompt once
+// and shares it via setSystemPrompt(), so this cache mostly benefits edge cases where
+// loadRules() is called directly multiple times (e.g. unit tests, debug-check).
+const _rulesCache = new Map<string, { result: { content: string; sources: string[] }; ts: number }>();
+const _RULES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export function loadRules(startDir?: string): { content: string; sources: string[] } {
   const cwd = startDir || process.cwd();
+
+  // Fast path: return cached result if still fresh (5-minute TTL)
+  const cached = _rulesCache.get(cwd);
+  if (cached && Date.now() - cached.ts < _RULES_CACHE_TTL_MS) {
+    return cached.result;
+  }
+
   const rulesDir = join(cwd, '.uagent', 'rules');
   // #29: process.env.HOME || '~' is wrong — Node.js does NOT shell-expand '~'.
   // join('~', '.uagent') produces the literal string "~/.uagent", not the home dir.
@@ -112,7 +129,14 @@ export function loadRules(startDir?: string): { content: string; sources: string
   // Global rules fill in the rest
   loadFromDir(globalRulesDir);
 
-  return { content: parts.join('\n\n'), sources };
+  const result = { content: parts.join('\n\n'), sources };
+  // Write back to cache; evict oldest entry if Map grows beyond 20 keys
+  _rulesCache.set(cwd, { result, ts: Date.now() });
+  if (_rulesCache.size > 20) {
+    const oldest = _rulesCache.keys().next().value;
+    if (oldest) _rulesCache.delete(oldest);
+  }
+  return result;
 }
 
 /**

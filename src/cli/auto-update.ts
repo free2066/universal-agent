@@ -97,7 +97,10 @@ export async function checkAndUpdate(): Promise<boolean> {
 
     // 7. Done — let caller print the restart banner after other startup output
     return true;
-  } catch {
+  } catch (err) {
+    // Surface the error so users can diagnose root causes (disk full, permission denied,
+    // compilation errors, etc.) rather than silently seeing "up to date".
+    process.stderr.write(`[auto-update] Update failed unexpectedly: ${String(err)}\n`);
     return false;
   }
 }
