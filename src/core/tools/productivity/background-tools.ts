@@ -64,3 +64,31 @@ export const checkBackgroundTool: ToolRegistration = {
     return backgroundManager.check(args.task_id as string | undefined);
   },
 };
+
+export const killBashTool: ToolRegistration = {
+  definition: {
+    name: 'kill_bash',
+    description: [
+      'Terminate a running background task started by background_run.',
+      'Sends SIGTERM to the process; escalates to SIGKILL after 3 s if still alive.',
+      'Has no effect if the task has already completed or does not exist.',
+    ].join(' '),
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        task_id: {
+          type: 'string',
+          description: 'Background task ID returned by background_run.',
+        },
+      },
+      required: ['task_id'],
+    },
+  },
+  handler: async (args: Record<string, unknown>): Promise<string> => {
+    const taskId = args.task_id as string;
+    if (!taskId || typeof taskId !== 'string') {
+      return 'Error: "task_id" parameter is required.';
+    }
+    return backgroundManager.kill(taskId);
+  },
+};

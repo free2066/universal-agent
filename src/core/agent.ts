@@ -41,7 +41,7 @@ import {
 import { redisProbeTool } from './tools/productivity/redis-probe.js';
 import { databaseQueryTool } from './tools/productivity/database-query.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from './task-board.js';
-import { backgroundRunTool, checkBackgroundTool } from './tools/productivity/background-tools.js';
+import { backgroundRunTool, checkBackgroundTool, killBashTool } from './tools/productivity/background-tools.js';
 import { backgroundManager } from './background-manager.js';
 import { todoWriteTool, todoManager } from './tools/productivity/todo-tool.js';
 import {
@@ -356,7 +356,7 @@ export class AgentCore {
     reg(claimTaskFromBoardTool);
 
     // s08 — background command execution
-    regMany([backgroundRunTool, checkBackgroundTool]);
+    regMany([backgroundRunTool, checkBackgroundTool, killBashTool]);
 
     // s09/s10/s11 — teammate system
     regMany([

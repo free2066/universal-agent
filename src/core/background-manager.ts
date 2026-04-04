@@ -53,6 +53,8 @@ export interface BgNotification {
 export class BackgroundManager {
   private tasks = new Map<string, BgTask>();
   private notificationQueue: BgNotification[] = [];
+  /** Map from task_id → child process PID (for kill support) */
+  private pids = new Map<string, number>();
 
   run(command: string, cwd?: string): string {
     const id = randomBytes(4).toString('hex');
@@ -83,6 +85,8 @@ export class BackgroundManager {
       this.finalize(id, 'timeout', 'Error: Timeout (300s)');
     }, 300_000);
 
+    if (proc.pid !== undefined) this.pids.set(id, proc.pid);
+
     proc.on('close', () => {
       clearTimeout(timer);
       if (task.status === 'timeout') return; // already handled
@@ -97,6 +101,35 @@ export class BackgroundManager {
     });
 
     return `Background task ${id} started: ${command.slice(0, 80)}`;
+  }
+
+  /**
+   * Terminate a running background task by id.
+   * Sends SIGTERM first; if still alive after 3 s sends SIGKILL.
+   * Returns a status message.
+   */
+  kill(taskId: string): string {
+    const task = this.tasks.get(taskId);
+    if (!task) return `Error: Unknown task ${taskId}`;
+    if (task.status !== 'running') return `Task ${taskId} is already ${task.status} — nothing to kill.`;
+
+    const pid = this.pids.get(taskId);
+    if (pid === undefined) return `Error: No PID found for task ${taskId} (may have already exited).`;
+
+    try {
+      process.kill(pid, 'SIGTERM');
+      // Escalate to SIGKILL after 3 s if still alive
+      const sigkillTimer = setTimeout(() => {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      }, 3000);
+      // Unref so the timer does not keep the Node process alive
+      if (typeof sigkillTimer.unref === 'function') sigkillTimer.unref();
+
+      this.finalize(taskId, 'error', `Killed by user (SIGTERM sent to PID ${pid})`);
+      return `✓ Sent SIGTERM to task ${taskId} (PID ${pid}): ${task.command.slice(0, 80)}`;
+    } catch (err) {
+      return `Error killing task ${taskId}: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   private finalize(id: string, status: BgTaskStatus, result: string): void {
