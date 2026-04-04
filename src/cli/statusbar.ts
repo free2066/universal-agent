@@ -59,17 +59,26 @@ function _cols(): number {
   return process.stdout.columns ?? 80;
 }
 
+/**
+ * 绘制底部状态栏
+ *
+ * 策略：\x1b[s 保存光标 → 跳到状态栏行画 → \x1b[u 恢复光标
+ *
+ * 之前用 \x1b[s/\x1b[u 时出现状态栏叠加，是因为 spinner 用了 \x1b[1A（向上移动光标），
+ * 导致 \x1b[s 保存的位置错乱。现在 spinner 已改为单行 \r\x1b[2K 覆写（不移动光标），
+ * \x1b[s/\x1b[u 可以安全使用 —— 恢复后光标精确回到 readline 管理的位置（❯ 后面）。
+ */
 function _drawBar() {
   const row = _rows();
   if (row <= 0) return;
   _ttyWrite(
-    '\x1b[?25l'       +
-    '\x1b[s'          +
-    `\x1b[${row};1H`  +
-    '\x1b[2K'         +
-    _statusLine()     +
-    '\x1b[u'          +
-    '\x1b[?25h',
+    '\x1b[?25l'      +   // 隐藏光标（防闪烁）
+    '\x1b[s'         +   // 保存当前光标位置（readline 管理的 ❯ 后面）
+    `\x1b[${row};1H` +   // 绝对跳到最后一行（状态栏专用行）
+    '\x1b[2K'        +   // 清行
+    _statusLine()    +   // 状态栏内容
+    '\x1b[u'         +   // 恢复光标到 ❯ 后面
+    '\x1b[?25h',         // 恢复光标显示
   );
 }
 
@@ -93,7 +102,9 @@ export function initStatusBar(
   _ttyFd   = _openTTY();
 
   const scrollBottom = _rows() - 1;
+  // 设置滚动区域：第 1 行到 scrollBottom 行，保留最后一行给状态栏
   _ttyWrite(`\x1b[1;${scrollBottom}r`);
+  // 把光标定位到滚动区底部（readline 将从这里开始 prompt）
   _ttyWrite(`\x1b[${scrollBottom};1H`);
   _drawBar();
 
@@ -117,7 +128,8 @@ export function updateStatusBar(patch: Partial<StatusBarState>): void {
 export function clearStatusBar(): void {
   if (_enabled) {
     const row = _rows();
-    _ttyWrite(`\x1b[s\x1b[${row};1H\x1b[2K\x1b[u\x1b[1;${row}r`);
+    // 清除状态栏行，恢复全屏滚动区域
+    _ttyWrite(`\x1b[${row};1H\x1b[2K\x1b[1;${row}r`);
   }
   _enabled = false;
 }
