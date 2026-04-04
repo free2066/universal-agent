@@ -1,5 +1,11 @@
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import type { ToolRegistration } from '../../../models/types.js';
+
+// CWE-78 fix: use spawnSync with argument arrays instead of execSync + string interpolation.
+// Code is passed via stdin (python3 -c / node -e flags omitted in favour of stdin pipe),
+// which avoids ALL shell quoting issues entirely.
+const CODE_EXECUTE_TIMEOUT_MS = 10_000;
+const CODE_EXECUTE_MAX_BUFFER = 1024 * 1024; // 1 MB
 
 export const codeExecuteTool: ToolRegistration = {
   definition: {
@@ -39,25 +45,40 @@ export const codeExecuteTool: ToolRegistration = {
     }
 
     try {
-      let output: string;
+      let result: ReturnType<typeof spawnSync>;
 
       if (language === 'python') {
-        const escaped = code.replace(/'/g, "'\"'\"'");
-        output = execSync(`python3 -c '${escaped}'`, {
-          timeout: 10000,
+        // Pass code via stdin: echo '<code>' | python3
+        // Using spawnSync with input option avoids any shell quoting issues.
+        result = spawnSync('python3', [], {
+          input: code,
           encoding: 'utf-8',
-          maxBuffer: 1024 * 1024,
+          timeout: CODE_EXECUTE_TIMEOUT_MS,
+          maxBuffer: CODE_EXECUTE_MAX_BUFFER,
         });
       } else {
-        const escaped = code.replace(/`/g, '\\`');
-        output = execSync(`node -e \`${escaped}\``, {
-          timeout: 10000,
+        // Node.js: pass code via stdin using --input-type=module or default CJS
+        result = spawnSync('node', ['--input-type=commonjs'], {
+          input: code,
           encoding: 'utf-8',
-          maxBuffer: 1024 * 1024,
+          timeout: CODE_EXECUTE_TIMEOUT_MS,
+          maxBuffer: CODE_EXECUTE_MAX_BUFFER,
         });
       }
 
-      return { output: output.trim(), language };
+      if (result.error) {
+        return { error: result.error.message, language };
+      }
+
+      if (result.status !== 0) {
+        const stderr = (result.stderr as string ?? '').trim();
+        return {
+          error: stderr || `Process exited with code ${result.status}`,
+          language,
+        };
+      }
+
+      return { output: (result.stdout as string ?? '').trim(), language };
     } catch (err) {
       return {
         error: err instanceof Error ? err.message : String(err),

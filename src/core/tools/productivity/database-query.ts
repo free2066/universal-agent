@@ -150,14 +150,15 @@ async function runSqlite(config: DbConfig, sql: string, limit: number): Promise<
     throw new Error(`SQLite database file not found: ${file}`);
   }
 
-  // Wrap in JSON output mode
-  const escapedSql = sql.replace(/'/g, "'\\''").replace(/\n/g, ' ');
-  const limitedSql = /\bLIMIT\b/i.test(sql) ? escapedSql : `${escapedSql} LIMIT ${limit}`;
-  const cmd = `sqlite3 -json '${file}' '${limitedSql}'`;
+  // CWE-78 fix: pass SQL as a direct CLI argument — no shell interpolation.
+  // sqlite3 supports: sqlite3 [options] <file> <sql>
+  const limitedSql = /\bLIMIT\b/i.test(sql)
+    ? sql.replace(/\n/g, ' ')
+    : `${sql.replace(/\n/g, ' ')} LIMIT ${limit}`;
 
   const startMs = Date.now();
   try {
-    const { stdout } = await execFileAsync('sh', ['-c', cmd], {
+    const { stdout } = await execFileAsync('sqlite3', ['-json', file, limitedSql], {
       encoding: 'utf-8',
       timeout: DB_DEFAULT_TIMEOUT_MS,
     });
@@ -188,28 +189,22 @@ async function runPostgres(config: DbConfig, sql: string, limit: number): Promis
   const user = config.user ?? '';
   const pass = config.password ?? '';
 
+  // CWE-78 fix: pass SQL and connection info as individual CLI arguments — no shell, no interpolation.
+  // Password is passed exclusively via PGPASSWORD env var (never embedded in the command string).
   const limitedSql = /\bLIMIT\b/i.test(sql) ? sql : `${sql} LIMIT ${limit}`;
-  const escapedSql = limitedSql.replace(/'/g, "'\\''");
-
-  const connStr = `postgresql://${user}${pass ? `:${pass}` : ''}@${host}:${port}/${db}`;
-
-  // Use psql with JSON output
-  const cmd = [
-    `PGPASSWORD='${pass.replace(/'/g, "'\\''")}'`,
-    'psql',
-    `'${connStr.replace(/'/g, "'\\''")}'`,
-    '--tuples-only',
-    '--csv',
-    `--command '${escapedSql}'`,
-  ].join(' ');
+  const connStr = `postgresql://${user}@${host}:${port}/${db}`;
 
   const startMs = Date.now();
   try {
-    const { stdout } = await execFileAsync('sh', ['-c', cmd], {
-      encoding: 'utf-8',
-      timeout: DB_DEFAULT_TIMEOUT_MS,
-      env: { ...process.env as Record<string, string>, PGPASSWORD: pass },
-    });
+    const { stdout } = await execFileAsync(
+      'psql',
+      [connStr, '--tuples-only', '--csv', '--command', limitedSql],
+      {
+        encoding: 'utf-8',
+        timeout: DB_DEFAULT_TIMEOUT_MS,
+        env: { ...process.env as Record<string, string>, PGPASSWORD: pass },
+      },
+    );
     const raw = stdout.trim();
     const queryMs = Date.now() - startMs;
 
@@ -247,23 +242,23 @@ async function runMysql(config: DbConfig, sql: string, limit: number): Promise<Q
   const user = config.user ?? '';
   const pass = config.password ?? '';
 
+  // CWE-78 fix: pass all options as individual CLI arguments — no shell, no interpolation.
+  // Password is passed via --password=<pass> option (never shell-interpolated).
   const limitedSql = /\bLIMIT\b/i.test(sql) ? sql : `${sql} LIMIT ${limit}`;
-
-  const cmd = [
-    'mysql',
+  const mysqlArgs = [
     `--host=${host}`,
     `--port=${port}`,
     `--user=${user}`,
-    pass ? `--password='${pass.replace(/'/g, "'\\''")}'` : '',
-    db ? `--database=${db}` : '',
-    '--batch',         // tab-separated output
-    '--silent',
-    `--execute '${limitedSql.replace(/'/g, "'\\''")}'`,
-  ].filter(Boolean).join(' ');
+    ...(pass ? [`--password=${pass}`] : []),
+    ...(db ? [`--database=${db}`] : []),
+    '--batch',
+    '--skip-column-names',
+    '--execute', limitedSql,
+  ];
 
   const startMs = Date.now();
   try {
-    const { stdout } = await execFileAsync('sh', ['-c', cmd], {
+    const { stdout } = await execFileAsync('mysql', mysqlArgs, {
       encoding: 'utf-8',
       timeout: DB_DEFAULT_TIMEOUT_MS,
     });

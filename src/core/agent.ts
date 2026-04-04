@@ -813,7 +813,8 @@ export class AgentCore {
           // Sequential branch — write tools or single call
           for (const call of response.toolCalls) {
             if (this.verbose) {
-              const argsStr = JSON.stringify(call.arguments).slice(0, 120);
+              const TOOL_ARGS_PREVIEW_CHARS = 120;
+              const argsStr = JSON.stringify(call.arguments).slice(0, TOOL_ARGS_PREVIEW_CHARS);
               onChunk(`  → ${call.name}(${argsStr}${argsStr.length >= 120 ? '...' : ''})\n`);
             }
 
@@ -854,7 +855,8 @@ export class AgentCore {
               events?.onToolEnd?.(call.name, true, toolDurationMs);
 
               if (this.verbose) {
-                const preview = JSON.stringify(result).slice(0, 300);
+                const TOOL_RESULT_PREVIEW_CHARS = 300;
+                const preview = JSON.stringify(result).slice(0, TOOL_RESULT_PREVIEW_CHARS);
                 onChunk(`  ✓ ${preview}${preview.length === 300 ? '...' : ''}\n`);
               }
               // ── Dry-run confirmation gate (kstack article #15313) ────────────────

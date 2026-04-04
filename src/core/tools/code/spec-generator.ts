@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join, resolve } from 'path';
 import { modelManager } from '../../../models/model-manager.js';
 import { loadProjectContext, loadRules } from '../../context/context-loader.js';
+import { safeResolve } from '../../../utils/path-security.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -630,7 +631,8 @@ export async function generateSpec(
   // Save to .uagent/specs/YYYY-MM-DD-<slug>.md
   const slug = slugify(description);
   const fileName = `${today()}-${slug}.md`;
-  const filePath = join(specsDir, fileName);
+  // CWE-22 fix: use safeResolve to ensure the file stays within specsDir
+  const filePath = safeResolve(fileName, specsDir);
   writeFileSync(filePath, finalContent, { encoding: 'utf8', mode: 0o644 });
 
   return { path: filePath, content: finalContent, tasks, affectedFiles, phases, pmReview, qualityCheck };
