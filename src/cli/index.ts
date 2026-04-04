@@ -24,6 +24,7 @@ import { selfHealTool } from '../core/tools/code/self-heal.js';
 import { getRecentHistory } from '../core/memory/session-history.js';
 import { printBanner, printHelp } from './ui-enhanced.js';
 import { initStatusBar, updateStatusBar, clearStatusBar, buildStatusPrompt, printStatusBar, type ThinkingLevel } from './statusbar.js';
+import { CliSpinner, summarizeArgs } from './spinner.js';
 import { HookRunner } from '../core/hooks.js';
 
 // Load env — ~/.uagent/.env is the primary config store (override: true so it
@@ -1920,31 +1921,53 @@ async function runREPL(
         console.log(chalk.gray('  (Image context attached to this request)'));
       }
 
-      const SPIN_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
-      const SPIN_DOTS   = ['   ','·  ','·· ','···'];
-      let spinIdx = 0;
-      let dotIdx  = 0;
-      let firstChunk = true;
-      let charCount = 0;
+      // ── CliSpinner — 精美工具调用展示（对齐 claude-code 风格）─────────────────
+      const spinner = new CliSpinner();
+      // toolIndex 映射：toolName+callIdx → spinner 行索引（支持并发同名工具）
+      let toolCallSeq = 0;
+      const toolIndexMap = new Map<string, number>();
+
       updateStatusBar({ isThinking: 'low' });
       rl.setPrompt(makePrompt(options.domain));
-      const spinTimer = setInterval(() => {
-        const frame = chalk.hex('#a78bfa')(SPIN_FRAMES[spinIdx++ % SPIN_FRAMES.length]);
-        const dots  = chalk.dim(SPIN_DOTS[dotIdx++ % SPIN_DOTS.length]);
-        process.stdout.write(`\r${frame} ${chalk.dim('Thinking')}${dots}   `);
-      }, 100);
 
-      process.stdout.write('\n');
-      await agent.runStream(finalInput, (chunk) => {
-        if (firstChunk) {
-          clearInterval(spinTimer);
-          process.stdout.write('\r\x1b[2K');
-          firstChunk = false;
-        }
-        process.stdout.write(chunk);
-        charCount += chunk.length;
-      });
-      clearInterval(spinTimer);
+      // 先输出一个空行，然后启动 spinner（start() 内部会再输出一个占位换行）
+      spinner.start('thinking');
+
+      let firstChunk = true;
+      let charCount = 0;
+      await agent.runStream(
+        finalInput,
+        (chunk) => {
+          if (firstChunk) {
+            // 首个 chunk 到来：停止 spinner，打印响应分隔线，切换状态
+            spinner.stop();
+            process.stdout.write(chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))) + '\n');
+            updateStatusBar({ isThinking: 'medium' });
+            firstChunk = false;
+          }
+          process.stdout.write(chunk);
+          charCount += chunk.length;
+        },
+        {
+          onToolStart: (name, args) => {
+            // 切换 spinner 到 tool-use 模式，并添加工具行
+            spinner.setMode('tool-use', 'Using tools');
+            const key = `${name}-${toolCallSeq++}`;
+            const idx = spinner.addToolLine(name, summarizeArgs(args));
+            toolIndexMap.set(key, idx);
+            // 将最近一次 key 存为 name 的映射（简单方案：后者覆盖前者）
+            toolIndexMap.set(name, idx);
+            updateStatusBar({ isThinking: 'medium' });
+          },
+          onToolEnd: (name, success, durationMs) => {
+            const idx = toolIndexMap.get(name) ?? -1;
+            if (idx >= 0) {
+              spinner.updateToolLine(idx, success ? 'done' : 'error', durationMs);
+            }
+          },
+        },
+      );
+      spinner.stop();
       if (!firstChunk && charCount > 0) {
         process.stdout.write('\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80))));
       }

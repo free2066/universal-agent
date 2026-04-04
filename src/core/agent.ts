@@ -83,6 +83,21 @@ import { selectTools } from './tool-selector.js';
 
 const log = createLogger('agent');
 
+/**
+ * AgentEvents — CLI 层感知工具调用生命周期的回调接口
+ *
+ * 由 runStream() 第三参数传入，CLI 侧（index.ts）用来驱动 CliSpinner 的
+ * 工具调用行追踪，替代原来只在 verbose=true 时打印 onChunk 的方式。
+ */
+export interface AgentEvents {
+  /** 工具调用开始时触发 */
+  onToolStart?: (name: string, args: Record<string, unknown>) => void;
+  /** 工具调用完成时触发（success=false 表示抛异常）*/
+  onToolEnd?: (name: string, success: boolean, durationMs: number) => void;
+  /** LLM 开始输出文本（首个 text chunk 到来）时触发 */
+  onResponseStart?: () => void;
+}
+
 export interface AgentOptions {
   domain: string;
   model: string;
@@ -359,13 +374,14 @@ export class AgentCore {
 
   async run(prompt: string, filePath?: string): Promise<string> {
     const chunks: string[] = [];
-    await this.runStream(prompt, (chunk) => chunks.push(chunk), filePath);
+    await this.runStream(prompt, (chunk) => chunks.push(chunk), undefined, filePath);
     return chunks.join('');
   }
 
   async runStream(
     prompt: string,
     onChunk: (chunk: string) => void,
+    events?: AgentEvents,
     filePath?: string
   ): Promise<void> {
     // Persist prompt to history file (~/.uagent/history.jsonl)
@@ -670,6 +686,8 @@ export class AgentCore {
       }
 
       if (response.type === 'tool_calls') {
+        // 工具调用开始 — 通知 CLI 层切换到 tool-use 模式
+        // （events 回调由 index.ts 的 CliSpinner 消费，verbose 模式下仍输出原始文本）
         if (this.verbose) {
           onChunk(`\n🔧 Tools: ${response.toolCalls.map((t) => t.name).join(', ')}\n`);
         }
@@ -687,7 +705,11 @@ export class AgentCore {
             onChunk(`  → ${call.name}(${argsStr}${argsStr.length >= 120 ? '...' : ''})\n`);
           }
 
+          // 通知 CLI：工具调用即将开始
+          events?.onToolStart?.(call.name, call.arguments as Record<string, unknown>);
+
           const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          const toolStartMs = Date.now();
           await triggerHook(createHookEvent('tool', 'before', {
             callId,
             toolName: call.name,
@@ -698,6 +720,8 @@ export class AgentCore {
               () => this.registry.execute(call.name, call.arguments),
               call.name,
             );
+
+            const toolDurationMs = Date.now() - toolStartMs;
 
             // Conditional lazy tool loading (Harness Engineering — kstack #15309):
             // After each tool execution, evaluate whether new tools should be unlocked.
@@ -713,6 +737,10 @@ export class AgentCore {
               toolName: call.name,
               success: true,
             }));
+
+            // 通知 CLI：工具调用成功完成
+            events?.onToolEnd?.(call.name, true, toolDurationMs);
+
             if (this.verbose) {
               const preview = JSON.stringify(result).slice(0, 300);
               onChunk(`  ✓ ${preview}${preview.length === 300 ? '...' : ''}\n`);
@@ -780,12 +808,15 @@ export class AgentCore {
               content: resultStr,
             });
           } catch (err) {
+            const toolDurationMsErr = Date.now() - toolStartMs;
             await triggerHook(createHookEvent('tool', 'error', {
               callId,
               toolName: call.name,
               error: err instanceof Error ? err.message : String(err),
               success: false,
             }));
+            // 通知 CLI：工具调用失败
+            events?.onToolEnd?.(call.name, false, toolDurationMsErr);
             toolResults.push({
               role: 'tool',
               toolCallId: call.id,
