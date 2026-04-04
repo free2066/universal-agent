@@ -188,9 +188,10 @@ function _statusLine(): string {
 function _thinkingPart(t: ThinkingLevel): string | null {
   const bg = chalk.bgHex('#1e1b4b');
   if (t === false || t === 'none') return null;
-  if (t === true  || t === 'low')  return bg.dim('thinking…');
-  if (t === 'medium')              return bg.yellow('thinking…');
-  if (t === 'high')                return bg.magenta('thinking…');
+  if (t === true)                  return bg.dim('🧠 thinking: low');
+  if (t === 'low')                 return bg.cyan('🧠 thinking: low');
+  if (t === 'medium')              return bg.yellow('🧠 thinking: medium');
+  if (t === 'high')                return bg.magenta('🧠 thinking: high');
   return null;
 }
 

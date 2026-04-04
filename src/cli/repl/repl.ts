@@ -125,11 +125,11 @@ export async function runREPL(
     if (key.ctrl && key.name === 't') {
       _thinkingIdx = (_thinkingIdx + 1) % THINKING_CYCLE.length;
       const level = THINKING_CYCLE[_thinkingIdx];
-      const display = level ?? 'off';
       try { agent.setThinkingLevel(level); } catch { /* not supported */ }
-      process.stdout.write(
-        '\r\x1b[2K' + chalk.yellow(`  🧠 Thinking: ${display}`) + '\n',
-      );
+      // Update status bar: show thinking level inline (e.g. "thinking: low")
+      // Use updateStatusBar so the level is visible in the bottom bar,
+      // not as a new line printed into the content area.
+      updateStatusBar({ isThinking: (level ?? false) as import('../statusbar.js').ThinkingLevel });
       rl.prompt(); printStatusBar();
       return;
     }
