@@ -1949,7 +1949,8 @@ async function runREPL(
 
       updateStatusBar({ isThinking: 'low' });
 
-      // start() 内部会写一个 \n 将 spinner 与 prompt 分隔
+      // 注意：index.ts 第 1891 行已有 process.stdout.write('\n')，
+      // spinner.start() 自身不再额外写 \n，避免多余空行
       spinner.start('thinking');
 
       let firstChunk = true;   // 是否还没收到第一个文本 chunk
@@ -2008,13 +2009,11 @@ async function runREPL(
 
       // ── runStream 结束，清理收尾 ────────────────────────────────────────────
       if (firstChunk) {
-        // 整个 turn 没有文本输出（纯工具调用，或工具全部失败后 LLM 没有文本）
-        // 保留工具行静态展示，然后换行
+        // 整个 turn 没有文本输出（纯工具调用）：保留工具行，补一个换行
         spinner.stop(true);
-        process.stdout.write('\n');
       } else {
-        // 有文本输出：spinner 已在首 chunk 时 stop(true)，补打结尾分隔线
-        spinner.stop(false); // 防止还有残留（正常不会，保险起见）
+        // 有文本输出：spinner 已在首 chunk 时 stop(true)，现在只需确保清掉残留
+        spinner.stop(false);
         if (charCount > 0) {
           process.stdout.write(
             '\n' + chalk.dim('─'.repeat(Math.min(process.stdout.columns ?? 80, 80)))
@@ -2027,7 +2026,7 @@ async function runREPL(
         updateStatusBar({ isThinking: 'none', estimatedTokens: est });
         rl.setPrompt(makePrompt(options.domain));
       } catch { updateStatusBar({ isThinking: 'none' }); rl.setPrompt(makePrompt(options.domain)); }
-      process.stdout.write('\n\n');
+      process.stdout.write('\n');
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isAuthError =
