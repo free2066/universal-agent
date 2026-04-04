@@ -320,14 +320,16 @@ describe('11. config-store tools field', () => {
 // ─── 12. /mcp slash handler ──────────────────────────────────────────────────
 
 describe('12. /mcp slash handler', () => {
-  it('slash-handlers.ts has /mcp handler', () => {
-    const src = readFileSync(join(PKG_ROOT, 'src/cli/repl/slash-handlers.ts'), 'utf-8');
-    expect(src).toContain("input === '/mcp'");
+  // slash-handlers.ts is now a forwarding shim; actual implementation lives in handlers/
+  const handlersSrc = readFileSync(join(PKG_ROOT, 'src/cli/repl/handlers/index.ts'), 'utf-8');
+  const toolHandlersSrc = readFileSync(join(PKG_ROOT, 'src/cli/repl/handlers/tool-handlers.ts'), 'utf-8');
+
+  it('handlers/index.ts has /mcp route', () => {
+    expect(handlersSrc).toContain("input === '/mcp'");
   });
 
   it('/mcp handler calls agent.getMcpInfo()', () => {
-    const src = readFileSync(join(PKG_ROOT, 'src/cli/repl/slash-handlers.ts'), 'utf-8');
-    expect(src).toContain('getMcpInfo()');
+    expect(toolHandlersSrc).toContain('getMcpInfo()');
   });
 
   it('repl.ts SLASH_COMPLETIONS includes /mcp', () => {
