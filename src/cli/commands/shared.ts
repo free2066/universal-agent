@@ -18,9 +18,20 @@ export function validateDomain(domain: string): void {
 
 export function validateModel(model: string): void {
   const knownPrefixes = [
-    'gpt-', 'o1', 'o3', 'o4', 'claude-', 'gemini-', 'deepseek', 'moonshot',
-    'kimi', 'qwen', 'qwq', 'mistral', 'mixtral', 'ollama:', 'groq:',
-    'siliconflow:', 'openrouter:',
+    // OpenAI
+    'gpt-', 'o1', 'o3', 'o4',
+    // Anthropic
+    'claude-',
+    // Google
+    'gemini-',
+    // DeepSeek / Moonshot / Qwen
+    'deepseek', 'moonshot', 'kimi', 'qwen', 'qwq',
+    // Mistral
+    'mistral', 'mixtral',
+    // Prefixed providers
+    'ollama:', 'groq:', 'siliconflow:', 'openrouter:',
+    // 万擎 (Kuaishou internal) — format: "wanqing/<model-id>"
+    'wanqing/',
   ];
   const isKnown = knownPrefixes.some((p) => model.startsWith(p));
   if (!isKnown) {
@@ -29,7 +40,7 @@ export function validateModel(model: string): void {
     if (!isRegistered) {
       console.error(chalk.red(`\n✗ Unknown model: "${model}"`));
       console.error(chalk.yellow(`  Run: uagent models list  — to see available models`));
-      console.error(chalk.gray(`  Or use a known prefix: gpt-*, claude-*, gemini-*, deepseek*, qwen*, ollama:<name>`));
+      console.error(chalk.gray(`  Or use a known prefix: gpt-*, claude-*, gemini-*, deepseek*, wanqing/*, ollama:<name>`));
       process.exit(1);
     }
   }

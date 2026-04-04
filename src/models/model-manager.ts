@@ -42,6 +42,9 @@ const CONFIG_FILE = resolve(CONFIG_DIR, 'models.json');
  * the if-chain in multiple places inside the class.
  */
 function inferProviderFromModelName(modelName: string): ModelProfile['provider'] {
+  // 万擎 (Kuaishou internal) — format: "wanqing/<model-id>"
+  // Uses OpenAI-compatible API with WQ_API_KEY + OPENAI_BASE_URL
+  if (modelName.startsWith('wanqing/'))                                         return 'custom';
   if (modelName.startsWith('claude'))                                          return 'anthropic';
   if (modelName.startsWith('gemini'))                                          return 'gemini';
   if (modelName.startsWith('deepseek'))                                        return 'deepseek';
