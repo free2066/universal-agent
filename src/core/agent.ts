@@ -754,20 +754,26 @@ export class AgentCore {
           systemPrompt,
           messages: this.history,
           tools,
-          stream: false,
+          stream: true,
           thinkingLevel: this._thinkingLevel,
         };
         // ── API Rate-limit Retry (kstack #15375: AGENT_UNATTENDED_RETRY) ──────────
         // Wrap LLM calls with 429/529 rate-limit back-pressure retry.
         // In unattended mode (AGENT_UNATTENDED_RETRY=1): retry every 30s up to 6h.
         // In normal mode: fail fast (let outer error handling deal with it).
+        //
+        // ── Streaming (unified): use streamChat() exclusively ──────────────────
+        // streamChat() now returns a full ChatResponse (including tool_calls) while
+        // also calling onChunk() for each text delta in real-time. This replaces
+        // the previous chat() + one-shot onChunk(content) pattern that caused
+        // the "black box" UX (user sees nothing until the full response arrives).
         response = this.fallbackChain
           ? await withApiRateLimitRetry(
-              () => this.fallbackChain?.call(this._getLLM(), chatOpts) ?? this._getLLM().chat(chatOpts),
+              () => this.fallbackChain!.callStream(this._getLLM(), chatOpts, onChunk),
               (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
             )
           : await withApiRateLimitRetry(
-              () => this._getLLM().chat(chatOpts),
+              () => this._getLLM().streamChat(chatOpts, onChunk),
               (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
             );
         lastLLMCallAt = Date.now();
@@ -805,6 +811,8 @@ export class AgentCore {
         // Confidence mechanism (kstack article #15310):
         // Collect lines tagged with [UNCERTAIN] or ⚠️ so we can surface them
         // as a "pending confirmation" list at the end of the response.
+        // NOTE: Content is already streamed to the user via onChunk() inside
+        // streamChat() — we do NOT call onChunk(content) here again.
         const uncertainPattern = /\[UNCERTAIN\]|⚠️\s*\[UNCERTAIN\]/gi;
         const lines = content.split('\n');
         for (const line of lines) {
@@ -812,8 +820,6 @@ export class AgentCore {
             this.uncertainItems.push(line.trim().replace(/^[\-*>]+\s*/, ''));
           }
         }
-
-        onChunk(content);
 
         // Surface uncertain items as a confirmation checklist
         if (this.uncertainItems.length > 0) {

@@ -114,13 +114,72 @@ export class ModelFallbackChain {
   }
 
   /**
+   * Stream version of call(): calls primary.streamChat() first; on failure,
+   * tries each fallback model in order. Text chunks are forwarded to onChunk
+   * in real-time. Returns a full ChatResponse (including tool_calls) on completion.
+   */
+  async callStream(
+    primary: LLMClient,
+    options: ChatOptions,
+    onChunk: (chunk: string) => void,
+  ): Promise<ChatResponse> {
+    if (primaryCircuitOpen) {
+      log.warn(`Primary model circuit open (529 overload) — routing directly to fallbacks (stream)`);
+      return this._tryFallbacksStream(options, onChunk, new Error('Primary circuit open: 529 overload'));
+    }
+
+    try {
+      const response = await primary.streamChat(options, onChunk);
+      if (consecutive529Failures > 0) {
+        log.info(`Primary model recovered after ${consecutive529Failures} 529 failures`);
+        consecutive529Failures = 0;
+      }
+      return response;
+    } catch (err) {
+      if (isFallbackUseless(err)) {
+        log.warn(`Primary model error is non-fallbackable (stream): ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
+      if (is529Error(err)) {
+        consecutive529Failures++;
+        if (consecutive529Failures >= MAX_529_FAILURES) {
+          primaryCircuitOpen = true;
+          log.warn(`Primary model circuit breaker OPENED after ${consecutive529Failures} consecutive 529 errors.`);
+        }
+      }
+      return this._tryFallbacksStream(options, onChunk, err);
+    }
+  }
+
+  private async _tryFallbacksStream(
+    options: ChatOptions,
+    onChunk: (chunk: string) => void,
+    primaryErr: unknown,
+  ): Promise<ChatResponse> {
+    const createClient: (modelName: string) => LLMClient = this.clientFactory ?? _createLLMClient;
+    let lastErr: unknown = primaryErr;
+    for (let i = 0; i < this.fallbackModels.length; i++) {
+      const modelName = this.fallbackModels[i];
+      log.info(`Fallback stream ${i + 1}/${this.fallbackModels.length}: trying ${modelName}`);
+      try {
+        const client = createClient(modelName);
+        const response = await client.streamChat(options, onChunk);
+        log.info(`Fallback stream succeeded with ${modelName}`);
+        return response;
+      } catch (err) {
+        log.warn(`Fallback stream ${modelName} failed: ${err instanceof Error ? err.message : String(err)}`);
+        lastErr = err;
+      }
+    }
+    throw new Error(
+      `All models failed (primary + ${this.fallbackModels.length} fallbacks). Last error: ${
+        lastErr instanceof Error ? (lastErr as Error).message : String(lastErr)
+      }`,
+    );
+  }
+
+  /**
    * Call the primary LLM client; on failure, try each fallback model in order.
-   * NOTE: Only wraps `chat()`. Streaming (`streamChat`) is NOT covered by this
-   * fallback chain — if streaming support is needed in the future, add a
-   * `callStream(primary, options, onChunk)` method here.
-   *
-   * TODO: Implement callStream() for streaming fallback when agent.ts enables
-   *       the `stream: true` path.
    */
   async call(primary: LLMClient, options: ChatOptions): Promise<ChatResponse> {
     // ── 529 circuit breaker (kstack article #15375) ──────────────────────────

@@ -105,7 +105,13 @@ export type ChatResponse =
 
 export interface LLMClient {
   chat(options: ChatOptions): Promise<ChatResponse>;
-  streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void>;
+  /**
+   * Stream the LLM response, calling onChunk for each text delta.
+   * Also accumulates any tool_calls and returns a full ChatResponse on completion.
+   * This allows the agent loop to use streamChat() exclusively — text is streamed
+   * to the user in real-time while tool_calls are still available for the agent.
+   */
+  streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse>;
 }
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;

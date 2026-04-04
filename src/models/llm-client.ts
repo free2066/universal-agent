@@ -247,9 +247,10 @@ class OpenAIClient implements LLMClient {
     return { type: 'text', content: msg.content || '' };
   }
 
-  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     return withInferenceTimeout(this.model, async (signal) => {
       const messages = this.convertMessages(options);
+      const hasTools = (options.tools?.length ?? 0) > 0;
       const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
       const extraOpts: Record<string, unknown> = {};
       if (options.thinkingLevel && isReasoning) {
@@ -268,13 +269,66 @@ class OpenAIClient implements LLMClient {
           messages,
           stream: true,
           ...extraOpts,
+          // Include tools so the model can return tool_calls via streaming
+          ...(hasTools ? {
+            tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
+            tool_choice: 'auto' as const,
+          } : {}),
         } as OpenAI.ChatCompletionCreateParamsStreaming,
         { signal },
       )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+
+      // Accumulate text and tool_calls across all chunks
+      let textContent = '';
+      // tool call accumulator: index → {id, name, args}
+      const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content;
-        if (delta) onChunk(delta);
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) continue;
+
+        // Stream text content to the caller in real-time
+        if (delta.content) {
+          onChunk(delta.content);
+          textContent += delta.content;
+        }
+
+        // Accumulate tool_calls (streamed as partial function argument strings)
+        const toolCallDeltas = (delta as { tool_calls?: Array<{
+          index: number;
+          id?: string;
+          function?: { name?: string; arguments?: string };
+        }> }).tool_calls;
+        if (toolCallDeltas) {
+          for (const tc of toolCallDeltas) {
+            if (!toolCallMap.has(tc.index)) {
+              toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
+            } else {
+              // Patch id/name if they arrive in a later chunk
+              const entry = toolCallMap.get(tc.index)!;
+              if (tc.id) entry.id = tc.id;
+              if (tc.function?.name) entry.name = tc.function.name;
+            }
+            if (tc.function?.arguments) {
+              toolCallMap.get(tc.index)!.args += tc.function.arguments;
+            }
+          }
+        }
       }
+
+      // If any tool_calls were accumulated, return them
+      if (toolCallMap.size > 0) {
+        const toolCalls = Array.from(toolCallMap.entries())
+          .sort((a, b) => a[0] - b[0])
+          .map(([, tc]) => ({
+            id: tc.id,
+            name: tc.name,
+            arguments: safeParseJSON(tc.args, tc.name),
+          }));
+        return { type: 'tool_calls', content: textContent, toolCalls };
+      }
+
+      return { type: 'text', content: textContent };
     });
   }
 
@@ -354,7 +408,7 @@ class DeepSeekClient extends OpenAIClient {
     return super.chat(options);
   }
 
-  override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+  override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     const isReasoner = this.model.includes('reasoner') || this.model.includes('r1');
     if (isReasoner && options.thinkingLevel) {
       return withInferenceTimeout(this.model, async (signal) => {
@@ -367,10 +421,12 @@ class DeepSeekClient extends OpenAIClient {
           } as OpenAI.ChatCompletionCreateParamsStreaming,
           { signal },
         )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+        let textContent = '';
         for await (const chunk of stream) {
           const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
-          if (delta?.content) onChunk(delta.content);
+          if (delta?.content) { onChunk(delta.content); textContent += delta.content; }
         }
+        return { type: 'text', content: textContent };
       });
     }
     return super.streamChat(options, onChunk);
@@ -409,7 +465,7 @@ class QwenClient extends OpenAIClient {
     return /^qwen3|qwq/i.test(this.model);
   }
 
-  override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+  override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     if (this.isThinkingCapable() && options.thinkingLevel) {
       return withInferenceTimeout(this.model, async (signal) => {
         const messages = this.convertMessages(options);
@@ -422,10 +478,12 @@ class QwenClient extends OpenAIClient {
           } as OpenAI.ChatCompletionCreateParamsStreaming,
           { signal },
         )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
+        let textContent = '';
         for await (const chunk of stream) {
           const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
-          if (delta?.content) onChunk(delta.content);
+          if (delta?.content) { onChunk(delta.content); textContent += delta.content; }
         }
+        return { type: 'text', content: textContent };
       });
     }
     return super.streamChat(options, onChunk);
@@ -521,12 +579,13 @@ class AnthropicClient implements LLMClient {
     return { type: 'text', content: textBlocks.map((b) => b.text).join('') };
   }
 
-  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     return withInferenceTimeout(this.model, async (_signal) => {
       // Note: Anthropic SDK uses its own internal AbortController; we can't inject
       // our signal directly into messages.stream(). The outer withInferenceTimeout
       // will still abort after the TTL by throwing, which unwinds the for-await loop.
       const messages = this.convertMessages(options.messages);
+      const hasTools = (options.tools?.length ?? 0) > 0;
       const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
       const thinking = options.thinkingLevel;
       const budgets: Record<string, number> = {
@@ -545,13 +604,56 @@ class AnthropicClient implements LLMClient {
           thinking: { type: 'enabled', budget_tokens: budgetTokens },
           betas: ['interleaved-thinking-2025-05-14'],
         } : {}),
+        ...(hasTools ? {
+          tools: options.tools!.map((t) => ({
+            name: t.name,
+            description: t.description,
+            input_schema: t.parameters as Anthropic.Tool['input_schema'],
+          })),
+        } : {}),
       } as Parameters<typeof this.client.messages.stream>[0]);
+
+      let textContent = '';
+      // Accumulate tool_use blocks from Anthropic streaming
+      const toolUseBlocks: Array<{ id: string; name: string; inputJson: string }> = [];
+      let currentToolUseIdx = -1;
+
       for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-          onChunk(event.delta.text);
+        if (event.type === 'content_block_start') {
+          if ((event.content_block as { type: string }).type === 'tool_use') {
+            const tb = event.content_block as { type: string; id: string; name: string };
+            currentToolUseIdx = toolUseBlocks.length;
+            toolUseBlocks.push({ id: tb.id, name: tb.name, inputJson: '' });
+          }
+        } else if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'text_delta') {
+            onChunk(event.delta.text);
+            textContent += event.delta.text;
+          } else if ((event.delta as { type: string; partial_json?: string }).type === 'input_json_delta') {
+            const partialJson = (event.delta as { type: string; partial_json?: string }).partial_json ?? '';
+            if (currentToolUseIdx >= 0 && toolUseBlocks[currentToolUseIdx]) {
+              toolUseBlocks[currentToolUseIdx]!.inputJson += partialJson;
+            }
+          }
+        } else if (event.type === 'content_block_stop') {
+          currentToolUseIdx = -1;
         }
         // thinking_delta — we don't stream it to user, but it still counts toward context
       }
+
+      if (toolUseBlocks.length > 0) {
+        return {
+          type: 'tool_calls',
+          content: textContent,
+          toolCalls: toolUseBlocks.map((tb) => ({
+            id: tb.id,
+            name: tb.name,
+            arguments: safeParseJSON(tb.inputJson, tb.name),
+          })),
+        };
+      }
+
+      return { type: 'text', content: textContent };
     });
   }
 
@@ -636,7 +738,7 @@ class GeminiClient implements LLMClient {
     return this.parseResponse(data);
   }
 
-  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     return withInferenceTimeout(this.model, async (signal) => {
       const body = this.buildRequest(options);
       const url = `${this.baseURL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
@@ -653,6 +755,8 @@ class GeminiClient implements LLMClient {
 
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
+      let textContent = '';
+      const toolCallsAccum: GeminiPart[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -662,8 +766,11 @@ class GeminiClient implements LLMClient {
           if (!line.startsWith('data: ')) continue;
           try {
             const chunk = JSON.parse(line.slice(6)) as GeminiResponse;
-            const text = chunk.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (text) onChunk(text);
+            const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+            for (const part of parts) {
+              if (part.text) { onChunk(part.text); textContent += part.text; }
+              if (part.functionCall) toolCallsAccum.push(part);
+            }
           } catch (err) {
             // Debug only — malformed SSE lines are expected (empty lines, keep-alive pings, etc.).
             // Only log if it looks like non-trivial content (length > 10) to avoid log spam.
@@ -673,6 +780,21 @@ class GeminiClient implements LLMClient {
           }
         }
       }
+
+      if (toolCallsAccum.length > 0) {
+        const callIdBase = `gemini-call-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        return {
+          type: 'tool_calls',
+          content: textContent,
+          toolCalls: toolCallsAccum.map((p, idx) => ({
+            id: `${callIdBase}-${idx}`,
+            name: p.functionCall!.name,
+            arguments: p.functionCall!.args as Record<string, unknown>,
+          })),
+        };
+      }
+
+      return { type: 'text', content: textContent };
     });
   }
 
@@ -783,7 +905,7 @@ class OllamaClient implements LLMClient {
     return { type: 'text', content: data.message?.content || '' };
   }
 
-  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     return withInferenceTimeout(this.model, async (signal) => {
       const messages = this.convertMessages(options.messages, options.systemPrompt);
 
@@ -797,6 +919,7 @@ class OllamaClient implements LLMClient {
       if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
+      let textContent = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -805,7 +928,7 @@ class OllamaClient implements LLMClient {
         for (const line of lines) {
           try {
             const data = JSON.parse(line) as { message?: { content?: string } };
-            if (data.message?.content) onChunk(data.message.content);
+            if (data.message?.content) { onChunk(data.message.content); textContent += data.message.content; }
           } catch (err) {
             // Ollama may emit incomplete JSON fragments at chunk boundaries — log
             // at debug level so operators can diagnose persistent parse failures.
@@ -815,6 +938,8 @@ class OllamaClient implements LLMClient {
           }
         }
       }
+
+      return { type: 'text', content: textContent };
     });
   }
 
@@ -934,17 +1059,39 @@ class OpenRouterClient implements LLMClient {
     };
   }
 
-  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<void> {
+  async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     return withInferenceTimeout(this.model, async (signal) => {
+      const hasTools = (options.tools?.length ?? 0) > 0;
       const messages = this.convertMessages(options);
       const stream = await this.client.chat.completions.create(
-        { model: this.model, messages, stream: true },
+        {
+          model: this.model, messages, stream: true,
+          ...(hasTools ? {
+            tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
+            tool_choice: 'auto' as const,
+          } : {}),
+        },
         { signal },
       );
+      let textContent = '';
+      const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content;
-        if (delta) onChunk(delta);
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) continue;
+        if (delta.content) { onChunk(delta.content); textContent += delta.content; }
+        const tcDeltas = (delta as { tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }).tool_calls;
+        if (tcDeltas) {
+          for (const tc of tcDeltas) {
+            if (!toolCallMap.has(tc.index)) toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
+            else { const e = toolCallMap.get(tc.index)!; if (tc.id) e.id = tc.id; if (tc.function?.name) e.name = tc.function.name; }
+            if (tc.function?.arguments) toolCallMap.get(tc.index)!.args += tc.function.arguments;
+          }
+        }
       }
+      if (toolCallMap.size > 0) {
+        return { type: 'tool_calls', content: textContent, toolCalls: Array.from(toolCallMap.entries()).sort((a,b) => a[0]-b[0]).map(([,tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) })) };
+      }
+      return { type: 'text', content: textContent };
     });
   }
 
