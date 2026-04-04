@@ -120,8 +120,15 @@ export function createLLMClient(model: string): LLMClient {
     return new OpenAICompatClient(model.replace('openai-compat:', ''));
   }
 
-  // 万擎 (Wanqing) internal API — model IDs start with 'ep-' or 'api-'
+  // 万擎 (Wanqing) internal API — format: "wanqing/<model-id>" or bare "ep-*"/"api-*"
+  // Strip the "wanqing/" namespace prefix before sending to the API.
   // Uses WQ_API_KEY + OPENAI_BASE_URL from env.
+  if (model.startsWith('wanqing/')) {
+    const actualModel = model.slice('wanqing/'.length); // e.g. "claude-4.6-sonnet"
+    const key = process.env.WQ_API_KEY ?? process.env.OPENAI_API_KEY;
+    const base = process.env.OPENAI_BASE_URL;
+    return new OpenAIClient(actualModel, key, base);
+  }
   if (model.startsWith('ep-') || model.startsWith('api-') || model.startsWith('wanqing-')) {
     const key = process.env.WQ_API_KEY ?? process.env.OPENAI_API_KEY;
     const base = process.env.OPENAI_BASE_URL;

@@ -228,7 +228,10 @@ export class ModelManager {
         case 'groq':        return `groq:${profile.modelName}`;
         case 'siliconflow': return `siliconflow:${profile.modelName}`;
         case 'openrouter':  return `openrouter:${profile.modelName}`;
-        case 'custom':      return `openai-compat:${profile.modelName}`;
+        case 'custom':
+          // 万擎 models use "wanqing/" prefix — pass as-is so createLLMClient strips the prefix
+          if (profile.modelName.startsWith('wanqing/')) return profile.modelName;
+          return `openai-compat:${profile.modelName}`;
         default:            return profile.modelName; // openai / anthropic
       }
     })();
