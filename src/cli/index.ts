@@ -67,17 +67,35 @@ program
   .option('--language <lang>', 'Response language (e.g. Chinese, English)')
   .option('--cwd <path>', 'Set working directory')
   .option('--approval-mode <mode>', 'Approval mode: default | autoEdit | yolo')
+  .option('--tools <json>', 'Disable specific tools as JSON, e.g. \'{"bash":false,"write":false}\'')
   .action(async (promptArg: string | undefined, options: {
     domain: string; model?: string; quiet?: boolean; continue?: boolean;
     safe: boolean; verbose?: boolean; systemPrompt?: string;
     appendSystemPrompt?: string; thinking?: string; outputFormat?: string;
-    language?: string; cwd?: string; approvalMode?: string;
+    language?: string; cwd?: string; approvalMode?: string; tools?: string;
   }) => {
     if (options.cwd) process.chdir(options.cwd);
     validateDomain(options.domain);
 
     // ── Read config defaults (CLI flags take precedence over config file) ──
     const cfg = loadConfig();
+
+    // ── Resolve tools disable map ──────────────────────────────────────────
+    // Priority: CLI --tools > project config.tools > global config.tools
+    // loadConfig() already merges project + global (project wins), so cfg.tools
+    // represents the merged baseline; CLI --tools is applied on top.
+    let resolvedDisabledTools: Record<string, boolean> | undefined = cfg.tools;
+    if (options.tools) {
+      let cliTools: Record<string, boolean>;
+      try {
+        cliTools = JSON.parse(options.tools);
+      } catch {
+        console.error(`Invalid --tools JSON: ${options.tools}`);
+        process.exit(1);
+      }
+      // Merge: CLI overrides config (CLI wins for same keys)
+      resolvedDisabledTools = { ...(cfg.tools ?? {}), ...cliTools };
+    }
 
     // Model: CLI flag > config file > auto-select
     // Note: wanqing/* model names in config are CodeFlicker-internal service-discovery IDs.
@@ -109,6 +127,7 @@ program
         appendSystemPrompt: options.appendSystemPrompt,
         thinkingLevel: resolvedThinkingLevel,
         approvalMode: resolvedApprovalMode as 'default' | 'autoEdit' | 'yolo',
+        disabledTools: resolvedDisabledTools,
       });
       await agent.initMCP().catch(() => {});
       let finalPrompt = promptArg;
@@ -132,6 +151,7 @@ program
       appendSystemPrompt: options.appendSystemPrompt,
       thinkingLevel: resolvedThinkingLevel,
       approvalMode: resolvedApprovalMode as 'default' | 'autoEdit' | 'yolo',
+      disabledTools: resolvedDisabledTools,
     });
     await agent.initMCP().catch(() => {});
     await runREPL(agent, options, {

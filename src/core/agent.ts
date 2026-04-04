@@ -148,6 +148,13 @@ export interface AgentOptions {
   thinkingLevel?: import('../models/types.js').ThinkingLevel;
   /** Approval mode: 'default' | 'autoEdit' | 'yolo' */
   approvalMode?: 'default' | 'autoEdit' | 'yolo';
+  /**
+   * Per-tool enable/disable overrides. Keys are tool names (e.g. "write", "bash",
+   * "mcp__filesystem__write_file"). A value of `false` disables that tool.
+   * CLI --tools flag and config.tools field are both resolved before construction
+   * and merged here. Priority: CLI --tools > project config > global config.
+   */
+  disabledTools?: Record<string, boolean>;
 }
 
 export class AgentCore {
@@ -172,6 +179,8 @@ export class AgentCore {
   private _appendSystemPrompt: string | null = null;
   /** Extended-thinking level for Claude models */
   private _thinkingLevel: import('../models/types.js').ThinkingLevel | undefined = undefined;
+  /** Per-tool disable map (populated from AgentOptions.disabledTools, used in initMCP) */
+  private _disabledTools: Record<string, boolean> | undefined = undefined;
   /** Accumulated [UNCERTAIN] items across the session (kstack article #15310 confidence mechanism) */
   private uncertainItems: string[] = [];
   /**
@@ -229,12 +238,33 @@ export class AgentCore {
       ? new ModelFallbackChain(fallbackModels)
       : null;
 
-    this.registerAllTools(options.domain);
+    this._disabledTools = options.disabledTools;
+    this.registerAllTools(options.domain, options.disabledTools);
   }
 
-  private registerAllTools(domain: string) {
+  private registerAllTools(domain: string, disabledTools?: Record<string, boolean>) {
+    // Build a name-based filter. The disabled map comes from:
+    //   1. CLI --tools flag          (highest priority)
+    //   2. config.tools (project)    (via AgentOptions.disabledTools)
+    //   3. config.tools (global)     (already merged by loadConfig() in index.ts)
+    // We also apply the legacy config.todo=false shorthand here.
+    const isDisabled = (toolName: string): boolean => {
+      if (disabledTools && disabledTools[toolName] === false) return true;
+      // also accept lower-cased version for convenience
+      const lower = toolName.toLowerCase();
+      if (disabledTools && disabledTools[lower] === false) return true;
+      return false;
+    };
+    // Convenience wrapper: register only if not disabled
+    const reg = (tool: import('../models/types.js').ToolRegistration) => {
+      if (!isDisabled(tool.definition.name)) this.registry.register(tool);
+    };
+    const regMany = (tools: import('../models/types.js').ToolRegistration[]) => {
+      for (const t of tools) reg(t);
+    };
+
     // Core FS tools (always registered — these are the foundation)
-    this.registry.registerMany([
+    regMany([
       readFileTool,
       writeFileTool,
       editFileTool,
@@ -244,96 +274,92 @@ export class AgentCore {
     ]);
 
     // Web tools
-    this.registry.registerMany([webFetchTool, webSearchTool]);
+    regMany([webFetchTool, webSearchTool]);
 
     // Code quality & self-healing tools (always available)
-    this.registry.register(codeInspectorTool);
-    this.registry.register(selfHealTool);
+    reg(codeInspectorTool);
+    reg(selfHealTool);
 
     // Subagent tools
-    this.registry.register(createTaskTool(subagentSystem));
-    this.registry.register(askExpertModelTool);
-    this.registry.register(spawnAgentTool);
-    this.registry.register(spawnParallelTool);
-    this.registry.register(coordinatorRunTool);
-    this.registry.register(businessDefectDetectorTool);
-    this.registry.register(reverseAnalyzeTool);
-    // s03 — in-session todo tracking with nag reminder (controlled by config todo field)
+    reg(createTaskTool(subagentSystem));
+    reg(askExpertModelTool);
+    reg(spawnAgentTool);
+    reg(spawnParallelTool);
+    reg(coordinatorRunTool);
+    reg(businessDefectDetectorTool);
+    reg(reverseAnalyzeTool);
+    // s03 — in-session todo tracking with nag reminder
+    // Legacy config.todo=false shorthand is still respected via isDisabled('todoWrite')
     {
-      // Use sync require — config-store only uses synchronous fs ops
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       let todoEnabled = true;
       try {
         const cs = require('../cli/config-store.js') as typeof import('../cli/config-store.js');
         todoEnabled = cs.loadConfig().todo !== false;
       } catch { /* config unavailable → default ON */ }
-      if (todoEnabled) {
-        this.registry.register(todoWriteTool);
-      }
+      if (todoEnabled) reg(todoWriteTool);
     }
 
-    // s05 — on-demand skill loading (Prompt + Program paradigm, kstack #15366)
-    this.registry.register(loadSkillTool);
-    this.registry.register(runSkillTool);
+    // s05 — on-demand skill loading
+    reg(loadSkillTool);
+    reg(runSkillTool);
 
-    // Docs tools — read local/remote documents, search doc directories (inspired by jarvis-cc)
-    this.registry.registerMany([readDocTool, docSearchTool, fetchDocTool]);
+    // Docs tools
+    regMany([readDocTool, docSearchTool, fetchDocTool]);
 
-    // Script tools — save & reuse named command sequences (kstack #15370: 固定操作脚本化)
-    this.registry.registerMany([scriptSaveTool, scriptRunTool, scriptListTool]);
+    // Script tools
+    regMany([scriptSaveTool, scriptRunTool, scriptListTool]);
 
-    // TDD tools — run tests with structured output (kstack #15370: TDD loop)
-    this.registry.register(testRunnerTool);
+    // TDD tools
+    reg(testRunnerTool);
 
-    // EnvProbe — system environment sensing: ports, processes, system info, deps (kstack #15370)
-    this.registry.register(envProbeTool);
+    // EnvProbe
+    reg(envProbeTool);
 
-    // WebSocket MCP Server — long-connection tools (kstack #15370: 长链接 MCP)
-    this.registry.registerMany([
+    // WebSocket MCP Server
+    regMany([
       wsServerStartTool, wsServerStopTool, wsServerStatusTool,
       wsBroadcastTool, wsInboxTool, wsMockInjectTool,
     ]);
 
-    // HTTP Proxy / Traffic Capture — packet capture + mock tools (kstack #15370: 抓包 MCP)
-    this.registry.registerMany([
+    // HTTP Proxy / Traffic Capture
+    regMany([
       proxyStartTool, proxyStopTool, proxyStatusTool,
       proxyCapturesTool, proxyMockTool, proxyMockListTool, proxyMockClearTool, proxyClearTool,
     ]);
 
-    // 邪修 TDD tools — CurlExecute / RedisProbe / DatabaseQuery (kstack #15372)
-    this.registry.register(curlExecuteTool);
-    this.registry.register(redisProbeTool);
-    this.registry.register(databaseQueryTool);
+    // 邪修 TDD tools
+    reg(curlExecuteTool);
+    reg(redisProbeTool);
+    reg(databaseQueryTool);
 
-    // Terminal IPC tools — borrow existing terminal sessions for remote access (kstack #15377)
-    // Supports WezTerm / tmux / Kitty / iTerm2 backends (auto-detected)
-    this.registry.registerMany([
+    // Terminal IPC tools
+    regMany([
       terminalListTool,
       terminalSendTool,
       terminalReadTool,
       terminalExecTool,
     ]);
 
-    // GitHub PR tools — create/list/merge PRs via GitHub API (kstack #15380)
-    this.registry.registerMany([
+    // GitHub PR tools
+    regMany([
       githubCreatePRTool,
       githubListPRsTool,
       githubMergePRTool,
     ]);
 
-    // AutopilotRun — 8-stage full-cycle dev automation with progress.md state machine (kstack #15380)
-    // spec → plan → tasks → implement → test-doc → test → review → PR
-    this.registry.register(autopilotRunTool);
+    // AutopilotRun
+    reg(autopilotRunTool);
 
     // s07 — persistent task board (+ s11 claim)
-    this.registry.registerMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
-    this.registry.register(claimTaskFromBoardTool);
+    regMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
+    reg(claimTaskFromBoardTool);
 
     // s08 — background command execution
-    this.registry.registerMany([backgroundRunTool, checkBackgroundTool]);
+    regMany([backgroundRunTool, checkBackgroundTool]);
 
     // s09/s10/s11 — teammate system
-    this.registry.registerMany([
+    regMany([
       spawnTeammateTool,
       listTeammatesTool,
       sendMessageTool,
@@ -344,7 +370,7 @@ export class AgentCore {
     ]);
 
     // s12 — worktree isolation tools
-    this.registry.registerMany([
+    regMany([
       worktreeCreateTool,
       worktreeListTool,
       worktreeStatusTool,
@@ -362,7 +388,12 @@ export class AgentCore {
   async initMCP(): Promise<void> {
     const { connected, failed } = await this.mcpManager.connectAll();
     if (connected.length > 0) {
-      this.registry.registerMany(this.mcpManager.getTools());
+      // Apply disabled-tools filter to MCP tools as well
+      const allMcpTools = this.mcpManager.getTools();
+      const filteredMcpTools = this._disabledTools
+        ? allMcpTools.filter((t) => this._disabledTools![t.definition.name] !== false)
+        : allMcpTools;
+      this.registry.registerMany(filteredMcpTools);
       log.info(`MCP: Connected to ${connected.join(', ')}`);
     }
     if (failed.length > 0) {

@@ -45,6 +45,15 @@ export interface UAgentConfig {
   systemPrompt?: string;
   thinkingLevel?: ThinkingLevelExtended;
   todo?: boolean;
+  /**
+   * Per-tool enable/disable flags. Aligns with CodeFlicker CLI's `tools` config field.
+   * Keys are tool names (e.g. "write", "bash", "mcp__xxx__yyy").
+   * A value of `false` disables that tool; `true` or omitted means enabled (default).
+   *
+   * Example: { "bash": false, "write": false }  — read-only mode
+   * Priority: CLI --tools > project config > global config
+   */
+  tools?: Record<string, boolean>;
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
