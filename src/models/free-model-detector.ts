@@ -181,7 +181,11 @@ async function tryGemini(): Promise<RankedFreeModel | null> {
     if (res.status === 200) {
       return { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', score: 95, contextLength: 1048576, supportsTools: true, isFree: true };
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    // Gemini API probe failed — log at debug so users can diagnose auth/network issues
+    // during first-run detection (they would otherwise see no model and no hint why).
+    process.stderr.write(`[free-model-detector] Gemini probe failed: ${String(err)}\n`);
+  }
   return null;
 }
 
@@ -198,7 +202,9 @@ async function tryGroq(): Promise<RankedFreeModel | null> {
     if (res.status === 200) {
       return { id: 'groq:llama-3.3-70b', name: 'Llama 3.3 70B (Groq)', score: 80, contextLength: 128000, supportsTools: true, isFree: true };
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    process.stderr.write(`[free-model-detector] Groq probe failed: ${String(err)}\n`);
+  }
   return null;
 }
 
@@ -220,7 +226,9 @@ async function tryOllama(): Promise<RankedFreeModel | null> {
       const first = installed[0].split(':')[0];
       return { id: `ollama:${first}`, name: `${first} (local Ollama)`, score: 60, contextLength: 32768, supportsTools: false, isFree: true };
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    process.stderr.write(`[free-model-detector] Ollama probe failed: ${String(err)}\n`);
+  }
   return null;
 }
 

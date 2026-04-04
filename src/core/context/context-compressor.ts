@@ -84,7 +84,15 @@ export function resetCompactCircuitBreaker(): void {
  */
 function estimateTokens(text: string, isJson = false): number {
   if (!text) return 0;
-  const nonLatinCount = (text.match(/[\u0600-\u06FF\u0900-\u097F\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF]/g) ?? []).length;
+  // Count non-Latin characters: CJK, Arabic, Devanagari, Korean, and emoji.
+  // Emoji (U+1F300-U+1F9FF) live in the Supplementary Multilingual Plane and
+  // each codepoint encodes to ~1-2 tokens but takes 2 UTF-16 code units (surrogate
+  // pair). Without the /u flag + explicit SMP range, emojis would be counted as
+  // latin chars (divisor 4) and their token count would be underestimated by ~4x,
+  // potentially delaying compaction when users paste emoji-heavy content.
+  const nonLatinCount = (
+    text.match(/[\u0600-\u06FF\u0900-\u097F\u3000-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\u{1F300}-\u{1F9FF}]/gu) ?? []
+  ).length;
   const nonLatinRatio = nonLatinCount / Math.max(text.length, 1);
 
   const latinDivisor = isJson ? 2 : 4;

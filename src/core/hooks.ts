@@ -50,7 +50,7 @@
  * }
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
 import { resolve, join } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -172,6 +172,8 @@ export class HookRunner {
   private config: HooksConfig;
   private configPath: string;
   private cwd: string;
+  /** mtime of the last successfully loaded config file (ms). 0 = not loaded yet. */
+  private _configMtimeMs = 0;
 
   constructor(cwd: string = process.cwd()) {
     this.cwd = cwd;
@@ -185,6 +187,17 @@ export class HookRunner {
     if (!existsSync(this.configPath)) {
       return { hooks: [] };
     }
+    // mtime cache: skip disk read when file hasn't changed since last load.
+    // Checked via statSync (syscall only, no file read) before the heavier
+    // readFileSync + JSON.parse. Saves I/O on every tool call where reload()
+    // is invoked proactively.
+    try {
+      const mtimeMs = statSync(this.configPath).mtimeMs;
+      if (this._configMtimeMs !== 0 && mtimeMs === this._configMtimeMs) {
+        return this.config; // file unchanged — return cached result
+      }
+      this._configMtimeMs = mtimeMs;
+    } catch { /* statSync failure is non-fatal; fall through to readFileSync */ }
     try {
       const raw = JSON.parse(readFileSync(this.configPath, 'utf-8'));
       // Defensive check: hooks must be an array; reject malformed config silently

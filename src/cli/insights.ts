@@ -84,10 +84,13 @@ function loadUsageHistory(days: number): DailyUsage[] {
       try {
         const raw = readFileSync(join(USAGE_DIR, file), 'utf-8');
         results.push(JSON.parse(raw) as DailyUsage);
-      } catch { /* skip corrupt */ }
+      } catch (err) { /* skip corrupt — a bad daily file should not abort the whole report */
+        process.stderr.write(`[insights] Failed to parse usage file ${file}: ${String(err)}\n`);
+      }
     }
     return results;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[insights] Failed to read usage directory: ${String(err)}\n`);
     return [];
   }
 }
@@ -106,10 +109,13 @@ function loadHistoryEntries(days: number, projectRoot?: string): HistoryEntry[] 
         if (entry.timestamp < cutoff) continue;
         if (project && entry.project !== project) continue;
         entries.push(entry);
-      } catch { /* skip */ }
+      } catch (err) { /* skip malformed JSONL line */
+        process.stderr.write(`[insights] Malformed history entry: ${String(err)}\n`);
+      }
     }
     return entries;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[insights] Failed to read history file: ${String(err)}\n`);
     return [];
   }
 }

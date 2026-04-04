@@ -109,7 +109,10 @@ export function getGitDiff(cwd?: string, base = 'HEAD'): string | null {
       }).trim();
     }
     return diff || null;
-  } catch {
+  } catch (err) {
+    // getGitDiff is a best-effort helper: failing (no git, detached HEAD, etc.) should
+    // not crash the review, but log at debug so it's diagnosable.
+    process.stderr.write(`[ai-reviewer] getGitDiff failed: ${String(err)}\n`);
     return null;
   }
 }
@@ -124,12 +127,11 @@ export function getChangedFiles(cwd?: string): string[] {
       cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
     }).trim();
     return [...new Set(out.split('\n').filter((f) => f && (f.endsWith('.ts') || f.endsWith('.js'))))];
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[ai-reviewer] getChangedFiles failed: ${String(err)}\n`);
     return [];
   }
 }
-
-// ─── Static Review ───────────────────────────────────────────────────────────
 
 /**
  * Run code-inspector and convert findings to ReviewIssues.
