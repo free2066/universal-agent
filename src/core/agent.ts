@@ -430,6 +430,13 @@ export class AgentCore {
   }
 
   /**
+   * Set or clear the thinking level at runtime (used by Ctrl+T in REPL).
+   */
+  setThinkingLevel(level: import('../models/types.js').ThinkingLevel | undefined): void {
+    this._thinkingLevel = level;
+  }
+
+  /**
    * Return MCP server configuration and connected tools for /mcp slash command.
    * Servers come from MCPManager (config file), tools come from the live registry
    * filtered to those whose names start with 'mcp_'.

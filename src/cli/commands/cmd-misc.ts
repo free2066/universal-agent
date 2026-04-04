@@ -17,6 +17,7 @@ import { HookRunner } from '../../core/hooks.js';
 import { sanitizeName, safeResolve } from '../../utils/path-security.js';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { WorktreeManager } from '../../core/tools/agents/worktree-tools.js';
 
 export type InferProviderEnvKey = (errMsg: string) => string | undefined;
 
@@ -574,6 +575,7 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
     .option('--language <lang>', 'Commit message language (e.g. Chinese, English)')
     .option('--copy', 'Copy message to clipboard')
     .option('--follow-style', 'Infer commit style from recent commits')
+    .option('--checkout', 'Create a new branch before committing')
     .action(async (opts) => {
       const { runCommit } = await import('../commit.js');
       await runCommit({
@@ -585,7 +587,57 @@ export function registerMiscCommands(program: Command, helpers: MiscHelpers): vo
         language: opts.language,
         copy: opts.copy,
         followStyle: opts.followStyle,
+        checkout: opts.checkout,
       });
+    });
+
+  // ── workspace ──────────────────────────────────────────── (aligns with flickcli workspace)
+  const wsCmd = program.command('workspace').alias('ws').description('Manage git worktrees for isolated development');
+
+  wsCmd.command('list').alias('ls').description('List all tracked worktrees')
+    .action(() => {
+      console.log(new WorktreeManager(process.cwd()).listAll());
+    });
+
+  wsCmd.command('create <name>').description('Create a new git worktree on a fresh branch')
+    .option('-t, --task <id>', 'Bind to task ID')
+    .option('-b, --base <ref>', 'Git ref to branch from (default: HEAD)')
+    .action((name: string, opts: { task?: string; base?: string }) => {
+      try {
+        const result = new WorktreeManager(process.cwd()).create(
+          name,
+          opts.task !== undefined ? parseInt(opts.task, 10) : undefined,
+          opts.base ?? 'HEAD',
+        );
+        console.log(chalk.green(result));
+      } catch (e) {
+        console.error(chalk.red('Error: ') + (e instanceof Error ? e.message : String(e)));
+        process.exit(1);
+      }
+    });
+
+  wsCmd.command('remove <name>').alias('rm').description('Remove a worktree')
+    .option('--force', 'Force removal even with uncommitted changes')
+    .option('--complete', 'Mark the bound task as completed')
+    .action((name: string, opts: { force?: boolean; complete?: boolean }) => {
+      try {
+        const result = new WorktreeManager(process.cwd()).remove(name, opts.force ?? false, opts.complete ?? false);
+        console.log(chalk.green(result));
+      } catch (e) {
+        console.error(chalk.red('Error: ') + (e instanceof Error ? e.message : String(e)));
+        process.exit(1);
+      }
+    });
+
+  wsCmd.command('status <name>').description('Show git status for a worktree')
+    .action((name: string) => {
+      console.log(new WorktreeManager(process.cwd()).status(name));
+    });
+
+  wsCmd.command('events').description('Show recent worktree lifecycle events')
+    .option('-n, --limit <n>', 'Max events to show (default: 20)', '20')
+    .action((opts: { limit: string }) => {
+      console.log(new WorktreeManager(process.cwd()).eventsRecent(parseInt(opts.limit, 10)));
     });
 
   // ── log ────────────────────────────────────────────────── (aligns with flickcli log)

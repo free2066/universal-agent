@@ -222,6 +222,29 @@ export class MCPManager {
   async connectAll(): Promise<{ connected: string[]; failed: string[] }> {
     const connected: string[] = [];
     const failed: string[] = [];
+
+    // ── UAGENT_MCP_INLINE: one-shot servers from --mcp-config CLI flag ────────
+    // Parsed by index.ts and injected via env var to avoid writing to disk.
+    const inlineRaw = process.env.UAGENT_MCP_INLINE;
+    if (inlineRaw) {
+      try {
+        const inlineServers = JSON.parse(inlineRaw) as Record<string, Omit<MCPServer, 'name'>>;
+        for (const [name, cfg] of Object.entries(inlineServers)) {
+          if (!this.servers.has(name)) {
+            this.servers.set(name, { ...cfg, name, enabled: true });
+          }
+        }
+      } catch { /* ignore malformed inline config */ }
+    }
+
+    // ── UAGENT_BROWSER_MODE: auto-activate playwright if it exists ────────────
+    if (process.env.UAGENT_BROWSER_MODE === '1') {
+      const pw = this.servers.get('playwright');
+      if (pw && !pw.enabled) {
+        pw.enabled = true; // enable for this session only (not saved)
+      }
+    }
+
     for (const [name, server] of this.servers.entries()) {
       if (!server.enabled) continue;
       try {

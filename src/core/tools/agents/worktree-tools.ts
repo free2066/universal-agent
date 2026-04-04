@@ -80,7 +80,7 @@ interface WorktreeIndex {
 
 // ─── WorktreeManager ────────────────────────────────────────────────────────────
 
-class WorktreeManager {
+export class WorktreeManager {
   private readonly repoRoot: string;
   private readonly worktreeDir: string;
   private readonly indexPath: string;

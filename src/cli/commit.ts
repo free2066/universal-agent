@@ -24,6 +24,7 @@ export interface CommitOptions {
   language?: string;       // --language zh|en|auto
   model?: string;          // -m: model override
   followStyle?: boolean;   // --follow-style: infer from recent commits
+  checkout?: boolean;      // --checkout: create new branch before committing
 }
 
 function getDiff(stage: boolean): string {
@@ -89,6 +90,23 @@ export async function runCommit(opts: CommitOptions): Promise<void> {
   if (!stat) {
     console.log(chalk.yellow('\n  No staged changes found. Use -s to stage all changes first.\n'));
     process.exit(0);
+  }
+
+  // --checkout: create a new branch before committing
+  if (opts.checkout) {
+    const branchName = `feature/${Date.now().toString(36)}`;
+    const { createInterface: _rl } = await import('readline');
+    const _io = _rl({ input: process.stdin, output: process.stdout });
+    const suggestedBranch = await new Promise<string>((res) =>
+      _io.question(chalk.dim(`\n  New branch name [${branchName}]: `), (ans) => { _io.close(); res(ans.trim() || branchName); }),
+    );
+    try {
+      execSync(`git checkout -b ${JSON.stringify(suggestedBranch)}`, { stdio: 'inherit' });
+      process.stdout.write(chalk.green(`  ✓ Created branch: ${suggestedBranch}\n`));
+    } catch (err) {
+      console.error(chalk.red('  ✗ Branch creation failed: ') + (err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
   }
 
   const fullDiff = getFullDiff(opts.stage ?? false);

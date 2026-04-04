@@ -21,6 +21,8 @@ export interface ReplOptions {
 export interface ReplExtra {
   initialPrompt?: string;
   continueSession?: boolean;
+  /** Resume a specific session by ID — takes precedence over continueSession */
+  resumeSessionId?: string;
   inferProviderEnvKey?: (msg: string) => string | undefined;
   /** notification config value — if set, trigger notification on session end */
   notification?: boolean | string;
@@ -107,8 +109,25 @@ export async function runREPL(
   emitKeypressEvents(process.stdin);
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
 
+  // ── Ctrl+T: cycle thinking level ────────────────────────────────────────
+  // Cycles: off → low → medium → high → off → ...
+  // Aligns with CodeFlicker CLI's Ctrl+T toggle.
+  const THINKING_CYCLE: Array<import('../../models/types.js').ThinkingLevel | undefined> = [undefined, 'low', 'medium', 'high'];
+  let _thinkingIdx = 0;
+
   process.stdin.on('keypress', (_ch: unknown, key: { name?: string; ctrl?: boolean; sequence?: string } | undefined) => {
     if (!key) return;
+    if (key.ctrl && key.name === 't') {
+      _thinkingIdx = (_thinkingIdx + 1) % THINKING_CYCLE.length;
+      const level = THINKING_CYCLE[_thinkingIdx];
+      const display = level ?? 'off';
+      try { agent.setThinkingLevel(level); } catch { /* not supported */ }
+      process.stdout.write(
+        '\r\x1b[2K' + chalk.yellow(`  🧠 Thinking: ${display}`) + '\n',
+      );
+      rl.prompt(); printStatusBar();
+      return;
+    }
     if (key.ctrl && key.name === 'r') {
       _historySearch = true;
       _historyQuery = '';
@@ -147,8 +166,23 @@ export async function runREPL(
   });
 
   // ── Welcome line ─────────────────────────────────────────────────────────
+  const { loadSnapshot } = await import('../../core/memory/session-snapshot.js');
   const lastSnap = loadLastSnapshot();
-  if (extra.continueSession && lastSnap && lastSnap.messages.length >= 2) {
+
+  if (extra.resumeSessionId) {
+    // -r / --resume <sessionId>: restore a specific session by ID
+    const snap = loadSnapshot(extra.resumeSessionId);
+    if (snap && snap.messages.length >= 2) {
+      agent.setHistory(snap.messages);
+      process.stdout.write(
+        chalk.green(`  ✓ Resumed session ${extra.resumeSessionId} from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n',
+      );
+    } else {
+      process.stdout.write(
+        chalk.yellow(`  ⚠ Session "${extra.resumeSessionId}" not found — starting fresh`) + '\n',
+      );
+    }
+  } else if (extra.continueSession && lastSnap && lastSnap.messages.length >= 2) {
     agent.setHistory(lastSnap.messages);
     process.stdout.write(
       chalk.green(`  ✓ Resumed session from ${formatAge(lastSnap.savedAt)} (${lastSnap.messages.length} messages)`) + '\n',
