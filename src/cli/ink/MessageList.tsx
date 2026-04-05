@@ -68,9 +68,11 @@ export function MessageList({ messages }: { messages: ChatMessage[] }): React.JS
         if (msg.role === 'user') return <UserMessage key={key} msg={msg} />;
         if (msg.role === 'assistant') return <AssistantMessage key={key} msg={msg} />;
         // system/tool messages rendered dimmed
+        // NOTE: do NOT truncate system messages — /models list and other multi-line
+        // system outputs need the full content to be visible.
         return (
           <Box key={key}>
-            <Text color="gray" dimColor>[{msg.role}] {truncate(msg.content, 120)}</Text>
+            <Text color="gray" dimColor>{msg.content}</Text>
           </Box>
         );
       })}

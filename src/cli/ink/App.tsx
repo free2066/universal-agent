@@ -127,6 +127,23 @@ export function App({
   // ── Ctrl+L double-press timer ────────────────────────────────────────────
   const lastCtrlLRef = useRef(0);
 
+  // ── Model picker state (for /model with no arg) ───────────────────────
+  interface ModelPickerItem { id: string; label: string; provider: string; ctx: string; }
+  const [modelPicker, setModelPicker] = useState<ModelPickerItem[] | null>(null);
+  const [modelPickerIdx, setModelPickerIdx] = useState(0);
+
+  /** Build friendly display name for a model id, using WQ_MODELS name map */
+  const getModelLabel = useCallback((id: string): string => {
+    const wqMap: Record<string, string> = {};
+    (process.env.WQ_MODELS || '').split(',').forEach(entry => {
+      const parts = entry.trim().split(':');
+      const epId = parts[0]?.trim() ?? '';
+      const name = parts[1]?.trim() ?? '';
+      if (epId && name) wqMap[epId] = name;
+    });
+    return wqMap[id] ?? id;
+  }, []);
+
   // ── Ctrl+R reverse-search state ─────────────────────────────────────────
   const [historySearch, setHistorySearch] = useState(false);
   const [historyQuery, setHistoryQuery] = useState('');
@@ -229,21 +246,23 @@ export function App({
         //  calls updateStatusBar({ model, contextLength }) + rl.setPrompt after switch)
         const newProfile = modelManager.listProfiles().find((p) => p.name === sub);
         const newCtxLen = newProfile?.contextLength ?? 128000;
-        setCurrentModelDisplay(sub);
+        const label = getModelLabel(sub);
+        setCurrentModelDisplay(label);
         setStatusInfo((s) => ({ ...s, contextLength: newCtxLen }));
-        appendSystem(`Model switched to: ${sub}`);
+        appendSystem(`Model switched to: ${label}`);
       } else {
-        const current = modelManager.getCurrentModel('main');
+        // Open interactive picker (readline parity: showModelPicker with ↑↓ navigation)
         const profiles = modelManager.listProfiles();
-        const lines = ['Models (use /model <name> to switch):', ''];
-        for (const p of profiles) {
-          const active = p.name === current ? ' <- active' : '';
+        const items: ModelPickerItem[] = profiles.map((p) => {
           const ctx2 = p.contextLength >= 1000000
             ? `${(p.contextLength / 1000000).toFixed(1)}M`
             : `${Math.round(p.contextLength / 1000)}k`;
-          lines.push(`  ${p.name.padEnd(32)} [${p.provider.padEnd(12)}] ${ctx2}${active}`);
-        }
-        appendSystem(lines.join('\n'));
+          return { id: p.name, label: getModelLabel(p.name), provider: p.provider, ctx: ctx2 };
+        });
+        const currentModel2 = modelManager.getCurrentModel('main');
+        const currentIdx = items.findIndex((it) => it.id === currentModel2);
+        setModelPicker(items);
+        setModelPickerIdx(currentIdx >= 0 ? currentIdx : 0);
       }
       return;
     }
@@ -255,7 +274,7 @@ export function App({
         modelManager.setPointer('main', parts[2]);
         // Update StatusBar (readline parity: agent-handlers.ts updateStatusBar)
         const newProfile2 = modelManager.listProfiles().find((p) => p.name === parts[2]);
-        const displayName2 = newProfile2?.name ?? parts[2];
+        const displayName2 = getModelLabel(parts[2]);
         const newCtx2 = newProfile2?.contextLength ?? 128000;
         setStatusInfo((s) => ({ ...s, contextLength: newCtx2 }));
         setCurrentModelDisplay(displayName2);
@@ -263,20 +282,23 @@ export function App({
       } else {
         const profiles = modelManager.listProfiles();
         const pointers = modelManager.getPointers();
+        const current3 = modelManager.getCurrentModel('main');
         const lines = ['Available models:', ''];
-        lines.push(`  ${'NAME'.padEnd(32)} ${'PROVIDER'.padEnd(14)} ${'CONTEXT'.padEnd(10)} POINTER`);
-        lines.push('  ' + '─'.repeat(65));
+        lines.push(`  ${'NAME'.padEnd(24)} ${'PROVIDER'.padEnd(12)} ${'CONTEXT'.padEnd(8)} POINTER`);
+        lines.push('  ' + '─'.repeat(58));
         for (const p of profiles) {
           const role = Object.entries(pointers).filter(([, v]) => v === p.name).map(([k]) => k).join('/');
+          const isActive = p.name === current3;
           const ctx2 = p.contextLength >= 1000000
             ? `${(p.contextLength / 1000000).toFixed(1)}M`
             : `${Math.round(p.contextLength / 1000)}k`;
-          lines.push(`  ${(role ? '● ' : '○ ') + p.name.padEnd(30)} ${p.provider.padEnd(14)} ${ctx2.padEnd(10)} ${role ? `[${role}]` : ''}`);
+          const label2 = getModelLabel(p.name);
+          lines.push(`  ${(isActive ? '● ' : '○ ') + label2.padEnd(22)} ${p.provider.padEnd(12)} ${ctx2.padEnd(8)} ${role ? `[${role}]` : ''}`);
         }
         lines.push('');
-        lines.push('  /models switch <name>  — switch main model');
-        lines.push('  uagent models add       — add custom model');
-        lines.push('  uagent models set <ptr> <model>  — set pointer');
+        lines.push('  /model              — interactive picker (↑↓ to select)');
+        lines.push('  /models switch <name>  — switch by name');
+        lines.push('  uagent models add    — add custom model');
         appendSystem(lines.join('\n'));
       }
       return;
@@ -1870,6 +1892,38 @@ export function App({
   // Note: Ink's useInput receives ALL key events including those in PromptInput,
   // so we guard ctrl/special combos only.
   useInput((input, key) => {
+    // ── Model picker: ↑↓ navigate, Enter select, Esc cancel ──────────────
+    if (modelPicker) {
+      if (key.upArrow) {
+        setModelPickerIdx((i) => (i - 1 + modelPicker.length) % modelPicker.length);
+        return;
+      }
+      if (key.downArrow) {
+        setModelPickerIdx((i) => (i + 1) % modelPicker.length);
+        return;
+      }
+      if (key.return) {
+        const chosen = modelPicker[modelPickerIdx];
+        if (chosen) {
+          agent.setModel(chosen.id);
+          modelManager.setPointer('main', chosen.id);
+          const prof = modelManager.listProfiles().find((p) => p.name === chosen.id);
+          const ctxLen = prof?.contextLength ?? 128000;
+          setCurrentModelDisplay(chosen.label);
+          setStatusInfo((s) => ({ ...s, contextLength: ctxLen }));
+          appendSystem(`Model switched to: ${chosen.label}`);
+        }
+        setModelPicker(null);
+        return;
+      }
+      if (key.escape) {
+        setModelPicker(null);
+        appendSystem('Model selection cancelled.');
+        return;
+      }
+      return; // swallow all other keys while picker is open
+    }
+
     // ── Ctrl+T: cycle thinking level ────────────────────────────────────
     if (key.ctrl && input === 't') {
       thinkingIdxRef.current = (thinkingIdxRef.current + 1) % THINKING_CYCLE.length;
@@ -2142,6 +2196,25 @@ export function App({
           {toolCalls.filter((tc) => tc.status === 'running').map((tc) => (
             <ToolCallLine key={tc.id} call={tc} />
           ))}
+        </Box>
+      )}
+
+      {/* /model interactive picker overlay */}
+      {modelPicker && (
+        <Box flexDirection="column" paddingLeft={2} paddingBottom={1} borderStyle="single" borderColor="cyan">
+          <Text color="cyan" bold>Select Model</Text>
+          <Text color="gray" dimColor>  ↑↓ navigate · Enter select · Esc cancel</Text>
+          {modelPicker.map((item, idx) => {
+            const isSel = idx === modelPickerIdx;
+            return (
+              <Box key={item.id} flexDirection="row" gap={1}>
+                <Text color={isSel ? 'cyan' : 'gray'}>{isSel ? '▶' : ' '}</Text>
+                <Text color={isSel ? 'white' : 'gray'} bold={isSel}>{item.label.padEnd(22)}</Text>
+                <Text color="gray" dimColor>{item.provider.padEnd(12)}</Text>
+                <Text color={isSel ? 'green' : 'gray'} dimColor>{item.ctx}</Text>
+              </Box>
+            );
+          })}
         </Box>
       )}
 
