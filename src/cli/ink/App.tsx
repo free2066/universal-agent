@@ -1181,6 +1181,11 @@ export function App({
       lines.push(`  Output tokens: ${stats.totalOutputTokens.toLocaleString()}`);
       lines.push(`  Duration     : ${(stats.totalDurationMs / 1000).toFixed(1)}s`);
       lines.push(`  Failed calls : ${stats.failedCalls}`);
+      // Model-level cost summary (readline getCostSummary parity)
+      try {
+        lines.push('');
+        lines.push(modelManager.getCostSummary());
+      } catch { /* non-fatal */ }
       // Today's cross-session usage
       try {
         const { usageTracker } = await import('../../models/usage-tracker.js');
@@ -1281,6 +1286,31 @@ export function App({
       return;
     }
 
+    // ── Plugin-contributed slash commands ────────────────────────────────────
+    // Matches readline handlers/index.ts lines 109-136
+    if (cmd.startsWith('/')) {
+      const { getPluginSlashCommands } = await import('../../core/domain-router.js');
+      const pluginCmds = getPluginSlashCommands();
+      const pluginCmdName = cmd.split(/\s+/)[0]!;          // e.g. '/standup'
+      const pluginCmdArgs = cmd.slice(pluginCmdName.length).trim();
+      const pluginCmd = pluginCmds.get(pluginCmdName);
+      if (pluginCmd) {
+        appendSystem(`Running plugin command: ${pluginCmdName}`);
+        let out = '';
+        try {
+          await pluginCmd.handler(pluginCmdArgs, {
+            onChunk: (c: string) => { out += c; },
+            agentHistory: (agent as unknown as Record<string, unknown>).history as readonly unknown[] ?? [],
+            cwd: process.cwd(),
+          });
+          appendSystem(out);
+        } catch (err) {
+          appendSystem(`Plugin command error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        return;
+      }
+    }
+
     // ── Unknown command — try as skill file ───────────────────────────────────
     {
       const { existsSync, readFileSync } = await import('fs');
@@ -1304,6 +1334,26 @@ export function App({
           return;
         }
       }
+
+      // ── Hook-defined custom slash commands ──────────────────────────────────
+      // Matches readline handlers/index.ts lines 187-205
+      if (cmd.startsWith('/')) {
+        try {
+          const hookResult = await hookRunner.current.handleSlashCmd(cmd).catch(() => ({ handled: false, output: '' }));
+          if (hookResult.handled) {
+            if (hookResult.output) {
+              appendSystem(`Running hook command: ${cmd.split(/\s+/)[0]}`);
+              let hookOut = '';
+              await agent.runStream(hookResult.output, (c) => { hookOut += c; }).catch((e) => {
+                hookOut = `Hook command error: ${e instanceof Error ? e.message : String(e)}`;
+              });
+              appendSystem(hookOut);
+            }
+            return;
+          }
+        } catch { /* non-fatal: fall through to unknown */ }
+      }
+
       appendSystem(`Unknown command: ${cmd}\nType /help for available commands.`);
     }
   }, [agent, domain, sessionId, appendSystem, exit, onExit, inferProviderEnvKey, sessionLogger]);
@@ -1735,6 +1785,11 @@ export function App({
     if (startupHint) {
       appendSystem(startupHint);
     }
+    // Show session log path at startup (readline parity: "Session log: /path")
+    try {
+      const logPath = sessionLogger.current.path;
+      if (logPath) appendSystem(`Session log: ${logPath}`);
+    } catch { /* non-fatal */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
