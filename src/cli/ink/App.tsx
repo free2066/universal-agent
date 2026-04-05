@@ -127,6 +127,9 @@ export function App({
   // ── Ctrl+L double-press timer ────────────────────────────────────────────
   const lastCtrlLRef = useRef(0);
 
+  // ── Info overlay state (for /logs, /log — long text shown at bottom, Esc/Enter to close) ──
+  const [infoOverlay, setInfoOverlay] = useState<string | null>(null);
+
   // ── Generic picker state (shared by /domain, /output-style, /spec, /agents) ──
   interface GenericPickerItem { id: string; label: string; detail?: string; }
   interface GenericPickerState {
@@ -342,7 +345,7 @@ export function App({
       const { listLogs } = await import('../session-logger.js');
       const logs = listLogs();
       if (!logs.length) {
-        appendSystem('No session logs found.');
+        setInfoOverlay('No session logs found.\n\n  [any key to close]');
       } else {
         const lines = ['Recent session logs (newest first):', ''];
         for (const [i, l] of logs.entries()) {
@@ -353,7 +356,9 @@ export function App({
         }
         lines.push('');
         lines.push(`  To copy latest: cat "${logs[0]?.path}" | pbcopy`);
-        appendSystem(lines.join('\n'));
+        lines.push('');
+        lines.push('  [any key to close]');
+        setInfoOverlay(lines.join('\n'));
       }
       return;
     }
@@ -1947,6 +1952,12 @@ export function App({
   // Note: Ink's useInput receives ALL key events including those in PromptInput,
   // so we guard ctrl/special combos only.
   useInput((input, key) => {
+    // ── Info overlay (logs etc): any key closes it ────────────────────────────
+    if (infoOverlay !== null) {
+      setInfoOverlay(null);
+      return;
+    }
+
     // ── Generic picker (domain / output-style / spec / agents): ↑↓ Enter Esc ─
     if (genericPicker) {
       if (key.upArrow) {
@@ -2384,6 +2395,13 @@ export function App({
               </Box>
             );
           })}
+        </Box>
+      )}
+
+      {/* Info overlay (for /logs, /log — long text shown at bottom, any key to close) */}
+      {infoOverlay !== null && (
+        <Box flexDirection="column" paddingLeft={2} paddingRight={1} borderStyle="single" borderColor="gray">
+          <Text color="gray" dimColor>{infoOverlay}</Text>
         </Box>
       )}
 
