@@ -53,6 +53,10 @@ export interface AppProps {
    *  Allows launch.ts SIGINT handler to gracefully abort before unmounting.
    *  (readline parity: repl.ts _currentAbort?.abort() before exit) */
   onRegisterAbort?: (abortFn: () => void) => void;
+  /** Called on mount with a function that closes the real session logger.
+   *  Allows launch.ts SIGINT handler to flush/close the logger on Ctrl+C.
+   *  (readline parity: rl.on('close') always calls sessionLogger.close()) */
+  onRegisterLoggerClose?: (closeFn: () => void) => void;
 }
 
 export function App({
@@ -67,6 +71,7 @@ export function App({
   inferProviderEnvKey,
   startupHint,
   onRegisterAbort,
+  onRegisterLoggerClose,
 }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const hookRunner = useRef(new HookRunner(process.cwd()));
@@ -928,6 +933,9 @@ export function App({
         const { HookRunner } = await import('../../core/hooks.js');
         const msg = HookRunner.init(process.cwd());
         appendSystem(msg);
+        // Reload after init so new config takes effect immediately
+        // (readline parity: tool-handlers.ts /hooks init calls hookRunner.reload())
+        hookRunner.current.reload();
         return;
       }
       // /hooks reload — reload hooks config from disk
@@ -937,7 +945,9 @@ export function App({
         appendSystem(`Hooks reloaded. ${count} hook(s) active.`);
         return;
       }
-      // /hooks — list hooks
+      // /hooks — list hooks (reload first to ensure fresh config)
+      // (readline parity: tool-handlers.ts handleHooksCmd calls hookRunner.reload() before listHooks)
+      hookRunner.current.reload();
       const hooks = hookRunner.current.listHooks();
       if (!hooks.length) {
         appendSystem('No hooks configured. Create .uagent/hooks.json to add hooks.\n  Run /hooks init to create an example config.');
@@ -1406,11 +1416,16 @@ export function App({
             prompt = prompt.replace(new RegExp(`\\$${idx + 1}`, 'g'), arg);
           });
           appendSystem(`Running skill: /${cmdName}`);
-          let out = '';
-          await agent.runStream(prompt, (c) => { out += c; }).catch((e) => {
-            out = `Skill error: ${e instanceof Error ? e.message : String(e)}`;
-          });
-          appendSystem(out);
+          // Stream skill output as assistant message for real-time rendering
+          // (readline parity: handlers/index.ts streams each chunk to process.stdout)
+          setIsStreaming(true);
+          try {
+            await agent.runStream(prompt, (c) => { appendAssistant(c); }).catch((e) => {
+              appendSystem(`Skill error: ${e instanceof Error ? e.message : String(e)}`);
+            });
+          } finally {
+            setIsStreaming(false);
+          }
           return;
         }
       }
@@ -1764,6 +1779,16 @@ export function App({
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onRegisterAbort]);
+
+  // Register real session logger close function with launch.ts SIGINT handler
+  // so SIGINT closes the REAL logger (not the shadow copy in launch.ts).
+  // (readline parity: rl.on('close') calls sessionLogger.close() on the live instance)
+  useEffect(() => {
+    onRegisterLoggerClose?.(() => {
+      try { sessionLogger.current.close(); } catch { /* non-fatal */ }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onRegisterLoggerClose]);
 
   // ── Global hotkeys (Ink useInput, active when not in PromptInput text) ───
   // Note: Ink's useInput receives ALL key events including those in PromptInput,

@@ -108,18 +108,10 @@ export async function runInkREPL(
     }
   } catch { /* non-fatal */ }
 
-  // Create a sessionLogger reference for use in SIGINT handler
-  // (readline parity: rl.on('close') always calls sessionLogger.close())
+  // sigintLoggerClose will be populated by App via onRegisterLoggerClose prop,
+  // pointing to the REAL sessionLogger used inside the App component.
+  // (readline parity: rl.on('close') calls the same sessionLogger.close() used throughout the session)
   let sigintLoggerClose: (() => void) | null = null;
-  try {
-    const { SessionLogger } = await import('../session-logger.js');
-    const sigintLogger = new SessionLogger({
-      sessionId: SESSION_ID,
-      model: modelDisplayName,
-      domain: options.domain,
-    });
-    sigintLoggerClose = () => { try { sigintLogger.close(); } catch { /* non-fatal */ } };
-  } catch { /* non-fatal if SessionLogger unavailable */ }
 
   return new Promise<void>((resolve) => {
     // Hold a reference to the current stream abort function (registered by App via onRegisterAbort)
@@ -139,25 +131,11 @@ export async function runInkREPL(
         inferProviderEnvKey: extra.inferProviderEnvKey,
         startupHint,
         onRegisterAbort: (fn) => { abortCurrentStream = fn; },
+        onRegisterLoggerClose: (fn) => { sigintLoggerClose = fn; },
         onExit: () => {
-          // Save session snapshot
-          const history = agent.getHistory();
-          if (history.length >= 2) {
-            import('../../core/memory/session-snapshot.js').then(({ saveSnapshot }) => {
-              try { saveSnapshot(`session-${SESSION_ID}`, history); } catch { /* non-fatal */ }
-            }).catch(() => {});
-          }
-          // ── Dream Mode: auto-ingest insights on exit ─────────────────────
-          if (history.length >= 4) {
-            import('../../core/memory/memory-store.js').then(({ getMemoryStore }) => {
-              const store = getMemoryStore(process.cwd());
-              store.ingest(history).then((result) => {
-                if (result && result.added > 0) {
-                  process.stdout.write(`\n🌙 Dream Mode: +${result.added} insights saved to memory.\n`);
-                }
-              }).catch(() => {});
-            }).catch(() => {});
-          }
+          // NOTE: Dream Mode ingest and session snapshot are already handled by App.tsx's
+          // /exit handler (with await). Do NOT duplicate here to avoid double-ingest.
+          // (readline parity: rl.on('close') does one ingest; App.tsx /exit does it with await)
           // Trigger notification
           if (extra.notification !== undefined && extra.notification !== false) {
             const notifVal = extra.notification;
