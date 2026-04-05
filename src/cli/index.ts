@@ -76,7 +76,7 @@ program
   .option('--tools <json>', 'Disable specific tools as JSON, e.g. \'{"bash":false,"write":false}\'')
   .option('--mcp-config <jsonOrFile>', 'One-shot MCP server config (JSON string or path to .json file). Not persisted.')
   .option('--browser', 'Enable browser integration (requires Playwright MCP server)')
-  .option('--ui <mode>', 'UI mode: readline (default) | ink (React/Ink terminal UI)', 'readline')
+  .option('--ui <mode>', 'UI mode: ink (default, React/Ink terminal UI) | readline (classic readline REPL)', 'ink')
   .action(async (promptArg: string | undefined, options: {
     domain: string; model?: string; planModel?: string; smallModel?: string; visionModel?: string;
     quiet?: boolean; continue?: boolean; resume?: string;
