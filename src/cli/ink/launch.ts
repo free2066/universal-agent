@@ -108,6 +108,19 @@ export async function runInkREPL(
     }
   } catch { /* non-fatal */ }
 
+  // Create a sessionLogger reference for use in SIGINT handler
+  // (readline parity: rl.on('close') always calls sessionLogger.close())
+  let sigintLoggerClose: (() => void) | null = null;
+  try {
+    const { SessionLogger } = await import('../session-logger.js');
+    const sigintLogger = new SessionLogger({
+      sessionId: SESSION_ID,
+      model: modelDisplayName,
+      domain: options.domain,
+    });
+    sigintLoggerClose = () => { try { sigintLogger.close(); } catch { /* non-fatal */ } };
+  } catch { /* non-fatal if SessionLogger unavailable */ }
+
   return new Promise<void>((resolve) => {
     const { unmount } = render(
       React.createElement(App, {
@@ -156,6 +169,8 @@ export async function runInkREPL(
     // Handle Ctrl+C gracefully
     process.on('SIGINT', () => {
       const history = agent.getHistory();
+      // Close session logger (readline parity: rl.on('close') calls sessionLogger.close())
+      sigintLoggerClose?.();
       if (history.length >= 2) {
         import('../../core/memory/session-snapshot.js').then(({ saveSnapshot }) => {
           try { saveSnapshot(`session-${SESSION_ID}`, history); } catch { /* non-fatal */ }

@@ -600,9 +600,10 @@ export function App({
         } else {
           const lines = [`Stale subagents (unused >${staleDays} days):`, ''];
           for (const z of zombies) {
-            const lastStr = z.lastUsed ? z.lastUsed.toLocaleDateString() : 'never';
+            const lastStr = z.lastUsed ? z.lastUsed.toLocaleDateString() : 'never used';
             lines.push(`  ${z.name.padEnd(20)} last: ${lastStr}, calls: ${z.callCount}`);
           }
+          lines.push('', '  Tip: remove unused .uagent/agents/<name>.md files to clean up');
           appendSystem(lines.join('\n'));
         }
       } else {
@@ -1400,8 +1401,12 @@ export function App({
           } catch (shellErr) {
             const se = shellErr as { stdout?: string; stderr?: string };
             shellOut = se.stdout ?? '';
-            // stderr shown in red-ish style with [stderr] prefix
-            if (se.stderr) appendSystem(`[stderr] ${se.stderr.trim()}`);
+            // stderr shown with [stderr] prefix AND injected into context (readline parity)
+            if (se.stderr) {
+              const stderrTrim = se.stderr.trim();
+              appendSystem(`[stderr] ${stderrTrim}`);
+              shellOut += (shellOut ? '\n' : '') + '[stderr] ' + stderrTrim;
+            }
           }
           const trimOut = shellOut.trim();
           if (trimOut) appendSystem(trimOut);
@@ -1559,7 +1564,7 @@ export function App({
           // Abort is handled by handleAbort (Esc key), don't show error
           return;
         }
-        const isAuthError = /401|403|unauthorized|invalid.api.key|authentication/i.test(msg);
+        const isAuthError = /401|403|unauthorized|invalid.api.key|authentication|API_KEY|api.key|No API key/i.test(msg);
         if (isAuthError) {
           appendSystem(`[auth error] ${msg}`);
           appendSystem('Starting API key setup...');
@@ -1579,7 +1584,9 @@ export function App({
             appendSystem('Keys updated. Try your request again.');
           } catch { /* configure not available */ }
         } else {
-          appendAssistant(`\n[Error] ${msg}`);
+          // Non-auth error: show as system message (not assistant), keep chat history clean
+          // Matches readline: console.error('✗ ' + msg) — displayed separately, not in history
+          appendSystem(`[error] ${msg}`);
         }
       } finally {
         abortRef.current = null;
