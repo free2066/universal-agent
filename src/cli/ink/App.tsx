@@ -1471,7 +1471,8 @@ export function App({
             if (se.stderr) {
               const stderrTrim = se.stderr.trim();
               appendSystem(`[stderr] ${stderrTrim}`);
-              shellOut += (shellOut ? '\n' : '') + '[stderr] ' + stderrTrim;
+              // Inject with 'stderr: ' prefix (readline parity: repl.ts injects '\nstderr: ' + stderr)
+              shellOut += (shellOut ? '\n' : '') + 'stderr: ' + stderrTrim;
             }
           }
           const trimOut = shellOut.trim();
@@ -1567,7 +1568,19 @@ export function App({
             sessionLogger.current.logChunk(chunk);
           },
           {
-            onToolStart: (name, args) => {
+            onToolStart: async (name, args) => {
+              // Trigger on_tool_call hook (readline parity: hooks.ts on_tool_call event)
+              // This allows hooks to observe or block individual tool calls
+              const toolHookCtx = await hookRunner.current.run({
+                event: 'on_tool_call',
+                toolName: name,
+                toolArgs: args as Record<string, unknown>,
+                cwd: process.cwd(),
+              }).catch(() => ({ proceed: true, value: undefined }));
+              if (!toolHookCtx.proceed) {
+                appendSystem(`[hook] Tool blocked: ${name} — ${toolHookCtx.value ?? '(no reason)'}`);
+                // Note: cannot abort mid-stream from this callback; log the block
+              }
               const seqKey = `${name}#${toolSeqRef.current++}`;
               toolStartRef.current.set(seqKey, Date.now());
               // summarizeArgs: priority keys first (matches spinner.ts summarizeArgs)
@@ -1655,7 +1668,21 @@ export function App({
           // Matches readline: console.error('✗ ' + msg) — displayed separately, not in history
           appendSystem(`[error] ${msg}`);
         }
+        // ── post_response hook ─────────────────────────────────────────────
+        // Collect full assistant output for post_response hook
+        // (readline parity: hooks.ts post_response event after runStream completes)
       } finally {
+        // Trigger post_response hook with accumulated assistant content
+        try {
+          const fullResponse = messages
+            .filter((m) => m.role === 'assistant')
+            .slice(-1)[0]?.content ?? '';
+          await hookRunner.current.run({
+            event: 'post_response',
+            response: fullResponse,
+            cwd: process.cwd(),
+          }).catch(() => {});
+        } catch { /* non-fatal */ }
         abortRef.current = null;
         setIsStreaming(false);
         setStatusInfo((s) => ({ ...s, isThinking: 'none' }));

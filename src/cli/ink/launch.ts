@@ -179,6 +179,12 @@ export async function runInkREPL(
       const history = agent.getHistory();
       // Close session logger (readline parity: rl.on('close') calls sessionLogger.close())
       sigintLoggerClose?.();
+      // Trigger on_session_end hook (readline parity: /exit calls hookRunner.run on_session_end)
+      try {
+        import('../../core/hooks.js').then(({ HookRunner }) => {
+          new HookRunner(process.cwd()).run({ event: 'on_session_end', cwd: process.cwd() }).catch(() => {});
+        }).catch(() => {});
+      } catch { /* non-fatal */ }
       if (history.length >= 2) {
         import('../../core/memory/session-snapshot.js').then(({ saveSnapshot }) => {
           try { saveSnapshot(`session-${SESSION_ID}`, history); } catch { /* non-fatal */ }
