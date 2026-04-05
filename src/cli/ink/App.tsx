@@ -127,6 +127,16 @@ export function App({
   // ── Ctrl+L double-press timer ────────────────────────────────────────────
   const lastCtrlLRef = useRef(0);
 
+  // ── Generic picker state (shared by /domain, /output-style, /spec, /agents) ──
+  interface GenericPickerItem { id: string; label: string; detail?: string; }
+  interface GenericPickerState {
+    title: string;
+    items: GenericPickerItem[];
+    onSelect: (item: GenericPickerItem) => void;
+  }
+  const [genericPicker, setGenericPicker] = useState<GenericPickerState | null>(null);
+  const [genericPickerIdx, setGenericPickerIdx] = useState(0);
+
   // ── Model picker state (for /model with no arg) ───────────────────────
   interface ModelPickerItem { id: string; label: string; provider: string; ctx: string; }
   const [modelPicker, setModelPicker] = useState<ModelPickerItem[] | null>(null);
@@ -229,9 +239,20 @@ export function App({
       if (sub) {
         agent.setDomain(sub);
         setDomain(sub);
-        appendSystem(`Domain set to: ${sub}`);
+        appendSystem(`Domain → ${sub}`);
       } else {
-        appendSystem(`Current domain: ${domain}`);
+        // No arg: show interactive picker (Ink enhancement)
+        const DOMAINS = ['auto', 'data', 'dev', 'service'];
+        setGenericPicker({
+          title: 'Select Domain',
+          items: DOMAINS.map(d => ({ id: d, label: d, detail: d === domain ? '(current)' : '' })),
+          onSelect: (item) => {
+            agent.setDomain(item.id);
+            setDomain(item.id);
+            appendSystem(`Domain → ${item.id}`);
+          },
+        });
+        setGenericPickerIdx(Math.max(0, DOMAINS.indexOf(domain)));
       }
       return;
     }
@@ -716,12 +737,16 @@ export function App({
           appendSystem('No subagents defined.\n\n  Tip: /agents clean [days] — show stale subagents');
           return;
         }
-        const lines = ['Subagents:', ''];
-        for (const a of agents) {
-          lines.push(`  @run-agent-${a.name.padEnd(18)} ${a.description}`);
-        }
-        lines.push('', '  Tip: /agents clean [days] — show stale subagents');
-        appendSystem(lines.join('\n'));
+        // Show interactive picker: select an agent to run
+        setGenericPicker({
+          title: 'Select Agent to run',
+          items: agents.map(a => ({ id: a.name, label: `@run-agent-${a.name}`, detail: a.description })),
+          onSelect: (item) => {
+            // Equivalent to user submitting @run-agent-<name>
+            void handleSubmit(`@run-agent-${item.id}`);
+          },
+        });
+        setGenericPickerIdx(0);
       }
       return;
     }
@@ -987,9 +1012,25 @@ export function App({
         if (!specs.length) {
           appendSystem('No specs yet. Usage: /spec <requirement description>');
         } else {
-          const lines = ['Specs:', ''];
-          specs.forEach((s, i) => lines.push(`  ${String(i + 1).padStart(2)}.  ${(s as { date?: string }).date ?? ''}  ${(s as { name?: string }).name ?? ''}` ));
-          appendSystem(lines.join('\n'));
+          // Show interactive picker: select a spec to view
+          setGenericPicker({
+            title: 'Select Spec',
+            items: specs.map((s, i) => ({
+              id: String(i),
+              label: (s as { name?: string }).name ?? `spec-${i + 1}`,
+              detail: (s as { date?: string }).date ?? '',
+            })),
+            onSelect: async (item) => {
+              const s = specs[+item.id] as { name?: string; date?: string; path?: string; content?: string };
+              appendSystem([
+                `Spec: ${s.name ?? item.label}  (${s.date ?? ''})`,
+                s.path ? `Path: ${s.path}` : '',
+                '',
+                s.content ?? '(no content)',
+              ].filter(l => l !== '').join('\n'));
+            },
+          });
+          setGenericPickerIdx(0);
         }
       } else {
         appendSystem('Generating spec...');
@@ -1254,11 +1295,25 @@ export function App({
     // ── /output-style [style] ─────────────────────────────────────────────────
     if (cmd.startsWith('/output-style')) {
       const style = cmd.replace('/output-style', '').trim();
-      const validStyles = ['plain', 'markdown', 'compact'];
+      const OUTPUT_STYLES = [
+        { id: 'plain',    label: 'plain',    detail: 'plain text, no markdown' },
+        { id: 'markdown', label: 'markdown', detail: 'full markdown (default)' },
+        { id: 'compact',  label: 'compact',  detail: 'concise output, minimal headers' },
+      ];
       if (!style) {
-        appendSystem(`Output Styles:\n  plain    — plain text, no markdown\n  markdown — full markdown (default)\n  compact  — concise output, minimal headers\n\nCurrently: markdown (default — all output rendered as markdown)\n\nUsage: /output-style <style>`);
+        // No arg: show interactive picker
+        setGenericPicker({
+          title: 'Select Output Style',
+          items: OUTPUT_STYLES,
+          onSelect: (item) => {
+            agent.injectContext(`[Output style changed to: ${item.id}]\nFrom now on, format all responses as ${item.id}.`);
+            appendSystem(`Output style → ${item.id}`);
+          },
+        });
+        setGenericPickerIdx(0);
         return;
       }
+      const validStyles = OUTPUT_STYLES.map(s => s.id);
       if (!validStyles.includes(style)) {
         appendSystem(`Unknown style "${style}". Choose: ${validStyles.join(', ')}`);
         return;
@@ -1892,6 +1947,30 @@ export function App({
   // Note: Ink's useInput receives ALL key events including those in PromptInput,
   // so we guard ctrl/special combos only.
   useInput((input, key) => {
+    // ── Generic picker (domain / output-style / spec / agents): ↑↓ Enter Esc ─
+    if (genericPicker) {
+      if (key.upArrow) {
+        setGenericPickerIdx((i) => (i - 1 + genericPicker.items.length) % genericPicker.items.length);
+        return;
+      }
+      if (key.downArrow) {
+        setGenericPickerIdx((i) => (i + 1) % genericPicker.items.length);
+        return;
+      }
+      if (key.return) {
+        const chosen = genericPicker.items[genericPickerIdx];
+        if (chosen) genericPicker.onSelect(chosen);
+        setGenericPicker(null);
+        return;
+      }
+      if (key.escape) {
+        setGenericPicker(null);
+        appendSystem('Cancelled.');
+        return;
+      }
+      return; // swallow all other keys while picker is open
+    }
+
     // ── Model picker: ↑↓ navigate, Enter select, Esc cancel ──────────────
     if (modelPicker) {
       if (key.upArrow) {
@@ -2212,6 +2291,24 @@ export function App({
                 <Text color={isSel ? 'white' : 'gray'} bold={isSel}>{item.label.padEnd(22)}</Text>
                 <Text color="gray" dimColor>{item.provider.padEnd(12)}</Text>
                 <Text color={isSel ? 'green' : 'gray'} dimColor>{item.ctx}</Text>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
+
+      {/* Generic interactive picker overlay (domain / output-style / spec / agents) */}
+      {genericPicker && (
+        <Box flexDirection="column" paddingLeft={2} paddingBottom={1} borderStyle="single" borderColor="cyan">
+          <Text color="cyan" bold>{genericPicker.title}</Text>
+          <Text color="gray" dimColor>  ↑↓ navigate · Enter select · Esc cancel</Text>
+          {genericPicker.items.map((item, idx) => {
+            const isSel = idx === genericPickerIdx;
+            return (
+              <Box key={item.id} flexDirection="row" gap={1}>
+                <Text color={isSel ? 'cyan' : 'gray'}>{isSel ? '▶' : ' '}</Text>
+                <Text color={isSel ? 'white' : 'gray'} bold={isSel}>{item.label.padEnd(26)}</Text>
+                {item.detail ? <Text color="gray" dimColor>{item.detail}</Text> : null}
               </Box>
             );
           })}
