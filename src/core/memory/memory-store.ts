@@ -405,6 +405,13 @@ ${convText}`;
       }
     }
 
+    // Emit memory_ingest hook (Batch 2) — fire-and-forget
+    if (result.added > 0) {
+      import('../hooks.js').then(({ emitHook }) => {
+        emitHook('memory_ingest', { memoriesAdded: result.added });
+      }).catch(() => { /* non-fatal */ });
+    }
+
     return result;
   }
 

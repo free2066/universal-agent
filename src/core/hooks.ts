@@ -63,12 +63,29 @@ const SHELL_HOOK_DEFAULT_TIMEOUT_MS = 5000;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type HookEvent =
-  | 'pre_prompt'
-  | 'post_response'
-  | 'on_tool_call'
-  | 'on_slash_cmd'
-  | 'on_session_end'
-  | 'on_file_change';
+  // ── Original 6 events ────────────────────────────────────────────────────
+  | 'pre_prompt'           // Transform/augment user input before LLM
+  | 'post_response'        // Process/log LLM response
+  | 'on_tool_call'         // Observe or block tool calls
+  | 'on_slash_cmd'         // Custom /slash commands
+  | 'on_session_end'       // Cleanup when session exits
+  | 'on_file_change'       // File write trigger (watch mode)
+  // ── Extended events (Batch 2 — Claude Code parity) ───────────────────────
+  | 'pre_compact'          // Before context compression (can block)
+  | 'post_compact'         // After context compression completes
+  | 'session_restore'      // After /resume or /rewind restores a session
+  | 'model_switch'         // After /model switches to a new model
+  | 'tool_permission_request'  // Dangerous command awaiting user confirmation
+  | 'worktree_create'      // After git worktree is created
+  | 'worktree_remove'      // After git worktree is removed
+  | 'memory_ingest'        // After Dream Mode stores insights
+  | 'subagent_start'       // Before a sub-agent begins execution
+  | 'subagent_stop'        // After a sub-agent finishes (success or error)
+  | 'task_create'          // After a task is created on the task board
+  | 'task_complete'        // After a task is marked completed
+  | 'cwd_change'           // After working directory changes
+  | 'domain_switch'        // After /domain switches active domain
+  | 'thinking_change';     // After thinking level changes (none/low/medium/high)
 
 export type HookType = 'shell' | 'inject' | 'block' | 'module';
 
@@ -115,13 +132,31 @@ export interface HookContext {
   prompt?: string;
   /** For post_response: the LLM's response text */
   response?: string;
-  /** For on_tool_call: tool name and args */
+  /** For on_tool_call / tool_permission_request: tool name and args */
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   /** For on_slash_cmd: the full slash command input */
   slashCmd?: string;
   /** For on_file_change: the changed file path */
   filePath?: string;
+  /** For model_switch / domain_switch: new value */
+  newValue?: string;
+  /** For model_switch / domain_switch: previous value */
+  prevValue?: string;
+  /** For worktree_create/remove: worktree info */
+  worktreeName?: string;
+  worktreePath?: string;
+  /** For task_create/complete: task info */
+  taskId?: number;
+  taskSubject?: string;
+  /** For subagent_start/stop: agent name and result */
+  agentName?: string;
+  agentResult?: string;
+  /** For pre_compact/post_compact: token counts */
+  tokensBefore?: number;
+  tokensAfter?: number;
+  /** For memory_ingest: how many insights were added */
+  memoriesAdded?: number;
   /** Current working directory */
   cwd?: string;
 }
@@ -508,13 +543,32 @@ export function createHookEvent(
 }
 
 /**
- * Fire an internal hook event.
- * Currently a no-op (events are informational); future versions may route
- * internal events to user-configurable hooks (e.g. on_tool_call observer hooks).
+ * Fire an internal hook event, routing to HookRunner for user-observable events.
+ *
+ * Extended events (Batch 2) now route through the HookRunner so users can
+ * configure shell/inject hooks for pre_compact, model_switch, worktree_create,
+ * task_create, subagent_start, etc.
  */
-export async function triggerHook(_event: InternalHookEvent): Promise<void> {
-  // No-op stub: internal hook events are currently informational only.
-  // Future: route to HookRunner for user-observable event streams.
+export async function triggerHook(event: InternalHookEvent): Promise<void> {
+  // Map internal domain:action → public HookEvent where applicable
+  const runner = _runner;
+  if (!runner) return;
+
+  // Only route events that have a corresponding public HookEvent
+  const mapping: Partial<Record<string, HookEvent>> = {
+    'agent:compact': 'pre_compact',
+    'session:start': 'on_slash_cmd', // Not mapped — session:start is internal only
+  };
+  const key = `${event.domain}:${event.action}`;
+  const publicEvent = mapping[key];
+  if (!publicEvent) return;
+
+  if (!runner.hasHooksFor(publicEvent)) return;
+  await runner.run({
+    event: publicEvent,
+    cwd: process.cwd(),
+    ...((event.data ?? {}) as Partial<HookContext>),
+  });
 }
 
 export function getHookRunner(cwd?: string): HookRunner {
@@ -526,4 +580,16 @@ export function getHookRunner(cwd?: string): HookRunner {
 
 export function reloadHooks(): void {
   _runner?.reload();
+}
+
+/**
+ * Emit a public HookEvent directly (Batch 2 extended events).
+ * Non-blocking: errors are swallowed so hooks never crash agent flow.
+ */
+export function emitHook(event: HookEvent, ctx: Partial<HookContext> = {}): void {
+  const runner = _runner;
+  if (!runner) return;
+  if (!runner.hasHooksFor(event)) return;
+  // Fire-and-forget; errors are non-fatal
+  runner.run({ event, cwd: process.cwd(), ...ctx }).catch(() => { /* non-fatal */ });
 }

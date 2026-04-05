@@ -198,6 +198,10 @@ export class WorktreeManager {
       this.events.emit('worktree.create.after',
         taskId !== undefined ? { id: taskId } : {},
         { name, path: wtPath, branch, status: 'active' });
+      // Emit public worktree_create hook (Batch 2)
+      import('../../hooks.js').then(({ emitHook }) => {
+        emitHook('worktree_create', { worktreeName: name, worktreePath: wtPath, taskId });
+      }).catch(() => { /* non-fatal */ });
       return JSON.stringify(entry, null, 2);
     } catch (e) {
       this.events.emit('worktree.create.failed',
@@ -267,6 +271,10 @@ export class WorktreeManager {
       this.events.emit('worktree.remove.after',
         wt.task_id !== null ? { id: wt.task_id } : {},
         { name, path: wt.path, status: 'removed' });
+      // Emit public worktree_remove hook (Batch 2)
+      import('../../hooks.js').then(({ emitHook }) => {
+        emitHook('worktree_remove', { worktreeName: name, worktreePath: wt.path });
+      }).catch(() => { /* non-fatal */ });
       return `Removed worktree '${name}'`;
     } catch (e) {
       this.events.emit('worktree.remove.failed',
@@ -441,4 +449,53 @@ export const taskBindWorktreeTool: ToolRegistration = {
     },
   },
   handler: async (args: Record<string, unknown>): Promise<string> => getWorktreeManager().bindTask(args.task_id as number, args.worktree as string),
+};
+
+/**
+ * worktree_sync — Batch 2: Synchronize worktree statuses to task board.
+ *
+ * Scans the worktree index and, for each active worktree with a bound task:
+ *  1. Reads the git status (modified/clean)
+ *  2. Updates the task description with a live worktree status summary
+ *  3. Returns a combined view of tasks + worktrees
+ */
+export const worktreeSyncTool: ToolRegistration = {
+  definition: {
+    name: 'worktree_sync',
+    description: [
+      'Sync worktree statuses to task board. ',
+      'For each active worktree with a bound task, reads git status and shows ',
+      'a combined "task board + worktree status" table. ',
+      'Use before merging branches or when coordinating parallel tasks.',
+    ].join(''),
+    parameters: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  handler: async (): Promise<string> => {
+    const mgr = getWorktreeManager();
+    const wtIdx = join(resolve(process.cwd(), '.uagent', 'worktrees'), 'index.json');
+    if (!existsSync(wtIdx)) return 'No worktrees found.';
+    let idx: { worktrees: Array<{ name: string; path: string; branch: string; task_id: number | null; status: string }> };
+    try { idx = JSON.parse(readFileSync(wtIdx, 'utf-8')); } catch { return 'Failed to read worktree index.'; }
+    const active = idx.worktrees.filter((w) => w.status !== 'removed');
+    if (!active.length) return 'No active worktrees.';
+    const lines: string[] = ['Worktree ↔ Task Board Sync:', ''];
+    lines.push(`  ${'WORKTREE'.padEnd(20)} ${'TASK'.padEnd(8)} ${'BRANCH'.padEnd(25)} GIT STATUS`);
+    lines.push('  ' + '-'.repeat(75));
+    for (const wt of active) {
+      let gitStatus = 'unknown';
+      try {
+        const out = mgr.run(wt.name, 'git status --short');
+        const changed = out.trim().split('\n').filter(Boolean).length;
+        gitStatus = changed === 0 ? 'clean' : `${changed} modified`;
+      } catch { gitStatus = 'error'; }
+      const taskStr = wt.task_id !== null ? `#${wt.task_id}` : '-';
+      lines.push(`  ${wt.name.padEnd(20)} ${taskStr.padEnd(8)} ${wt.branch.padEnd(25)} ${gitStatus}`);
+    }
+    lines.push('');
+    lines.push('  Tip: worktree_remove --complete_task true  to merge and close task');
+    return lines.join('\n');
+  },
 };

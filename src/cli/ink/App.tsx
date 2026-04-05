@@ -23,11 +23,11 @@ import { modelManager } from '../../models/model-manager.js';
 import { SessionLogger } from '../session-logger.js';
 
 const SLASH_COMPLETIONS = [
-  '/help', '/clear', '/exit', '/resume', '/rewind', '/compact', '/tokens', '/cost',
+  '/help', '/clear', '/exit', '/resume', '/rewind', '/compact', '/tokens', '/cost', '/usage',
   '/model', '/models', '/domain', '/continue',
-  '/review', '/inspect', '/purify',
+  '/diff', '/review', '/inspect', '/purify',
   '/spec', '/spec:brainstorm', '/spec:write-plan', '/spec:execute-plan',
-  '/agents', '/team', '/tasks', '/inbox',
+  '/agents', '/team', '/tasks', '/worktrees', '/inbox',
   '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
   '/mcp', '/log', '/logs',
   '/context', '/status', '/copy', '/export',
@@ -250,9 +250,14 @@ export function App({
     // ── /domain [name] ───────────────────────────────────────────────────────
     if (cmd.startsWith('/domain')) {
       if (sub) {
+        const prevDomain = domain;
         agent.setDomain(sub);
         setDomain(sub);
         appendSystem(`Domain → ${sub}`);
+        // Emit domain_switch hook (Batch 2)
+        import('../../core/hooks.js').then(({ emitHook }) => {
+          emitHook('domain_switch', { prevValue: prevDomain, newValue: sub });
+        }).catch(() => { /* non-fatal */ });
       } else {
         // No arg: show interactive picker (Ink enhancement)
         const DOMAINS = ['auto', 'data', 'dev', 'service'];
@@ -260,9 +265,13 @@ export function App({
           title: 'Select Domain',
           items: DOMAINS.map(d => ({ id: d, label: d, detail: d === domain ? '(current)' : '' })),
           onSelect: (item) => {
+            const prevD = domain;
             agent.setDomain(item.id);
             setDomain(item.id);
             appendSystem(`Domain → ${item.id}`);
+            import('../../core/hooks.js').then(({ emitHook }) => {
+              emitHook('domain_switch', { prevValue: prevD, newValue: item.id });
+            }).catch(() => { /* non-fatal */ });
           },
         });
         setGenericPickerIdx(Math.max(0, DOMAINS.indexOf(domain)));
@@ -273,17 +282,20 @@ export function App({
     // ── /model [name] ────────────────────────────────────────────────────────
     if (cmd.startsWith('/model') && !cmd.startsWith('/models')) {
       if (sub) {
+        const prevModel = modelManager.getCurrentModel('main');
         agent.setModel(sub);
         modelManager.setPointer('main', sub);
         // Update StatusBar model display and context length
-        // (readline parity: agent-handlers.ts handleModel lines 50-51
-        //  calls updateStatusBar({ model, contextLength }) + rl.setPrompt after switch)
         const newProfile = modelManager.listProfiles().find((p) => p.name === sub);
         const newCtxLen = newProfile?.contextLength ?? 128000;
         const label = getModelLabel(sub);
         setCurrentModelDisplay(label);
         setStatusInfo((s) => ({ ...s, contextLength: newCtxLen }));
         appendSystem(`Model switched to: ${label}`);
+        // Emit model_switch hook (Batch 2)
+        import('../../core/hooks.js').then(({ emitHook }) => {
+          emitHook('model_switch', { prevValue: prevModel, newValue: sub });
+        }).catch(() => { /* non-fatal */ });
       } else {
         // Open interactive picker (readline parity: showModelPicker with ↑↓ navigation)
         const profiles = modelManager.listProfiles();
@@ -528,6 +540,64 @@ export function App({
       return;
     }
 
+    // ── /usage [days] — enhanced fee & token breakdown (Batch 2) ────────────
+    // /usage        → today's breakdown by model (tokens + cost)
+    // /usage 7      → last 7 days summary
+    // /cost [days]  → alias for /usage
+    if (cmd.startsWith('/usage') || cmd.startsWith('/cost')) {
+      try {
+        const { usageTracker } = await import('../../models/usage-tracker.js');
+        const { sessionMetrics } = await import('../../core/metrics.js');
+        const daysArg = parts[1] ? parseInt(parts[1], 10) : 1;
+        const days = isNaN(daysArg) || daysArg < 1 ? 1 : Math.min(daysArg, 30);
+
+        const lines: string[] = [`Usage Report (last ${days} day${days > 1 ? 's' : ''}):`, ''];
+
+        // Per-model breakdown from UsageTracker
+        const todayUsage = usageTracker.loadTodayUsage();
+        const modelEntries = Object.entries(todayUsage.byModel);
+        if (modelEntries.length > 0) {
+          lines.push('  Today — by model:');
+          lines.push(`  ${'MODEL'.padEnd(28)} ${'CALLS'.padEnd(6)} ${'INPUT'.padEnd(10)} ${'OUTPUT'.padEnd(10)} COST`);
+          lines.push('  ' + '-'.repeat(72));
+          let totIn = 0, totOut = 0, totCost = 0;
+          for (const [model, mu] of modelEntries.sort((a, b) => b[1].costUSD - a[1].costUSD)) {
+            totIn += mu.input; totOut += mu.output; totCost += mu.costUSD;
+            const inStr = mu.input >= 1000 ? `${(mu.input / 1000).toFixed(1)}k` : String(mu.input);
+            const outStr = mu.output >= 1000 ? `${(mu.output / 1000).toFixed(1)}k` : String(mu.output);
+            const costStr = mu.costUSD >= 0.01 ? `$${mu.costUSD.toFixed(4)}` : `<$0.01`;
+            lines.push(`  ${model.slice(0, 27).padEnd(28)} ${String(mu.calls).padEnd(6)} ${inStr.padEnd(10)} ${outStr.padEnd(10)} ${costStr}`);
+          }
+          lines.push('  ' + '-'.repeat(72));
+          const totInStr = totIn >= 1000 ? `${(totIn / 1000).toFixed(1)}k` : String(totIn);
+          const totOutStr = totOut >= 1000 ? `${(totOut / 1000).toFixed(1)}k` : String(totOut);
+          lines.push(`  ${'TOTAL'.padEnd(28)} ${''.padEnd(6)} ${totInStr.padEnd(10)} ${totOutStr.padEnd(10)} $${totCost.toFixed(4)}`);
+        } else {
+          lines.push('  Today: No API calls recorded yet.');
+        }
+
+        // Session metrics (in-memory)
+        lines.push('');
+        lines.push('  This session:');
+        const sessionSummary = sessionMetrics.getSummary();
+        for (const l of sessionSummary.split('\n')) lines.push('  ' + l);
+
+        // Multi-day summary (if days > 1)
+        if (days > 1) {
+          lines.push('');
+          lines.push(usageTracker.getSummary(days));
+        }
+
+        lines.push('');
+        lines.push('  Set limits: UAGENT_DAILY_TOKEN_LIMIT=100000 UAGENT_DAILY_COST_LIMIT=2.0');
+        lines.push('  [any key to close]');
+        setInfoOverlay(lines.join('\n'));
+      } catch (e) {
+        appendSystem(`Usage stats error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return;
+    }
+
     // ── /rewind — interactive snapshot picker ────────────────────────────────
     if (cmd === '/rewind') {
       const { listAllSnapshots, loadSnapshot } = await import('../../core/memory/session-snapshot.js');
@@ -564,6 +634,10 @@ export function App({
               }));
             setMessages(restored);
             appendSystem(`Rewound to "${item.id}" (${snap.messages.length} messages)`);
+            // Emit session_restore hook (Batch 2)
+            import('../../core/hooks.js').then(({ emitHook }) => {
+              emitHook('session_restore', { newValue: item.id });
+            }).catch(() => { /* non-fatal */ });
           } else {
             appendSystem(`Failed to load snapshot "${item.id}".`);
           }
@@ -757,8 +831,20 @@ export function App({
     // ── /tasks ───────────────────────────────────────────────────────────────
     if (cmd === '/tasks') {
       const { getTaskBoard } = await import('../../core/task-board.js');
-      const result = getTaskBoard(process.cwd()).listAll();
+      const result = getTaskBoard(process.cwd()).listAll(true); // includeWorktrees=true (Batch 2)
       appendSystem(result || 'No tasks.');
+      return;
+    }
+
+    // ── /worktrees ───────────────────────────────────────────────────────────
+    if (cmd === '/worktrees') {
+      try {
+        const { worktreeSyncTool } = await import('../../core/tools/agents/worktree-tools.js');
+        const result = await worktreeSyncTool.handler({});
+        appendSystem(result as string);
+      } catch (e) {
+        appendSystem(`Worktree sync error: ${e instanceof Error ? e.message : String(e)}`);
+      }
       return;
     }
 
@@ -805,6 +891,55 @@ export function App({
       const { getTeammateManager } = await import('../../core/teammate-manager.js');
       const result = getTeammateManager(process.cwd()).listAll();
       appendSystem(result || 'No active teammates.');
+      return;
+    }
+
+    // ── /diff [ref] ──────────────────────────────────────────────────────────
+    // /diff                → staged diff (git diff --cached)
+    // /diff HEAD           → all changes vs HEAD
+    // /diff <branch/sha>   → diff vs that ref
+    if (cmd.startsWith('/diff')) {
+      const ref = sub ?? '';
+      try {
+        const { execSync } = await import('child_process');
+        let gitArgs: string;
+        let label: string;
+        if (!ref) {
+          // Prefer staged; fall back to working-tree
+          const staged = execSync('git diff --cached --name-only', {
+            cwd: process.cwd(), encoding: 'utf-8', timeout: 5000,
+          }).trim();
+          gitArgs = staged ? 'git diff --cached --stat' : 'git diff --stat';
+          label = staged ? 'Staged changes' : 'Unstaged changes';
+        } else if (ref === 'HEAD') {
+          gitArgs = 'git diff HEAD --stat';
+          label = 'Changes vs HEAD';
+        } else {
+          gitArgs = `git diff ${ref} --stat`;
+          label = `Changes vs ${ref}`;
+        }
+        const stat = execSync(gitArgs, {
+          cwd: process.cwd(), encoding: 'utf-8', timeout: 10000,
+        }).trim();
+        // Also get short log since ref
+        let extraLog = '';
+        if (ref) {
+          try {
+            extraLog = '\n\nCommits:\n' + execSync(`git log ${ref}..HEAD --oneline`, {
+              cwd: process.cwd(), encoding: 'utf-8', timeout: 5000,
+            }).trim();
+          } catch { /* no commits = silent */ }
+        }
+        const output = stat || '(no changes)';
+        appendSystem(`${label}:\n\n${output}${extraLog}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes('not a git repository')) {
+          appendSystem('Not inside a git repository.');
+        } else {
+          appendSystem(`git diff error: ${msg.slice(0, 200)}`);
+        }
+      }
       return;
     }
 
@@ -1523,41 +1658,8 @@ export function App({
       return;
     }
 
-    // ── /cost ────────────────────────────────────────────────────────────────
-    if (cmd === '/cost') {
-      const { sessionMetrics } = await import('../../core/metrics.js');
-      const stats = sessionMetrics.getStats();
-      const lines = ['Cost Estimate (this session):', ''];
-      lines.push(`  LLM calls    : ${stats.calls}`);
-      lines.push(`  Input tokens : ${stats.totalInputTokens.toLocaleString()}`);
-      lines.push(`  Output tokens: ${stats.totalOutputTokens.toLocaleString()}`);
-      lines.push(`  Duration     : ${(stats.totalDurationMs / 1000).toFixed(1)}s`);
-      lines.push(`  Failed calls : ${stats.failedCalls}`);
-      // Model-level cost summary (readline getCostSummary parity)
-      try {
-        lines.push('');
-        lines.push(modelManager.getCostSummary());
-      } catch { /* non-fatal */ }
-      // Today's cross-session usage
-      try {
-        const { usageTracker } = await import('../../models/usage-tracker.js');
-        const todayUsage = usageTracker.loadTodayUsage();
-        lines.push('');
-        lines.push('Today (all sessions):');
-        lines.push(`  Input:    ${todayUsage.totalInputTokens.toLocaleString()} tokens`);
-        lines.push(`  Output:   ${todayUsage.totalOutputTokens.toLocaleString()} tokens`);
-        lines.push(`  Cost:     $${todayUsage.totalCostUSD.toFixed(4)} USD`);
-        lines.push(`  Sessions: ${todayUsage.sessions}`);
-        const check = usageTracker.checkLimits();
-        if (check.status !== 'ok' && check.message) lines.push('', check.message);
-      } catch { /* usageTracker optional */ }
-      // Operation hints (readline parity: tool-handlers.ts handleCost appends these)
-      lines.push('');
-      lines.push('  uagent usage --days 7  — view usage history');
-      lines.push('  uagent limits          — view/set daily spending limits');
-      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
-      return;
-    }
+    // ── /cost — now handled by /usage above (Batch 2 merged) ────────────────
+    // kept as stub for safety; actual logic is in /usage block above
 
     // ── /help ────────────────────────────────────────────────────────────────
     if (cmd === '/help') {
@@ -1602,7 +1704,9 @@ export function App({
         '    /insights [days] usage analysis report (default 30d)',
         '',
         '  Tools:',
-        '    /tasks           task board',
+        '    /tasks           task board (with worktree bindings)',
+        '    /worktrees       worktree ↔ task sync table (Batch 2)',
+        '    /diff [ref]      git diff stats — staged, HEAD, or vs <ref> (Batch 2)',
         '    /mcp             MCP servers',
         '    /team            active teammates',
         '    /inbox           lead inbox',
@@ -1610,8 +1714,9 @@ export function App({
         '    /plugins         domain plugins',
         '    /plugin          local extensions (commands/agents/hooks)',
         '    /metrics         LLM call metrics',
-        '    /cost            token cost estimate',
-        '    /hooks           lifecycle hooks',
+        '    /usage [days]    token & cost breakdown by model (Batch 2)',
+        '    /cost [days]     alias for /usage',
+        '    /hooks           lifecycle hooks (20+ events)',
         '    /review          AI code review',
         '    /inspect [path]  code inspection',
         '    /purify          self-heal fixes',
@@ -1621,6 +1726,10 @@ export function App({
         '    /spec:execute-plan        execute last plan',
         '    /init            create .uagent/AGENTS.md',
         '    /rules           show loaded rules',
+        '',
+        '  Plan Mode (Shift+Tab → plan):',
+        '    Write tools blocked: Write/Edit/Bash are intercepted (Batch 2)',
+        '    LLM instructed to plan-only, not execute',
         '',
         '  Output:',
         '    /output-style [style]  plain|markdown|compact',
@@ -2223,9 +2332,15 @@ export function App({
       modeIdxRef.current = (modeIdxRef.current + 1) % AGENT_MODES.length;
       const nextMode = AGENT_MODES[modeIdxRef.current];
       setMode(nextMode);
+      // Plan Mode: set env var so agent-loop.ts can block write tools (Batch 2)
+      process.env.UAGENT_PLAN_MODE = nextMode === 'plan' ? '1' : '0';
       const prompt = MODE_PROMPTS[nextMode] ?? '';
       try { agent.setSystemPrompt(prompt); } catch { /* non-fatal */ }
-      appendSystem(`Mode: ${nextMode}`);
+      appendSystem(`Mode: ${nextMode}${nextMode === 'plan' ? ' (write tools blocked)' : ''}`);
+      // Emit thinking_change / plan mode hooks
+      import('../../core/hooks.js').then(({ emitHook }) => {
+        emitHook('thinking_change', { newValue: nextMode });
+      }).catch(() => { /* non-fatal */ });
       return;
     }
 

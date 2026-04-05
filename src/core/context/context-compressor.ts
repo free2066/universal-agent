@@ -274,6 +274,12 @@ export async function autoCompact(
   const toKeep = history.slice(safeSplit);
   if (toCompact.length === 0) return 0;
 
+  // Emit pre_compact hook (Batch 2)
+  try {
+    const { emitHook } = await import('../hooks.js');
+    emitHook('pre_compact', { tokensBefore: decision.estimatedTokens });
+  } catch { /* non-fatal */ }
+
   onProgress?.(
     `\n🗜️  Auto-compact: ${decision.estimatedTokens.toLocaleString()} tokens` +
     ` > threshold ${decision.threshold.toLocaleString()} — summarizing ${toCompact.length} turns…\n`,
@@ -319,6 +325,16 @@ export async function autoCompact(
 
   history.splice(0, history.length, summaryMessage, ...toKeep);
   onProgress?.(`\n✅  Compacted ${toCompact.length} turns → 1 structured summary (9 chapters).\n`);
+
+  // Emit post_compact hook (Batch 2)
+  try {
+    const { emitHook } = await import('../hooks.js');
+    const { estimateHistoryTokens } = await import('./context-compressor.js');
+    emitHook('post_compact', {
+      tokensBefore: decision.estimatedTokens,
+      tokensAfter: estimateHistoryTokens(history),
+    });
+  } catch { /* non-fatal */ }
 
   // ── Post-Compact File Recovery (kstack #15375) ─────────────────────────────
   // After compacting, re-inject the most recently read files (up to 5 files,

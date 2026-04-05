@@ -68,6 +68,7 @@ import {
   worktreeKeepTool,
   worktreeEventsTool,
   taskBindWorktreeTool,
+  worktreeSyncTool,
 } from '../tools/agents/worktree-tools.js';
 
 /**
@@ -214,6 +215,7 @@ export function registerAllTools(
     worktreeKeepTool,
     worktreeEventsTool,
     taskBindWorktreeTool,
+    worktreeSyncTool,   // Batch 2: sync worktree status to task board
   ]);
 
   // s13 — structured / synthetic output

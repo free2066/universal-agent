@@ -508,7 +508,23 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
 
           try {
             const result = await withToolRetry(
-              () => registry.execute(call.name, call.arguments),
+              () => {
+                // ── Plan Mode: block write tools (Batch 2) ─────────────────
+                const isPlanMode = process.env.UAGENT_PLAN_MODE === '1';
+                const WRITE_TOOLS = new Set([
+                  'Write', 'Edit', 'Bash', 'FileWrite', 'FileEdit',
+                  'write_file', 'edit_file', 'bash',
+                ]);
+                if (isPlanMode && WRITE_TOOLS.has(call.name)) {
+                  return Promise.resolve(
+                    `[Plan Mode] Tool "${call.name}" is blocked in plan mode. ` +
+                    `This action would write/modify files or execute commands. ` +
+                    `Describe the plan but do NOT execute write operations. ` +
+                    `Use /plan to exit plan mode.`
+                  );
+                }
+                return registry.execute(call.name, call.arguments);
+              },
               call.name,
             );
             const durationMs = Date.now() - toolStartMs;

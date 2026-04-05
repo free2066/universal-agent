@@ -99,6 +99,10 @@ export class TaskBoard {
       updatedAt: now,
     };
     this.save(task);
+    // Emit task_create hook (Batch 2)
+    import('./hooks.js').then(({ emitHook }) => {
+      emitHook('task_create', { taskId: task.id, taskSubject: task.subject });
+    }).catch(() => { /* non-fatal */ });
     return JSON.stringify(task, null, 2);
   }
 
@@ -120,6 +124,10 @@ export class TaskBoard {
       task.status = opts.status;
       if (opts.status === 'completed') {
         this.clearDependency(id);
+        // Emit task_complete hook (Batch 2)
+        import('./hooks.js').then(({ emitHook }) => {
+          emitHook('task_complete', { taskId: task.id, taskSubject: task.subject });
+        }).catch(() => { /* non-fatal */ });
       }
     }
     if (opts.addBlockedBy) {
@@ -154,7 +162,7 @@ export class TaskBoard {
     }
   }
 
-  listAll(): string {
+  listAll(includeWorktrees = false): string {
     const files = readdirSync(this.dir)
       .filter((f) => /^task_\d+\.json$/.test(f))
       .sort((a, b) => {
@@ -164,6 +172,24 @@ export class TaskBoard {
       });
 
     if (files.length === 0) return 'No tasks.';
+
+    // Optionally load worktree index for binding display
+    let worktreeBindings: Map<number, string> = new Map();
+    if (includeWorktrees) {
+      try {
+        const wtIdx = resolve(process.cwd(), '.uagent', 'worktrees', 'index.json');
+        if (existsSync(wtIdx)) {
+          const idx = JSON.parse(readFileSync(wtIdx, 'utf-8')) as {
+            worktrees: Array<{ name: string; task_id: number | null; status: string }>;
+          };
+          for (const wt of idx.worktrees) {
+            if (wt.task_id !== null && wt.status !== 'removed') {
+              worktreeBindings.set(wt.task_id, wt.name);
+            }
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
 
     const tasks = files.flatMap((f) => {
       try {
@@ -176,7 +202,8 @@ export class TaskBoard {
       const marker = { pending: '[ ]', in_progress: '[>]', completed: '[x]', cancelled: '[✗]' }[t.status] ?? '[?]';
       const blocked = t.blockedBy.length > 0 ? ` (blocked by: ${t.blockedBy.join(', ')})` : '';
       const owner = t.owner ? ` @${t.owner}` : '';
-      return `${marker} #${t.id}: ${t.subject}${owner}${blocked}`;
+      const wt = includeWorktrees && worktreeBindings.has(t.id) ? ` [worktree:${worktreeBindings.get(t.id)}]` : '';
+      return `${marker} #${t.id}: ${t.subject}${owner}${blocked}${wt}`;
     });
     return lines.join('\n');
   }
