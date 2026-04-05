@@ -122,6 +122,11 @@ export async function runInkREPL(
   } catch { /* non-fatal if SessionLogger unavailable */ }
 
   return new Promise<void>((resolve) => {
+    // Hold a reference to the current stream abort function (registered by App via onRegisterAbort)
+    // so the SIGINT handler can gracefully abort an in-progress stream before unmounting.
+    // (readline parity: repl.ts calls _currentAbort?.abort() in cleanup)
+    let abortCurrentStream: (() => void) | null = null;
+
     const { unmount } = render(
       React.createElement(App, {
         agent,
@@ -133,6 +138,7 @@ export async function runInkREPL(
         initialPrompt: extra.initialPrompt,
         inferProviderEnvKey: extra.inferProviderEnvKey,
         startupHint,
+        onRegisterAbort: (fn) => { abortCurrentStream = fn; },
         onExit: () => {
           // Save session snapshot
           const history = agent.getHistory();
@@ -168,6 +174,8 @@ export async function runInkREPL(
 
     // Handle Ctrl+C gracefully
     process.on('SIGINT', () => {
+      // First abort any in-progress LLM stream (readline parity: repl.ts _currentAbort?.abort())
+      try { abortCurrentStream?.(); } catch { /* non-fatal */ }
       const history = agent.getHistory();
       // Close session logger (readline parity: rl.on('close') calls sessionLogger.close())
       sigintLoggerClose?.();

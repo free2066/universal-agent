@@ -49,6 +49,10 @@ export interface AppProps {
   inferProviderEnvKey?: (msg: string) => string | undefined;
   /** Shown once at startup if a previous session is available */
   startupHint?: string;
+  /** Called on mount with an abort function that cancels any active stream.
+   *  Allows launch.ts SIGINT handler to gracefully abort before unmounting.
+   *  (readline parity: repl.ts _currentAbort?.abort() before exit) */
+  onRegisterAbort?: (abortFn: () => void) => void;
 }
 
 export function App({
@@ -62,6 +66,7 @@ export function App({
   initialPrompt,
   inferProviderEnvKey,
   startupHint,
+  onRegisterAbort,
 }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const hookRunner = useRef(new HookRunner(process.cwd()));
@@ -1675,6 +1680,16 @@ export function App({
       setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
     }
   }, [appendAssistant]);
+
+  // Register abort function with parent so launch.ts SIGINT can abort before unmounting
+  // (readline parity: repl.ts calls _currentAbort?.abort() in rl.on('close') cleanup)
+  useEffect(() => {
+    onRegisterAbort?.(() => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onRegisterAbort]);
 
   // ── Global hotkeys (Ink useInput, active when not in PromptInput text) ───
   // Note: Ink's useInput receives ALL key events including those in PromptInput,
