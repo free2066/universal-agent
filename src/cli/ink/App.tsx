@@ -288,6 +288,8 @@ export function App({
         `  Session  : ${sessionId}`,
         `  Messages : ${h.length}`,
         `  Log      : ${sessionLogger.current.path}`,
+        '',
+        '  /model — switch model  |  /log — session log path',
       ].join('\n'));
       return;
     }
@@ -339,8 +341,23 @@ export function App({
       return;
     }
 
+    // ── /continue ────────────────────────────────────────────────────────────
+    // Matches readline handleContinue: inject "continue" instruction into agent
+    if (cmd === '/continue') {
+      const continuePrompt = '[SYSTEM] Continue from where you left off — complete any remaining tasks.';
+      appendSystem('Sending continue instruction to agent...');
+      try {
+        let out = '';
+        await agent.runStream(continuePrompt, (c) => { out += c; appendAssistant(c); });
+        if (!out) appendSystem('(agent had nothing more to continue)');
+      } catch (err) {
+        appendSystem(`Continue failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
     // ── /resume [session-id] ─────────────────────────────────────────────────
-    if (cmd.startsWith('/resume') || cmd === '/continue') {
+    if (cmd.startsWith('/resume')) {
       const { loadSnapshot, loadLastSnapshot } = await import('../../core/memory/session-snapshot.js');
       const formatAge = (ts: number) => {
         const diff = Date.now() - ts;
@@ -364,7 +381,34 @@ export function App({
           setMessages(restored);
           appendSystem(`Restored session "${sub}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`);
         } else {
-          appendSystem(`Session "${sub}" not found.`);
+          // Session not found: list available sessions (readline parity)
+          try {
+            const { readdirSync, statSync: ss, existsSync: es } = await import('fs');
+            const { resolve: r2, join: j2 } = await import('path');
+            const sessDir = r2(process.env.HOME ?? '~', '.uagent', 'sessions');
+            if (es(sessDir)) {
+              const files = readdirSync(sessDir)
+                .filter((f) => f.endsWith('.json'))
+                .sort((a, b) => ss(j2(sessDir, b)).mtimeMs - ss(j2(sessDir, a)).mtimeMs)
+                .slice(0, 10);
+              if (files.length > 0) {
+                const lines = [`Session "${sub}" not found. Available sessions:`, ''];
+                files.forEach((f, i) => {
+                  const id = f.replace('.json', '');
+                  const mtime = ss(j2(sessDir, f)).mtimeMs;
+                  lines.push(`  ${String(i + 1).padStart(2)}.  ${id}  (${formatAge(mtime)})`);
+                });
+                lines.push('', '  Use: /resume <session-id>');
+                appendSystem(lines.join('\n'));
+              } else {
+                appendSystem(`Session "${sub}" not found. No saved sessions available.`);
+              }
+            } else {
+              appendSystem(`Session "${sub}" not found.`);
+            }
+          } catch {
+            appendSystem(`Session "${sub}" not found.`);
+          }
         }
       } else {
         const snap = loadLastSnapshot();
@@ -381,7 +425,34 @@ export function App({
           setMessages(restored);
           appendSystem(`Restored last session from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`);
         } else {
-          appendSystem('No saved session found.');
+          // No last snapshot: list available sessions
+          try {
+            const { readdirSync, statSync: ss2, existsSync: es2 } = await import('fs');
+            const { resolve: r3, join: j3 } = await import('path');
+            const sessDir2 = r3(process.env.HOME ?? '~', '.uagent', 'sessions');
+            if (es2(sessDir2)) {
+              const files2 = readdirSync(sessDir2)
+                .filter((f) => f.endsWith('.json'))
+                .sort((a, b) => ss2(j3(sessDir2, b)).mtimeMs - ss2(j3(sessDir2, a)).mtimeMs)
+                .slice(0, 10);
+              if (files2.length > 0) {
+                const lines2 = ['No last session. Available sessions:', ''];
+                files2.forEach((f, i) => {
+                  const id = f.replace('.json', '');
+                  const mtime = ss2(j3(sessDir2, f)).mtimeMs;
+                  lines2.push(`  ${String(i + 1).padStart(2)}.  ${id}  (${formatAge(mtime)})`);
+                });
+                lines2.push('', '  Use: /resume <session-id>');
+                appendSystem(lines2.join('\n'));
+              } else {
+                appendSystem('No saved sessions found.');
+              }
+            } else {
+              appendSystem('No saved sessions found.');
+            }
+          } catch {
+            appendSystem('No saved session found.');
+          }
         }
       }
       return;
@@ -751,7 +822,7 @@ export function App({
           appendSystem('No specs yet. Usage: /spec <requirement description>');
         } else {
           const lines = ['Specs:', ''];
-          specs.forEach((s, i) => lines.push(`  ${i + 1}.  ${s.date}  ${s.name}`));
+          specs.forEach((s, i) => lines.push(`  ${String(i + 1).padStart(2)}.  ${(s as { date?: string }).date ?? ''}  ${(s as { name?: string }).name ?? ''}` ));
           appendSystem(lines.join('\n'));
         }
       } else {
@@ -759,7 +830,22 @@ export function App({
         try {
           const { generateSpec } = await import('../../core/tools/code/spec-generator.js');
           const result = await generateSpec(desc, process.cwd());
-          appendSystem(`Spec saved: ${result.path}\n\n${result.content}`);
+          const lines: string[] = [`Spec saved: ${result.path}`, '', result.content];
+          // ── Execution Plan: phases (readline parity) ──────────────────────
+          if (result.phases && result.phases.length > 0) {
+            lines.push('', 'Execution Plan (Phases):');
+            for (const ph of result.phases) {
+              const mode = ph.parallel ? 'parallel' : 'sequential';
+              const deps = ph.dependsOn.length > 0 ? `  depends: Phase ${ph.dependsOn.join(', ')}` : '';
+              lines.push(`  Phase ${ph.phase} [${mode}] ${ph.label}${deps}`);
+              ph.tasks.forEach((t, ti) => lines.push(`    ${ti + 1}. ${t}`));
+            }
+          } else if ((result as unknown as { tasks?: string[] }).tasks?.length) {
+            const tasks = (result as unknown as { tasks: string[] }).tasks;
+            lines.push('', 'Tasks extracted:');
+            tasks.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
+          }
+          appendSystem(lines.join('\n'));
         } catch (err) {
           appendSystem(`Spec failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -767,30 +853,48 @@ export function App({
       return;
     }
 
-    // ── /hooks ───────────────────────────────────────────────────────────────
-    if (cmd === '/hooks') {
+    // ── /hooks [init|reload] ─────────────────────────────────────────────────
+    if (cmd.startsWith('/hooks')) {
+      const hookSub = cmd.slice('/hooks'.length).trim();
+      // /hooks init — create .uagent/hooks.json with example config
+      if (hookSub === 'init') {
+        const { HookRunner } = await import('../../core/hooks.js');
+        const msg = HookRunner.init(process.cwd());
+        appendSystem(msg);
+        return;
+      }
+      // /hooks reload — reload hooks config from disk
+      if (hookSub === 'reload') {
+        hookRunner.current.reload();
+        const count = hookRunner.current.listHooks().length;
+        appendSystem(`Hooks reloaded. ${count} hook(s) active.`);
+        return;
+      }
+      // /hooks — list hooks
       const hooks = hookRunner.current.listHooks();
       if (!hooks.length) {
-        appendSystem('No hooks configured. Create .uagent/hooks.json to add hooks.');
+        appendSystem('No hooks configured. Create .uagent/hooks.json to add hooks.\n  Run /hooks init to create an example config.');
       } else {
         const lines = ['Lifecycle Hooks:', ''];
         for (const h of hooks) {
           const status = h.enabled !== false ? 'on ' : 'off';
-          lines.push(`  [${status}] [${h.event.padEnd(15)}] ${(h.description ?? h.type ?? '').slice(0, 60)}`);
+          lines.push(`  [${status}] [${h.event.padEnd(15)}] ${(h.description ?? (h as { type?: string }).type ?? '').slice(0, 60)}`);
         }
+        lines.push('', '  /hooks init — create example config  |  /hooks reload — reload from disk');
         appendSystem(lines.join('\n'));
       }
       return;
     }
 
-    // ── /purify ───────────────────────────────────────────────────────────────
+    // ── /purify [--dry-run] [--commit] ───────────────────────────────────────
     if (cmd.startsWith('/purify')) {
       const isDryRun = cmd.includes('--dry-run') || cmd.includes('-d');
+      const doCommit = cmd.includes('--commit');   // readline parity: --commit flag
       appendSystem('Running self-heal (purify)...');
       try {
         const { selfHealTool } = await import('../../core/tools/code/self-heal.js');
         const result = await selfHealTool.handler({
-          path: process.cwd(), dry_run: isDryRun, severity: 'warning', commit: false, max_fixes: 20,
+          path: process.cwd(), dry_run: isDryRun, severity: 'warning', commit: doCommit, max_fixes: 20,
         });
         appendSystem(String(result));
       } catch (err) {
