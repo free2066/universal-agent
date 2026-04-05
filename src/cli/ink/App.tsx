@@ -323,7 +323,7 @@ export function App({
         lines.push('  /model              — interactive picker (↑↓ to select)');
         lines.push('  /models switch <name>  — switch by name');
         lines.push('  uagent models add    — add custom model');
-        appendSystem(lines.join('\n'));
+        setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       }
       return;
     }
@@ -331,10 +331,12 @@ export function App({
     // ── /log ────────────────────────────────────────────────────────────────
     if (cmd === '/log') {
       const logPath = sessionLogger.current.path;
-      appendSystem([
+      setInfoOverlay([
         'Current session log:',
         `  ${logPath}`,
         `  To share with AI: cat "${logPath}" | pbcopy`,
+        '',
+        '  [any key to close]',
       ].join('\n'));
       return;
     }
@@ -375,7 +377,7 @@ export function App({
         const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '../../../package.json');
         version = JSON.parse(readFileSync(pkgPath, 'utf-8')).version ?? version;
       } catch { /* */ }
-      appendSystem([
+      setInfoOverlay([
         'Status:',
         `  Version  : v${version}`,
         `  CWD      : ${process.cwd()}`,
@@ -386,6 +388,8 @@ export function App({
         `  Log      : ${sessionLogger.current.path}`,
         '',
         '  /model — switch model  |  /log — session log path',
+        '',
+        '  [any key to close]',
       ].join('\n'));
       return;
     }
@@ -398,7 +402,7 @@ export function App({
       const history = agent.getHistory();
       const decision = shouldCompact(history);
       const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
-      appendSystem([
+      setInfoOverlay([
         'Context Window Stats:',
         `  Estimated tokens : ${decision.estimatedTokens.toLocaleString()}`,
         `  Context limit    : ${decision.contextLength.toLocaleString()}`,
@@ -407,6 +411,8 @@ export function App({
         `  Compact needed   : ${decision.shouldCompact ? 'Yes' : 'No'}`,
         '',
         '  Tip: /compact — compress context; /clear — start fresh',
+        '',
+        '  [any key to close]',
       ].join('\n'));
       return;
     }
@@ -415,7 +421,7 @@ export function App({
       const history = agent.getHistory();
       const decision = shouldCompact(history);
       const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
-      appendSystem([
+      setInfoOverlay([
         'Context Usage:',
         `  Estimated tokens : ${decision.estimatedTokens.toLocaleString()}`,
         `  Context limit    : ${decision.contextLength.toLocaleString()}`,
@@ -424,6 +430,8 @@ export function App({
         `  Compact needed   : ${decision.shouldCompact ? 'Yes' : 'No'}`,
         '',
         '  Run /compact to manually compress now.',
+        '',
+        '  [any key to close]',
       ].join('\n'));
       return;
     }
@@ -523,7 +531,7 @@ export function App({
                   lines.push(`  ${String(i + 1).padStart(2)}.  ${id}  (${formatAge(mtime)})`);
                 });
                 lines.push('', '  Use: /resume <session-id>');
-                appendSystem(lines.join('\n'));
+                setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
               } else {
                 appendSystem(`Session "${sub}" not found. No saved sessions available.`);
               }
@@ -653,7 +661,7 @@ export function App({
       const store = getMemoryStore(process.cwd());
       if (!sub) {
         const stats = store.stats();
-        appendSystem([
+        setInfoOverlay([
           'Memory Stats:',
           `  Pinned  : ${stats.pinned}`,
           `  Insight : ${stats.insight}`,
@@ -663,6 +671,8 @@ export function App({
           '  /memory list        — list all memories',
           '  /memory forget      — clear all memories',
           '  /memory ingest      — extract insights from this session',
+          '',
+          '  [any key to close]',
         ].join('\n'));
       } else if (sub === 'pin') {
         const text = parts.slice(2).join(' ');
@@ -677,7 +687,7 @@ export function App({
           lines.push(`  [${m.type}] ${m.id}  ${m.content.slice(0, 100)}`);
           if (m.tags.length) lines.push(`    tags: ${m.tags.join(', ')}`);
         }
-        appendSystem(lines.join('\n'));
+        setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       } else if (sub === 'forget') {
         store.clear();
         appendSystem('All memories cleared for this project.');
@@ -706,7 +716,7 @@ export function App({
       entries.forEach((e, i) => {
         lines.push(`  ${String(i + 1).padStart(3)}.  ${e.slice(0, 120)}${e.length > 120 ? '…' : ''}`);
       });
-      appendSystem(lines.join('\n'));
+      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       return;
     }
 
@@ -733,7 +743,7 @@ export function App({
             lines.push(`  ${z.name.padEnd(20)} last: ${lastStr}, calls: ${z.callCount}`);
           }
           lines.push('', '  Tip: remove unused .uagent/agents/<name>.md files to clean up');
-          appendSystem(lines.join('\n'));
+          setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
         }
       } else {
         const agents = subagentSystem.listAgents();
@@ -798,7 +808,7 @@ export function App({
         lines.push('  uagent mcp list      — show all configured servers');
         lines.push('  uagent mcp add       — add a server');
         lines.push('  uagent mcp disable   — disable without removing');
-        appendSystem(lines.join('\n'));
+        setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       }
       return;
     }
@@ -806,7 +816,7 @@ export function App({
     // ── /init ────────────────────────────────────────────────────────────────
     if (cmd === '/init') {
       const { initAgentsMd } = await import('../../core/context/context-loader.js');
-      appendSystem(initAgentsMd(process.cwd()));
+      setInfoOverlay(initAgentsMd(process.cwd()) + '\n\n  [any key to close]');
       return;
     }
 
@@ -820,7 +830,7 @@ export function App({
         const lines = ['Loaded rules (injected into every system prompt):', ''];
         for (const src of rules.sources) lines.push(`  ${src}`);
         lines.push('', '  Tip: Add .uagent/rules/coding.md, api-style.md, etc.');
-        appendSystem(lines.join('\n'));
+        setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       }
       return;
     }
@@ -864,14 +874,14 @@ export function App({
         lines.push('', `  Total: ${totalCount} skill(s) installed`);
         lines.push('  Use: /<skill-name> [arguments]  — run a skill directly as a slash command');
       }
-      appendSystem(lines.join('\n'));
+      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       return;
     }
 
     // ── /metrics ─────────────────────────────────────────────────────────────
     if (cmd === '/metrics') {
       const { sessionMetrics } = await import('../../core/metrics.js');
-      appendSystem('LLM Call Metrics (this session):\n\n' + sessionMetrics.getSummary());
+      setInfoOverlay('LLM Call Metrics (this session):\n\n' + sessionMetrics.getSummary() + '\n\n  [any key to close]');
       return;
     }
 
@@ -923,7 +933,7 @@ export function App({
         '    };',
         '    // Save to .uagent/plugins/<name>.js and restart uagent',
       );
-      appendSystem(lines.join('\n'));
+      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       return;
     }
 
@@ -931,7 +941,7 @@ export function App({
     if (cmd.startsWith('/bug')) {
       const desc = cmd.slice('/bug'.length).trim();
       const logPath = sessionLogger.current.path;
-      appendSystem([
+      setInfoOverlay([
         'Bug Report',
         `  Session log  : ${logPath}`,
         `  Working dir  : ${process.cwd()}`,
@@ -1057,7 +1067,7 @@ export function App({
             lines.push('', 'Tasks extracted:');
             tasks.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
           }
-          appendSystem(lines.join('\n'));
+          setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
         } catch (err) {
           appendSystem(`Spec failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1098,7 +1108,7 @@ export function App({
           lines.push(`  [${status}] [${h.event.padEnd(15)}] ${(h.description ?? (h as { type?: string }).type ?? '').slice(0, 60)}`);
         }
         lines.push('', '  /hooks init — create example config  |  /hooks reload — reload from disk');
-        appendSystem(lines.join('\n'));
+        setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       }
       return;
     }
@@ -1189,7 +1199,7 @@ export function App({
       lines.push('');
       lines.push('Note: uagent uses API keys (not login sessions).');
       lines.push('      Keys are read from environment variables or .env file.');
-      appendSystem(lines.join('\n'));
+      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       return;
     }
 
@@ -1241,7 +1251,7 @@ export function App({
         lines.push('');
         lines.push('  /plugin list         — show all extensions');
         lines.push('  /skills              — show only custom commands');
-        appendSystem(lines.join('\n'));
+        setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       } else {
         appendSystem(`Unknown plugin subcommand: ${sub}\nUsage: /plugin [list]`);
       }
@@ -1290,7 +1300,7 @@ export function App({
         const truncated = lines.length > 60
           ? `\n... (${lines.length - 60} more lines — full report saved to ~/.uagent/)`
           : '';
-        appendSystem(condensed + truncated);
+        setInfoOverlay(condensed + truncated + '\n\n  [any key to close]');
       } catch (err) {
         appendSystem(`Insights failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1330,7 +1340,7 @@ export function App({
 
     // ── /terminal-setup ───────────────────────────────────────────────────────
     if (cmd === '/terminal-setup') {
-      appendSystem([
+      setInfoOverlay([
         'Terminal Setup — Shift+Enter line break',
         '',
         'Option 1: iTerm2',
@@ -1347,6 +1357,8 @@ export function App({
         '  Then run: bind -f ~/.inputrc',
         '',
         'Already supported in uagent: \\ + Enter (universal), Option+Enter (macOS)',
+        '',
+        '  [any key to close]',
       ].join('\n'));
       return;
     }
@@ -1441,13 +1453,13 @@ export function App({
       lines.push('');
       lines.push('  uagent usage --days 7  — view usage history');
       lines.push('  uagent limits          — view/set daily spending limits');
-      appendSystem(lines.join('\n'));
+      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
       return;
     }
 
     // ── /help ────────────────────────────────────────────────────────────────
     if (cmd === '/help') {
-      appendSystem([
+      setInfoOverlay([
         'Available commands:',
         '',
         '  Session:',
