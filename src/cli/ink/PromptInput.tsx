@@ -8,7 +8,7 @@
  * - Tab completion for /slash commands
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 
 export interface PromptInputProps {
@@ -31,6 +31,8 @@ export interface PromptInputProps {
   onHistorySearchCancel?: () => void;
   /** Called whenever the current input value changes (used by Ctrl+G to pre-populate editor) */
   onValueChange?: (val: string) => void;
+  /** External value injection — when set, overrides the internal input state (used by Ctrl+G backfill) */
+  externalValue?: string;
 }
 
 const MODE_COLORS: Record<string, string> = {
@@ -56,6 +58,7 @@ export function PromptInput({
   onHistorySearchAccept,
   onHistorySearchCancel,
   onValueChange,
+  externalValue,
 }: PromptInputProps): React.JSX.Element {
   const [value, setValue] = useState('');
   const [historyIdx, setHistoryIdx] = useState(-1);
@@ -99,6 +102,15 @@ export function PromptInput({
     }
     setSuggestion(null);
   }, [slashCompletions, fileCompletions, agentCompletions]);
+
+  // External value injection: when Ctrl+G backfills edited content into the input box
+  // (readline parity: repl.ts refills rl.line after editor exits, letting user edit before submit)
+  useEffect(() => {
+    if (externalValue !== undefined) {
+      setValue(externalValue);
+      updateSuggestion(externalValue);
+    }
+  }, [externalValue, updateSuggestion]);
 
   useInput((input, key) => {
     // ── Ctrl+R search mode input handling ─────────────────────────────────

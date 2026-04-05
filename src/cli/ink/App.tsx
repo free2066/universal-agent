@@ -107,6 +107,10 @@ export function App({
   // Updated by PromptInput's onChange; allows Ctrl+G to pre-fill editor with
   // the user's in-progress input (readline parity: writes rl.line into tmpFile)
   const currentPromptRef = useRef<string>('');
+  // External value to inject back into PromptInput after Ctrl+G editing
+  // (readline parity: repl.ts sets rl.line and calls rl.prompt() so user can
+  // review/edit the content before hitting Enter to submit)
+  const [externalPromptValue, setExternalPromptValue] = useState<string | undefined>(undefined);
 
   // ── Ctrl+L double-press timer ────────────────────────────────────────────
   const lastCtrlLRef = useRef(0);
@@ -340,6 +344,12 @@ export function App({
       try {
         const origEnv = process.env.AGENT_COMPACT_THRESHOLD;
         process.env.AGENT_COMPACT_THRESHOLD = '0.0001';
+        // Calculate stats before compaction for informative output
+        // (readline parity: ora spinner shows "Compacting N turns (P% context)...")
+        const { estimateHistoryTokens, shouldCompact } = await import('../../core/context/context-compressor.js');
+        const decision = shouldCompact(history);
+        const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
+        appendSystem(`Compacting ${history.length} turns (${pct}% context)...`);
         try {
           const { getMemoryStore } = await import('../../core/memory/memory-store.js');
           const store = getMemoryStore(process.cwd());
@@ -1726,7 +1736,12 @@ export function App({
           if (existsSync(tmpFile)) {
             const content = readFileSync(tmpFile, 'utf-8').trim();
             if (content) {
-              void handleSubmit(content);
+              // Backfill into input box instead of auto-submitting
+              // (readline parity: repl.ts sets rl.line = content, calls rl.prompt()
+              // so the user can review/edit the text before pressing Enter)
+              setExternalPromptValue(content);
+              // Reset to undefined after one tick so the effect can fire again next time
+              setTimeout(() => setExternalPromptValue(undefined), 50);
             }
             try { unlinkSync(tmpFile); } catch { /* */ }
           }
@@ -1992,6 +2007,7 @@ export function App({
             historySearchIdxRef.current = -1;
           }}
           onValueChange={(val) => { currentPromptRef.current = val; }}
+          externalValue={externalPromptValue}
         />
       </Box>
 
