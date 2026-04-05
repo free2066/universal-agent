@@ -381,6 +381,7 @@ export class ModelManager {
           const pointerId = result.source === 'openrouter' && !m.id.startsWith('ep-') && !m.id.startsWith('api-')
             ? `openrouter:${m.id}`
             : m.id;
+          const detectedCtx = m.contextLength ?? 128000;
           if (!this.profiles.has(pointerId)) {
             const provider = inferProviderFromModelName(pointerId);
             this.profiles.set(pointerId, {
@@ -388,11 +389,20 @@ export class ModelManager {
               provider,
               modelName: m.id,    // The raw model id without prefix (used by factory)
               maxTokens: 8192,
-              contextLength: m.contextLength ?? 128000,
+              contextLength: detectedCtx,
               costPer1kInput: 0,
               costPer1kOutput: 0,
               isActive: true,
             });
+          } else {
+            // Profile already exists (loaded from disk) — always sync contextLength
+            // from the freshly-detected value (WQ_MODELS 3rd field or WQ_CTX_* env var).
+            // This ensures changes to WQ_MODELS context size take effect on next restart
+            // without manually editing ~/.uagent/models.json every time.
+            const existing = this.profiles.get(pointerId)!;
+            if (existing.contextLength !== detectedCtx) {
+              this.profiles.set(pointerId, { ...existing, contextLength: detectedCtx });
+            }
           }
         }
 
