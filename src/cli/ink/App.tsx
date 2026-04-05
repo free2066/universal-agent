@@ -2278,43 +2278,6 @@ export function App({
         </Box>
       )}
 
-      {/* /model interactive picker overlay */}
-      {modelPicker && (
-        <Box flexDirection="column" paddingLeft={2} paddingBottom={1} borderStyle="single" borderColor="cyan">
-          <Text color="cyan" bold>Select Model</Text>
-          <Text color="gray" dimColor>  ↑↓ navigate · Enter select · Esc cancel</Text>
-          {modelPicker.map((item, idx) => {
-            const isSel = idx === modelPickerIdx;
-            return (
-              <Box key={item.id} flexDirection="row" gap={1}>
-                <Text color={isSel ? 'cyan' : 'gray'}>{isSel ? '▶' : ' '}</Text>
-                <Text color={isSel ? 'white' : 'gray'} bold={isSel}>{item.label.padEnd(22)}</Text>
-                <Text color="gray" dimColor>{item.provider.padEnd(12)}</Text>
-                <Text color={isSel ? 'green' : 'gray'} dimColor>{item.ctx}</Text>
-              </Box>
-            );
-          })}
-        </Box>
-      )}
-
-      {/* Generic interactive picker overlay (domain / output-style / spec / agents) */}
-      {genericPicker && (
-        <Box flexDirection="column" paddingLeft={2} paddingBottom={1} borderStyle="single" borderColor="cyan">
-          <Text color="cyan" bold>{genericPicker.title}</Text>
-          <Text color="gray" dimColor>  ↑↓ navigate · Enter select · Esc cancel</Text>
-          {genericPicker.items.map((item, idx) => {
-            const isSel = idx === genericPickerIdx;
-            return (
-              <Box key={item.id} flexDirection="row" gap={1}>
-                <Text color={isSel ? 'cyan' : 'gray'}>{isSel ? '▶' : ' '}</Text>
-                <Text color={isSel ? 'white' : 'gray'} bold={isSel}>{item.label.padEnd(26)}</Text>
-                {item.detail ? <Text color="gray" dimColor>{item.detail}</Text> : null}
-              </Box>
-            );
-          })}
-        </Box>
-      )}
-
       {/* Ctrl+R reverse-search overlay */}
       {historySearch && (
         <Box paddingLeft={2} paddingBottom={1}>
@@ -2330,7 +2293,7 @@ export function App({
       )}
 
       {/* Prompt input */}
-      <Box paddingTop={1} paddingLeft={2} paddingBottom={1}>
+      <Box paddingLeft={2}>
         <PromptInput
           domain={domain}
           mode={mode}
@@ -2386,6 +2349,43 @@ export function App({
           onEOF={() => { void handleSlashCommand('/exit'); }}
         />
       </Box>
+
+      {/* /model interactive picker — shown below prompt, above status bar */}
+      {modelPicker && (
+        <Box flexDirection="column" paddingLeft={2} borderStyle="single" borderColor="cyan">
+          <Text color="cyan" bold>Select Model</Text>
+          <Text color="gray" dimColor>  ↑↓ navigate · Enter select · Esc cancel</Text>
+          {modelPicker.map((item, idx) => {
+            const isSel = idx === modelPickerIdx;
+            return (
+              <Box key={item.id} flexDirection="row" gap={1}>
+                <Text color={isSel ? 'cyan' : 'gray'}>{isSel ? '▶' : ' '}</Text>
+                <Text color={isSel ? 'white' : 'gray'} bold={isSel}>{item.label.padEnd(22)}</Text>
+                <Text color="gray" dimColor>{item.provider.padEnd(12)}</Text>
+                <Text color={isSel ? 'green' : 'gray'} dimColor>{item.ctx}</Text>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
+
+      {/* Generic picker (domain / output-style / spec / agents) — below prompt, above status bar */}
+      {genericPicker && (
+        <Box flexDirection="column" paddingLeft={2} borderStyle="single" borderColor="cyan">
+          <Text color="cyan" bold>{genericPicker.title}</Text>
+          <Text color="gray" dimColor>  ↑↓ navigate · Enter select · Esc cancel</Text>
+          {genericPicker.items.map((item, idx) => {
+            const isSel = idx === genericPickerIdx;
+            return (
+              <Box key={item.id} flexDirection="row" gap={1}>
+                <Text color={isSel ? 'cyan' : 'gray'}>{isSel ? '▶' : ' '}</Text>
+                <Text color={isSel ? 'white' : 'gray'} bold={isSel}>{item.label.padEnd(26)}</Text>
+                {item.detail ? <Text color="gray" dimColor>{item.detail}</Text> : null}
+              </Box>
+            );
+          })}
+        </Box>
+      )}
 
       {/* Status bar */}
       <StatusBar
