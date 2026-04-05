@@ -76,13 +76,14 @@ program
   .option('--tools <json>', 'Disable specific tools as JSON, e.g. \'{"bash":false,"write":false}\'')
   .option('--mcp-config <jsonOrFile>', 'One-shot MCP server config (JSON string or path to .json file). Not persisted.')
   .option('--browser', 'Enable browser integration (requires Playwright MCP server)')
+  .option('--ui <mode>', 'UI mode: readline (default) | ink (React/Ink terminal UI)', 'readline')
   .action(async (promptArg: string | undefined, options: {
     domain: string; model?: string; planModel?: string; smallModel?: string; visionModel?: string;
     quiet?: boolean; continue?: boolean; resume?: string;
     safe: boolean; verbose?: boolean; systemPrompt?: string;
     appendSystemPrompt?: string; outputStyle?: string; thinking?: string; outputFormat?: string;
     language?: string; cwd?: string; approvalMode?: string; tools?: string;
-    mcpConfig?: string; browser?: boolean;
+    mcpConfig?: string; browser?: boolean; ui?: string;
   }) => {
     if (options.cwd) process.chdir(options.cwd);
     validateDomain(options.domain);
@@ -230,13 +231,26 @@ program
       disabledTools: resolvedDisabledTools,
     });
     await agent.initMCP().catch(() => {});
-    await runREPL(agent, options, {
-      initialPrompt: promptArg,
-      continueSession: options.continue ?? false,
-      resumeSessionId: options.resume,
-      inferProviderEnvKey,
-      notification: cfg.notification,
-    });
+    // Select UI mode: ink if --ui=ink or UAGENT_UI=ink env var
+    const useInk = options.ui === 'ink' || process.env.UAGENT_UI === 'ink';
+    if (useInk && process.stdout.isTTY) {
+      const { runInkREPL } = await import('./ink/launch.js');
+      await runInkREPL(agent, options, {
+        initialPrompt: promptArg,
+        continueSession: options.continue ?? false,
+        resumeSessionId: options.resume,
+        inferProviderEnvKey,
+        notification: cfg.notification,
+      });
+    } else {
+      await runREPL(agent, options, {
+        initialPrompt: promptArg,
+        continueSession: options.continue ?? false,
+        resumeSessionId: options.resume,
+        inferProviderEnvKey,
+        notification: cfg.notification,
+      });
+    }
   });
 
 // ── Register all subcommand groups ──────────────────────────────────────────
