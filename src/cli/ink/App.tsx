@@ -688,6 +688,11 @@ export function App({
           lines.push('', 'Active MCP tools:', '');
           for (const t of tools) lines.push(`  ${t}`);
         }
+        // Operation hints (readline parity: tool-handlers.ts handleMcp appends these)
+        lines.push('');
+        lines.push('  uagent mcp list      — show all configured servers');
+        lines.push('  uagent mcp add       — add a server');
+        lines.push('  uagent mcp disable   — disable without removing');
         appendSystem(lines.join('\n'));
       }
       return;
@@ -1132,7 +1137,7 @@ export function App({
       const style = cmd.replace('/output-style', '').trim();
       const validStyles = ['plain', 'markdown', 'compact'];
       if (!style) {
-        appendSystem(`Output Styles:\n  plain    — plain text, no markdown\n  markdown — full markdown (default)\n  compact  — concise output, minimal headers\n\nUsage: /output-style <style>`);
+        appendSystem(`Output Styles:\n  plain    — plain text, no markdown\n  markdown — full markdown (default)\n  compact  — concise output, minimal headers\n\nCurrently: markdown (default — all output rendered as markdown)\n\nUsage: /output-style <style>`);
         return;
       }
       if (!validStyles.includes(style)) {
@@ -1751,7 +1756,8 @@ export function App({
     // ── Ctrl+G: open $EDITOR to compose input ───────────────────────────
     if (key.ctrl && input === 'g') {
       void (async () => {
-        const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
+        // EDITOR takes priority over VISUAL (readline parity: repl.ts uses EDITOR || VISUAL || 'vim')
+        const editor = process.env.EDITOR ?? process.env.VISUAL ?? 'vi';
         const { join } = await import('path');
         const { writeFileSync, readFileSync, unlinkSync, existsSync } = await import('fs');
         const { spawnSync } = await import('child_process');
@@ -1921,6 +1927,14 @@ export function App({
     try {
       const logPath = sessionLogger.current.path;
       if (logPath) appendSystem(`Session log: ${logPath}`);
+    } catch { /* non-fatal */ }
+    // Show hook-defined custom slash commands at startup
+    // (readline parity: repl.ts line 437-440 lists hookRunner.listSlashCommands() on start)
+    try {
+      const customCmds = (hookRunner.current as typeof hookRunner.current & { listSlashCommands?: () => Array<{ command: string }> }).listSlashCommands?.() ?? [];
+      if (customCmds.length > 0) {
+        appendSystem(`Custom commands: ${customCmds.map((c) => c.command).join('  ')}`);
+      }
     } catch { /* non-fatal */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
