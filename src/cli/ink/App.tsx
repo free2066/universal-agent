@@ -687,6 +687,9 @@ export function App({
         if (tools.length > 0) {
           lines.push('', 'Active MCP tools:', '');
           for (const t of tools) lines.push(`  ${t}`);
+        } else {
+          // (readline parity: tool-handlers.ts no-tools hint)
+          lines.push('', '  (No MCP tools connected this session — servers connect at startup)');
         }
         // Operation hints (readline parity: tool-handlers.ts handleMcp appends these)
         lines.push('');
@@ -753,6 +756,8 @@ export function App({
       if (!totalCount) {
         lines.push('  No custom skills found.');
         lines.push('  Create .uagent/commands/<name>.md to add a skill');
+        lines.push('  Example: .uagent/commands/summarize.md');
+        lines.push('  Content: "Summarize the following: $ARGUMENTS"');
       } else {
         lines.push('', `  Total: ${totalCount} skill(s) installed`);
         lines.push('  Use: /<skill-name> [arguments]  — run a skill directly as a slash command');
@@ -2011,7 +2016,7 @@ export function App({
             <Text color="gray" dimColor>
               Type <Text color="white">/help</Text> for commands ·{' '}
               <Text color="white">@file</Text> to attach files ·{' '}
-              Press <Text color="white">Esc</Text> to abort streaming
+              <Text color="white">Ctrl+C</Text> to exit
             </Text>
           </Box>
         )}

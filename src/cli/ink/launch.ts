@@ -167,6 +167,9 @@ export async function runInkREPL(
           }
           unmount();
           resolve();
+          // Print goodbye and force-exit (readline parity: repl.ts prints 'Goodbye!' then process.exit(0))
+          process.stdout.write('\nGoodbye!\n');
+          setTimeout(() => process.exit(0), 200);
         },
       }),
       { exitOnCtrlC: false }, // We handle Ctrl+C ourselves
@@ -209,6 +212,9 @@ export async function runInkREPL(
       }
       unmount();
       process.stdout.write('\n');
+      // Print goodbye and force-exit (readline parity: rl.on('close') prints 'Goodbye!' then process.exit(0))
+      process.stdout.write('Goodbye!\n');
+      setTimeout(() => process.exit(0), 200);
       resolve();
     });
   });
