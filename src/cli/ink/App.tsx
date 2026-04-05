@@ -11,14 +11,13 @@
  * Wires agent.runStream() to React state updates.
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useApp } from 'ink';
 import { MessageList, type ChatMessage } from './MessageList.js';
 import { PromptInput } from './PromptInput.js';
 import { StatusBar, type StatusBarProps } from './StatusBar.js';
 import { ToolCallLine, type ToolCallInfo } from './ToolCallLine.js';
 import type { AgentCore } from '../../core/agent.js';
-import { handleSlash, type SlashContext } from '../repl/slash-handlers.js';
 import { HookRunner } from '../../core/hooks.js';
 import { modelManager } from '../../models/model-manager.js';
 
@@ -45,9 +44,7 @@ export interface AppProps {
   modelDisplayName: string;
   contextLength?: number;
   onExit?: () => void;
-  // Optional: initial prompt to fire on mount
   initialPrompt?: string;
-  // Extra: slug key inferrer for API errors
   inferProviderEnvKey?: (msg: string) => string | undefined;
 }
 
@@ -70,55 +67,128 @@ export function App({
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [domain, setDomain] = useState(initialDomain);
-  const [mode, setMode] = useState('default');
+  const [mode] = useState('default');
   const [statusInfo, setStatusInfo] = useState<Omit<StatusBarProps, 'model' | 'domain' | 'sessionId'>>({
     isThinking: 'none',
     estimatedTokens: 0,
     contextLength,
   });
-  const [infoLine, setInfoLine] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
-  // Tool call sequence counter (per-stream)
+  const abortRef = useRef<AbortController | null>(null);
   const toolSeqRef = useRef(0);
   const toolStartRef = useRef<Map<string, number>>(new Map());
+  const isSubmittingRef = useRef(false); // debounce guard
 
-  // ── Helper: append an assistant text message ────────────────────────────
-  const appendAssistant = useCallback((text: string) => {
+  // ── Helper: append message ──────────────────────────────────────────────
+  const appendMessage = useCallback((role: ChatMessage['role'], text: string) => {
+    if (!text.trim()) return;
     setMessages((prev) => {
       const last = prev[prev.length - 1];
-      if (last?.role === 'assistant') {
-        // Append to current assistant message
+      if (last?.role === role && role === 'assistant') {
         return [...prev.slice(0, -1), { ...last, content: last.content + text }];
       }
-      return [...prev, { role: 'assistant', content: text, timestamp: new Date().toISOString() }];
+      return [...prev, { role, content: text, timestamp: new Date().toISOString() }];
     });
   }, []);
 
-  // ── Submit handler ───────────────────────────────────────────────────────
-  const handleSubmit = useCallback(async (input: string) => {
-    if (!input.trim()) return;
+  const appendAssistant = useCallback((text: string) => appendMessage('assistant', text), [appendMessage]);
+  const appendSystem = useCallback((text: string) => appendMessage('system', text), [appendMessage]);
 
-    // Add to input history
-    setInputHistory((prev) => {
-      if (prev[prev.length - 1] === input) return prev;
-      const next = [...prev, input];
-      if (next.length > 500) next.shift();
-      return next;
-    });
+  // ── Slash command handler (Ink-safe) ────────────────────────────────────
+  const handleSlashCommand = useCallback(async (input: string) => {
+    const cmd = input.trim();
 
-    // Handle slash commands
-    if (input.startsWith('/')) {
-      // Create a minimal SlashContext that bridges Ink to the existing handlers
+    // Built-in Ink-native commands first
+    if (cmd === '/exit' || cmd === '/quit') {
+      onExit?.();
+      exit();
+      return;
+    }
+
+    if (cmd === '/clear') {
+      setMessages([]);
+      setToolCalls([]);
+      return;
+    }
+
+    if (cmd.startsWith('/domain')) {
+      const parts = cmd.split(/\s+/);
+      const newDomain = parts[1];
+      if (newDomain) {
+        setDomain(newDomain);
+        appendSystem(`Domain set to: ${newDomain} (takes effect on next message)`);
+      } else {
+        appendSystem(`Current domain: ${domain}`);
+      }
+      return;
+    }
+
+    if (cmd === '/help') {
+      appendSystem([
+        'Available commands:',
+        '  /clear           — clear screen',
+        '  /exit  /quit     — exit',
+        '  /domain <name>   — switch domain (data|dev|service|auto)',
+        '  /model <name>    — switch model',
+        '  /models          — list available models',
+        '  /log             — show session log path',
+        '  /logs            — list recent sessions',
+        '  /history         — show conversation history',
+        '  /compact         — compress context',
+        '  /tokens          — show token usage',
+        '  /cost            — show cost estimate',
+        '  /metrics         — show LLM call metrics',
+        '  /plugins         — show loaded plugins',
+        '  /memory          — show memory items',
+        '  /tasks           — show task board',
+        '  /review          — code review',
+        '  /spec            — spec generation menu',
+        '  /agents          — show active agents',
+        '  /hooks           — manage lifecycle hooks',
+        '  /status          — show session status',
+        '',
+        '  @file            — attach file contents to message',
+        '  Esc              — abort current streaming',
+        '  ↑/↓              — navigate input history',
+        '  Tab              — autocomplete /commands',
+      ].join('\n'));
+      return;
+    }
+
+    // For all other slash commands: delegate to the readline handlers
+    // but intercept console.log/console.error to capture their output
+    // safely within Ink's rendering model.
+    const captured: string[] = [];
+    const origLog = console.log.bind(console);
+    const origError = console.error.bind(console);
+    const origWarn = console.warn.bind(console);
+
+    const capture = (...args: unknown[]) => {
+      // Strip ANSI color codes for Ink display
+      const text = args.map((a) => String(a)).join(' ').replace(/\x1b\[[0-9;]*m/g, '');
+      captured.push(text);
+    };
+
+    console.log = capture;
+    console.error = capture;
+    console.warn = capture;
+
+    try {
+      const slashMod = await import('../repl/slash-handlers.js') as {
+        handleSlash: (input: string, ctx: unknown) => Promise<boolean>;
+      };
+
       const fakeRl = {
         prompt: () => {},
         pause: () => {},
         resume: () => {},
         setPrompt: () => {},
         close: () => {},
-      } as unknown as import('readline').Interface;
+        on: () => fakeRl,
+        removeListener: () => fakeRl,
+      };
 
-      const sessionLogger = {
+      const fakeLogger = {
         logInput: () => {},
         logChunk: () => {},
         logToolStart: () => {},
@@ -129,137 +199,167 @@ export function App({
         path: '',
       };
 
-      const slashCtx: SlashContext = {
+      const slashCtx = {
         agent,
         rl: fakeRl,
         hookRunner: hookRunner.current,
-        sessionLogger: sessionLogger as unknown as import('../session-logger.js').SessionLogger,
+        sessionLogger: fakeLogger,
         options: { domain, verbose: false },
         SESSION_ID: sessionId,
         getModelDisplayName: (id: string) => id,
         makePrompt: () => '',
         loadLastSnapshot: () => null,
         saveSnapshot: () => {},
-        formatAge: () => '',
+        formatAge: (ts: number) => {
+          const diff = Date.now() - ts;
+          if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
+          if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
+          return `${Math.round(diff / 3600000)}h ago`;
+        },
         inferProviderEnvKey: inferProviderEnvKey ?? (() => undefined),
       };
 
-      // /exit special case
-      if (input === '/exit' || input === '/quit') {
-        onExit?.();
-        exit();
-        return;
-      }
+      // Some handlers do process.stdout.write — capture that too
+      const origWrite = process.stdout.write.bind(process.stdout);
+      process.stdout.write = (chunk: unknown, ...rest: unknown[]) => {
+        if (typeof chunk === 'string') {
+          const text = chunk.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '');
+          if (text.trim()) captured.push(text);
+        }
+        return true;
+      };
 
-      // /clear — reset messages
-      if (input === '/clear') {
-        setMessages([]);
-        setToolCalls([]);
-        return;
+      try {
+        await slashMod.handleSlash(cmd, slashCtx);
+      } finally {
+        process.stdout.write = origWrite;
       }
-
-      // /domain <name> — update domain state
-      if (input.startsWith('/domain ')) {
-        const newDomain = input.slice(8).trim();
-        if (newDomain) setDomain(newDomain);
-      }
-
-      const handled = await handleSlash(input, slashCtx).catch(() => false);
-      if (!handled) {
-        setInfoLine(`Unknown command: ${input}`);
-        setTimeout(() => setInfoLine(null), 3000);
-      }
-      return;
+    } catch (err) {
+      captured.push(`[Error] ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      console.log = origLog;
+      console.error = origError;
+      console.warn = origWarn;
     }
 
-    // ── LLM path ──────────────────────────────────────────────────────────
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: input, timestamp: new Date().toISOString() },
-    ]);
-    setToolCalls([]);
-    setIsStreaming(true);
-    toolSeqRef.current = 0;
-    setStatusInfo((s) => ({ ...s, isThinking: 'low' }));
+    // Display captured output as a system message
+    const output = captured.join('\n').trim();
+    if (output) {
+      appendSystem(output);
+    }
+  }, [agent, domain, sessionId, appendSystem, exit, onExit, inferProviderEnvKey]);
 
-    abortRef.current = new AbortController();
-    let firstChunk = true;
+  // ── Submit handler ───────────────────────────────────────────────────────
+  const handleSubmit = useCallback(async (input: string) => {
+    const trimmed = input.trim();
+    if (!trimmed) return;
+
+    // Debounce: prevent duplicate submits
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+
+    // Add to input history
+    setInputHistory((prev) => {
+      if (prev[prev.length - 1] === trimmed) return prev;
+      const next = [...prev, trimmed];
+      if (next.length > 500) next.shift();
+      return next;
+    });
 
     try {
-      // Run hook pre_prompt
-      const hookCtx = await hookRunner.current.run({
-        event: 'pre_prompt', prompt: input, cwd: process.cwd(),
-      }).catch(() => ({ proceed: true, value: undefined, injection: undefined }));
-
-      let finalInput = input;
-      if (!hookCtx.proceed) {
-        setInfoLine(`[hook] Blocked: ${hookCtx.value ?? 'no reason given'}`);
-        setIsStreaming(false);
-        abortRef.current = null;
+      if (trimmed.startsWith('/')) {
+        await handleSlashCommand(trimmed);
         return;
       }
-      if (hookCtx.injection) {
-        finalInput = `${input}\n\n---\n${hookCtx.injection}`;
-      }
 
-      await agent.runStream(
-        finalInput,
-        (chunk) => {
-          if (firstChunk) {
-            firstChunk = false;
-            setStatusInfo((s) => ({ ...s, isThinking: 'medium' }));
-          }
-          appendAssistant(chunk);
-        },
-        {
-          onToolStart: (name, args) => {
-            const seqKey = `${name}#${toolSeqRef.current++}`;
-            toolStartRef.current.set(seqKey, Date.now());
-            const argsStr = Object.entries(args as Record<string, unknown>)
-              .slice(0, 3)
-              .map(([k, v]) => `${k}=${String(v).slice(0, 30)}`)
-              .join(', ');
+      // ── LLM path ────────────────────────────────────────────────────────
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: trimmed, timestamp: new Date().toISOString() },
+      ]);
+      setToolCalls([]);
+      setIsStreaming(true);
+      toolSeqRef.current = 0;
+      setStatusInfo((s) => ({ ...s, isThinking: 'low' }));
 
-            setToolCalls((prev) => [
-              ...prev,
-              { id: seqKey, name, args: argsStr, status: 'running' },
-            ]);
-            setStatusInfo((s) => ({ ...s, isThinking: 'medium' }));
-          },
-          onToolEnd: (name, success, durationMs) => {
-            const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
-            if (seqKey) toolStartRef.current.delete(seqKey);
-            setToolCalls((prev) =>
-              prev.map((tc) =>
-                tc.id === seqKey
-                  ? { ...tc, status: success ? 'done' : 'failed', durationMs }
-                  : tc
-              )
-            );
-          },
-        },
-        undefined,
-        abortRef.current.signal,
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      appendAssistant(`\n[Error] ${msg}`);
-    } finally {
-      abortRef.current = null;
-      setIsStreaming(false);
-      setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
+      abortRef.current = new AbortController();
+      let firstChunk = true;
 
-      // Update token estimate
       try {
-        const { estimateHistoryTokens } = await import('../../core/context/context-compressor.js').catch(() => ({ estimateHistoryTokens: () => 0 }));
-        const h = agent.getHistory();
-        const est = typeof estimateHistoryTokens === 'function'
-          ? (estimateHistoryTokens as (h: unknown[]) => number)(h)
-          : 0;
-        setStatusInfo((s) => ({ ...s, estimatedTokens: est }));
-      } catch { /* non-fatal */ }
+        // Run hook pre_prompt
+        const hookCtx = await hookRunner.current.run({
+          event: 'pre_prompt', prompt: trimmed, cwd: process.cwd(),
+        }).catch(() => ({ proceed: true, value: undefined, injection: undefined }));
+
+        let finalInput = trimmed;
+        if (!hookCtx.proceed) {
+          appendSystem(`[hook] Blocked: ${hookCtx.value ?? 'no reason given'}`);
+          return;
+        }
+        if (hookCtx.injection) {
+          finalInput = `${trimmed}\n\n---\n${hookCtx.injection}`;
+        }
+
+        await agent.runStream(
+          finalInput,
+          (chunk) => {
+            if (firstChunk) {
+              firstChunk = false;
+              setStatusInfo((s) => ({ ...s, isThinking: 'medium' }));
+            }
+            appendAssistant(chunk);
+          },
+          {
+            onToolStart: (name, args) => {
+              const seqKey = `${name}#${toolSeqRef.current++}`;
+              toolStartRef.current.set(seqKey, Date.now());
+              const argsStr = Object.entries(args as Record<string, unknown>)
+                .slice(0, 3)
+                .map(([k, v]) => `${k}=${String(v).slice(0, 30)}`)
+                .join(', ');
+              setToolCalls((prev) => [
+                ...prev,
+                { id: seqKey, name, args: argsStr, status: 'running' },
+              ]);
+              setStatusInfo((s) => ({ ...s, isThinking: 'medium' }));
+            },
+            onToolEnd: (name, success, durationMs) => {
+              const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
+              if (seqKey) toolStartRef.current.delete(seqKey);
+              setToolCalls((prev) =>
+                prev.map((tc) =>
+                  tc.id === seqKey
+                    ? { ...tc, status: success ? 'done' : 'failed', durationMs }
+                    : tc
+                )
+              );
+            },
+          },
+          undefined,
+          abortRef.current.signal,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        appendAssistant(`\n[Error] ${msg}`);
+      } finally {
+        abortRef.current = null;
+        setIsStreaming(false);
+        setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
+
+        // Update token estimate
+        try {
+          const h = agent.getHistory();
+          const est = h.reduce((acc, m) => {
+            const c = (m as { content?: string }).content;
+            return acc + (typeof c === 'string' ? Math.ceil(c.length / 4) : 0);
+          }, 0);
+          setStatusInfo((s) => ({ ...s, estimatedTokens: est }));
+        } catch { /* non-fatal */ }
+      }
+    } finally {
+      isSubmittingRef.current = false;
     }
-  }, [agent, domain, sessionId, appendAssistant, exit, onExit, inferProviderEnvKey]);
+  }, [agent, appendAssistant, appendSystem, handleSlashCommand]);
 
   // ── Abort ─────────────────────────────────────────────────────────────────
   const handleAbort = useCallback(() => {
@@ -274,11 +374,12 @@ export function App({
 
   // ── Fire initialPrompt on mount ──────────────────────────────────────────
   const firedInitial = useRef(false);
-  if (initialPrompt && !firedInitial.current) {
-    firedInitial.current = true;
-    // Defer to after first render
-    Promise.resolve().then(() => handleSubmit(initialPrompt)).catch(() => {});
-  }
+  useEffect(() => {
+    if (initialPrompt && !firedInitial.current) {
+      firedInitial.current = true;
+      handleSubmit(initialPrompt).catch(() => {});
+    }
+  }, [initialPrompt, handleSubmit]);
 
   const currentModel = modelManager.getCurrentModel('main');
 
@@ -287,11 +388,11 @@ export function App({
       {/* Message history */}
       <Box flexDirection="column" flexGrow={1} overflowY="hidden">
         {messages.length === 0 && (
-          <Box paddingY={1} paddingLeft={2} flexDirection="column">
+          <Box paddingY={1} paddingLeft={2}>
             <Text color="gray" dimColor>
               Type <Text color="white">/help</Text> for commands ·{' '}
               <Text color="white">@file</Text> to attach files ·{' '}
-              <Text color="white">Ctrl+C</Text> to exit
+              Press <Text color="white">Esc</Text> to abort streaming
             </Text>
           </Box>
         )}
@@ -301,16 +402,9 @@ export function App({
       {/* Active tool calls */}
       {toolCalls.length > 0 && (
         <Box flexDirection="column" paddingLeft={2} paddingTop={1}>
-          {toolCalls.map((tc) => (
+          {toolCalls.filter((tc) => tc.status === 'running').map((tc) => (
             <ToolCallLine key={tc.id} call={tc} />
           ))}
-        </Box>
-      )}
-
-      {/* Info line (flash messages) */}
-      {infoLine && (
-        <Box paddingLeft={2}>
-          <Text color="yellow" dimColor>{infoLine}</Text>
         </Box>
       )}
 

@@ -5,11 +5,10 @@
  * - Multi-line support (\ continuation)
  * - History navigation (Up/Down)
  * - Esc to abort streaming
- * - Ctrl+C to exit
- * - Tab completion for /slash commands and @file refs
+ * - Tab completion for /slash commands
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 
 export interface PromptInputProps {
@@ -44,8 +43,10 @@ export function PromptInput({
   const [isMultiline, setIsMultiline] = useState(false);
   const [suggestion, setSuggestion] = useState<string | null>(null);
 
+  // Guard: prevent double-submit from rapid key events
+  const lastSubmitTime = useRef(0);
+
   const promptColor = MODE_COLORS[mode] ?? 'cyan';
-  const promptChar = isStreaming ? '◌' : '❯';
 
   // Update inline suggestion based on current value
   const updateSuggestion = useCallback((val: string) => {
@@ -58,6 +59,7 @@ export function PromptInput({
   }, [slashCompletions]);
 
   useInput((input, key) => {
+    // Streaming: only allow Esc to abort
     if (isStreaming) {
       if (key.escape && onAbort) {
         onAbort();
@@ -65,16 +67,22 @@ export function PromptInput({
       return;
     }
 
-    // Esc: clear input
+    // Esc: clear input (when not streaming)
     if (key.escape) {
       setValue('');
       setHistoryIdx(-1);
       setSuggestion(null);
+      setPendingLines([]);
+      setIsMultiline(false);
       return;
     }
 
     // Enter: submit
     if (key.return) {
+      // Debounce: ignore if last submit was < 100ms ago
+      const now = Date.now();
+      if (now - lastSubmitTime.current < 100) return;
+
       // Multi-line continuation: line ends with backslash
       if (value.endsWith('\\')) {
         const seg = value.slice(0, -1);
@@ -85,7 +93,7 @@ export function PromptInput({
         return;
       }
 
-      // End of multi-line input
+      // Build final input
       let finalInput: string;
       if (isMultiline || pendingLines.length > 0) {
         const lines = [...pendingLines, value].filter(Boolean);
@@ -97,6 +105,7 @@ export function PromptInput({
       }
 
       if (finalInput) {
+        lastSubmitTime.current = now;
         setValue('');
         setHistoryIdx(-1);
         setSuggestion(null);
@@ -106,11 +115,13 @@ export function PromptInput({
     }
 
     // Tab: accept suggestion
-    if (key.tab && suggestion) {
-      const completed = value + suggestion;
-      setValue(completed);
-      setSuggestion(null);
-      updateSuggestion(completed);
+    if (key.tab) {
+      if (suggestion) {
+        const completed = value + suggestion;
+        setValue(completed);
+        setSuggestion(null);
+        updateSuggestion(completed);
+      }
       return;
     }
 
@@ -141,7 +152,7 @@ export function PromptInput({
       return;
     }
 
-    // Backspace
+    // Backspace / Delete
     if (key.backspace || key.delete) {
       const newVal = value.slice(0, -1);
       setValue(newVal);
@@ -149,7 +160,7 @@ export function PromptInput({
       return;
     }
 
-    // Regular character input
+    // Regular character input — ignore control/meta sequences
     if (input && !key.ctrl && !key.meta) {
       const newVal = value + input;
       setValue(newVal);
@@ -157,10 +168,15 @@ export function PromptInput({
     }
   });
 
-  const displayPrompt = isMultiline ? '... ' : (mode !== 'default' ? `[${mode}] ❯ ` : `${domain} ❯ `);
+  const displayPrompt = isMultiline
+    ? '... '
+    : mode !== 'default'
+      ? `[${mode}] ❯ `
+      : `${domain} ❯ `;
 
   return (
     <Box flexDirection="column">
+      {/* Pending multiline segments */}
       {isMultiline && pendingLines.length > 0 && (
         <Box flexDirection="column" paddingLeft={2}>
           {pendingLines.map((line, i) => (
@@ -169,10 +185,16 @@ export function PromptInput({
         </Box>
       )}
       <Box flexDirection="row">
-        <Text color={promptColor as Parameters<typeof Text>[0]['color']} bold>{displayPrompt}</Text>
+        <Text color={promptColor as Parameters<typeof Text>[0]['color']} bold>
+          {isStreaming ? `${domain} ◌ ` : displayPrompt}
+        </Text>
         <Text>{value}</Text>
-        {suggestion && <Text color="gray" dimColor>{suggestion}</Text>}
-        {!isStreaming && <Text color={promptColor as Parameters<typeof Text>[0]['color']}>▊</Text>}
+        {suggestion && !isStreaming && (
+          <Text color="gray" dimColor>{suggestion}</Text>
+        )}
+        {!isStreaming && (
+          <Text color={promptColor as Parameters<typeof Text>[0]['color']}>▊</Text>
+        )}
       </Box>
     </Box>
   );
