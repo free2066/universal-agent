@@ -335,7 +335,26 @@ export function App({
     }
 
     // ── /tokens /context ────────────────────────────────────────────────────
-    if (cmd === '/tokens' || cmd === '/context') {
+    // (readline parity: agent-handlers.ts handleContext uses "Context Window Stats" title
+    //  and "Messages in ctx" field; handleCompactOrTokens uses "Context Usage" / "Turns in history")
+    if (cmd === '/context') {
+      const { shouldCompact } = await import('../../core/context/context-compressor.js');
+      const history = agent.getHistory();
+      const decision = shouldCompact(history);
+      const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
+      appendSystem([
+        'Context Window Stats:',
+        `  Estimated tokens : ${decision.estimatedTokens.toLocaleString()}`,
+        `  Context limit    : ${decision.contextLength.toLocaleString()}`,
+        `  Usage            : ${pct}%`,
+        `  Messages in ctx  : ${history.length}`,
+        `  Compact needed   : ${decision.shouldCompact ? 'Yes' : 'No'}`,
+        '',
+        '  Tip: /compact — compress context; /clear — start fresh',
+      ].join('\n'));
+      return;
+    }
+    if (cmd === '/tokens') {
       const { shouldCompact } = await import('../../core/context/context-compressor.js');
       const history = agent.getHistory();
       const decision = shouldCompact(history);
@@ -352,7 +371,6 @@ export function App({
       ].join('\n'));
       return;
     }
-
     // ── /compact ────────────────────────────────────────────────────────────
     if (cmd === '/compact') {
       const history = agent.getHistory();
@@ -519,17 +537,19 @@ export function App({
     }
 
     // ── /rename <name> ───────────────────────────────────────────────────────
-    if (cmd.startsWith('/rename ')) {
+    // (readline parity: handlers/index.ts uses startsWith('/rename') NO trailing space)
+    if (cmd.startsWith('/rename')) {
       const { saveSnapshot } = await import('../../core/memory/session-snapshot.js');
-      const newName = cmd.slice('/rename '.length).trim();
+      const newName = cmd.slice('/rename'.length).trim();
       if (!newName) { appendSystem('Usage: /rename <session-name>'); return; }
       const history = agent.getHistory();
       saveSnapshot(`named-${newName}`, history);
-      appendSystem(`Session renamed to: ${newName}`);
+      // (readline parity: session-handlers.ts handleRename prints 2 lines)
+      appendSystem(`Session renamed to: ${newName}\n  Restore with: /resume (then pick from list)`);
       return;
     }
 
-    // ── /copy ────────────────────────────────────────────────────────────────
+        // ── /copy ────────────────────────────────────────────────────────────────
     if (cmd === '/copy') {
       const history = agent.getHistory();
       const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
@@ -658,7 +678,11 @@ export function App({
         }
       } else {
         const agents = subagentSystem.listAgents();
-        if (!agents.length) { appendSystem('No subagents defined.'); return; }
+        if (!agents.length) {
+          // (readline parity: agent-handlers.ts handleAgents shows Tip even when empty)
+          appendSystem('No subagents defined.\n\n  Tip: /agents clean [days] — show stale subagents');
+          return;
+        }
         const lines = ['Subagents:', ''];
         for (const a of agents) {
           lines.push(`  @run-agent-${a.name.padEnd(18)} ${a.description}`);

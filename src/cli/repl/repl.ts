@@ -565,7 +565,9 @@ export async function runREPL(
         return;
       }
       if (hookCtx.injection) {
-        finalInput = `${input}\n\n---\n${hookCtx.injection}`;
+        // Fix: use finalInput (already @file-expanded) not raw input
+        // (App.tsx parity: ink/App.tsx uses resolvedInput here, not original input)
+        finalInput = `${finalInput}\n\n---\n${hookCtx.injection}`;
       }
 
       const agentWithImage = agent as AgentCore & { _pendingImage?: { data: string; mimeType: string } };
