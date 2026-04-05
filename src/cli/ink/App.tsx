@@ -390,6 +390,10 @@ export function App({
     // ── /continue ────────────────────────────────────────────────────────────
     // Matches readline handleContinue: inject "continue" instruction into agent
     if (cmd === '/continue') {
+      // Guard: nothing to continue if history is empty
+      // (readline parity: session-handlers.ts handleContinue checks h.length < 2)
+      const hc = agent.getHistory();
+      if (hc.length < 2) { appendSystem('Nothing to continue (no active session).'); return; }
       const continuePrompt = '[SYSTEM] Continue from where you left off — complete any remaining tasks.';
       appendSystem('Sending continue instruction to agent...');
       try {
@@ -872,17 +876,33 @@ export function App({
     }
 
     // ── /spec [description] ──────────────────────────────────────────────────
-    if (cmd.startsWith('/spec:brainstorm ')) {
-      const topic = cmd.slice('/spec:brainstorm '.length).trim();
-      if (!topic) { appendSystem('Usage: /spec:brainstorm <topic>'); return; }
+    // IMPORTANT: NO trailing space -- bare '/spec:brainstorm' (no args) must also match here
+    // (readline parity: memory-handlers.ts / handlers/index.ts use startsWith('/spec:brainstorm'))
+    if (cmd.startsWith('/spec:brainstorm')) {
+      const topic = cmd.slice('/spec:brainstorm'.length).trim();
+      if (!topic) { appendSystem('Usage: /spec:brainstorm <topic or feature description>'); return; }
       appendSystem('Brainstorming...');
+      setIsStreaming(true);
       try {
-        const prompt = `# Brainstorm: ${topic}\n\nPlease brainstorm design approaches for:\n\n**Topic:** ${topic}\n\nProvide: 3-5 approaches, pros/cons, key challenges, recommended starting point.`;
-        let out = '';
-        await agent.runStream(prompt, (c) => { out += c; });
-        appendSystem(out);
-      } catch (err) {
-        appendSystem(`Brainstorm failed: ${err instanceof Error ? err.message : String(err)}`);
+        const _bsPrompt = [
+          `# Brainstorm: ${topic}`,
+          '',
+          'Please brainstorm design approaches and ideas for the following topic. Be creative and explore multiple angles:',
+          '',
+          `**Topic:** ${topic}`,
+          '',
+          'Provide:',
+          '1. 3-5 distinct design approaches',
+          '2. Pros and cons of each',
+          '3. Key technical challenges to consider',
+          '4. A recommended starting point',
+        ].join('\n');
+        // Stream chunks as assistant messages (readline parity: memory-handlers.ts streams to stdout)
+        await agent.runStream(_bsPrompt, (c) => { appendAssistant(c); }).catch((err: unknown) => {
+          appendSystem(`Brainstorm failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      } finally {
+        setIsStreaming(false);
       }
       return;
     }
