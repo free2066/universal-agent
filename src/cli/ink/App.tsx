@@ -103,6 +103,11 @@ export function App({
   // ── Esc×2 rollback timer ─────────────────────────────────────────────────
   const lastEscRef = useRef(0);
 
+  // ── Current prompt value ref (for Ctrl+G editor pre-population) ──────────
+  // Updated by PromptInput's onChange; allows Ctrl+G to pre-fill editor with
+  // the user's in-progress input (readline parity: writes rl.line into tmpFile)
+  const currentPromptRef = useRef<string>('');
+
   // ── Ctrl+L double-press timer ────────────────────────────────────────────
   const lastCtrlLRef = useRef(0);
 
@@ -1376,6 +1381,10 @@ export function App({
       return next;
     });
 
+    // Log all user input (including slash cmds & !cmd) — readline parity:
+    // repl.ts calls sessionLogger.logInput(input) BEFORE slash/!cmd branches
+    sessionLogger.current.logInput(trimmed);
+
     try {
       if (trimmed.startsWith('/')) {
         await handleSlashCommand(trimmed);
@@ -1445,8 +1454,7 @@ export function App({
         ...prev,
         { role: 'user', content: trimmed, timestamp: new Date().toISOString() },
       ]);
-      // Log user input
-      sessionLogger.current.logInput(trimmed);
+      // (logInput already called above, before slash/!cmd branching)
       setToolCalls([]);
       setIsStreaming(true);
       toolSeqRef.current = 0;
@@ -1596,26 +1604,36 @@ export function App({
         sessionLogger.current.flushOutput();
 
         // Update token estimate + auto-compact check
+        // Use estimateHistoryTokens for accurate tool-call-aware counting
+        // (matches readline's estimateHistoryTokens in status bar; shouldCompact uses the same fn)
         try {
           const h = agent.getHistory();
-          const est = h.reduce((acc, m) => {
-            const c = (m as { content?: string }).content;
-            return acc + (typeof c === 'string' ? Math.ceil(c.length / 4) : 0);
-          }, 0);
-          setStatusInfo((s) => ({ ...s, estimatedTokens: est }));
+          import('../../core/context/context-compressor.js').then(
+            ({ estimateHistoryTokens, shouldCompact, autoCompact }) => {
+              const est = estimateHistoryTokens(h);
+              setStatusInfo((s) => ({ ...s, estimatedTokens: est }));
 
-          // ── Auto compact: trigger when >75% context window used ──────────
-          const threshold = Math.floor(contextLength * 0.75);
-          if (est > threshold && h.length >= 4) {
-            appendSystem(`Context at ${Math.round(est / contextLength * 100)}% — auto-compacting...`);
-            import('../../core/context/context-compressor.js').then(({ autoCompact }) => {
-              autoCompact(h, (msg) => appendSystem(msg)).then((compacted) => {
-                if (compacted > 0) {
-                  appendSystem(`Auto-compact complete: ${compacted} turns compressed.`);
-                }
-              }).catch(() => { /* non-fatal */ });
-            }).catch(() => { /* fallback: manual compact */ });
-          }
+              // ── Auto compact: delegate threshold logic to shouldCompact() ─
+              const decision = shouldCompact(h);
+              if (decision.shouldCompact && h.length >= 4) {
+                const pct = Math.round(est / contextLength * 100);
+                appendSystem(`Context at ${pct}% — auto-compacting...`);
+                autoCompact(h, (msg) => appendSystem(msg)).then((compacted) => {
+                  if (compacted > 0) {
+                    appendSystem(`Auto-compact complete: ${compacted} turns compressed.`);
+                  }
+                }).catch(() => { /* non-fatal */ });
+              }
+            }
+          ).catch(() => {
+            // Fallback: naive estimate if module unavailable
+            const h2 = agent.getHistory();
+            const est2 = h2.reduce((acc, m) => {
+              const c = (m as { content?: string }).content;
+              return acc + (typeof c === 'string' ? Math.ceil(c.length / 4) : 0);
+            }, 0);
+            setStatusInfo((s) => ({ ...s, estimatedTokens: est2 }));
+          });
         } catch { /* non-fatal */ }
       }
     } finally {
@@ -1674,8 +1692,11 @@ export function App({
         const { writeFileSync, readFileSync, unlinkSync, existsSync } = await import('fs');
         const { spawnSync } = await import('child_process');
         const tmpFile = join('/tmp', `uagent-input-${Date.now()}.txt`);
+        // Read current prompt value to pre-populate editor (readline parity:
+        // repl.ts writes rl.line into tmpFile so user edits their in-progress input)
+        const currentPromptValue = currentPromptRef.current ?? '';
         try {
-          writeFileSync(tmpFile, '', 'utf-8');
+          writeFileSync(tmpFile, currentPromptValue, 'utf-8');
           // Temporarily suspend Ink rendering by writing a note
           process.stdout.write(`\r\nOpening ${editor}...\r\n`);
           spawnSync(editor, [tmpFile], { stdio: 'inherit' });
@@ -1921,6 +1942,7 @@ export function App({
             setHistorySearchMatch(null);
             historySearchIdxRef.current = -1;
           }}
+          onValueChange={(val) => { currentPromptRef.current = val; }}
         />
       </Box>
 

@@ -29,6 +29,8 @@ export interface PromptInputProps {
   onHistorySearchInput?: (ch: string, isBackspace: boolean) => void;
   onHistorySearchAccept?: (val: string | null) => void;
   onHistorySearchCancel?: () => void;
+  /** Called whenever the current input value changes (used by Ctrl+G to pre-populate editor) */
+  onValueChange?: (val: string) => void;
 }
 
 const MODE_COLORS: Record<string, string> = {
@@ -53,6 +55,7 @@ export function PromptInput({
   onHistorySearchInput,
   onHistorySearchAccept,
   onHistorySearchCancel,
+  onValueChange,
 }: PromptInputProps): React.JSX.Element {
   const [value, setValue] = useState('');
   const [historyIdx, setHistoryIdx] = useState(-1);
@@ -150,6 +153,7 @@ export function PromptInput({
         setIsMultiline(true);
         setValue('');
         setSuggestion(null);
+        onValueChange?.('');
         return;
       }
 
@@ -217,6 +221,7 @@ export function PromptInput({
       const newVal = value.slice(0, -1);
       setValue(newVal);
       updateSuggestion(newVal);
+      onValueChange?.(newVal);
       return;
     }
 
@@ -259,6 +264,7 @@ export function PromptInput({
         setValue((prev) => {
           const newVal = prev + batch;
           updateSuggestion(newVal);
+          onValueChange?.(newVal);
           return newVal;
         });
       }, 16); // ~1 frame, batches rapid paste events
