@@ -1,12 +1,13 @@
 /**
  * StatusBar — fixed bottom bar showing model / domain / token info.
  *
- * Replaces the readline-prompt-embedded status bar from statusbar.ts.
- * Renders as a single sticky row at the bottom of the terminal.
+ * Format (matches screenshot reference):
+ *   [domain/model | thinking: low] | project | 1.71M | 76% | ID session
  */
 
 import React from 'react';
 import { Box, Text } from 'ink';
+import { basename } from 'path';
 
 export interface StatusBarProps {
   model: string;
@@ -18,27 +19,21 @@ export interface StatusBarProps {
   mode?: string;
 }
 
-type ThinkingInfo = {
-  label: string;
-  color: 'cyan' | 'yellow' | 'magenta';
-} | null;
-
-/** Matches readline statusbar.ts _thinkingPart: low=cyan, medium=yellow, high=magenta */
-function thinkingInfo(level: StatusBarProps['isThinking']): ThinkingInfo {
-  switch (level) {
-    case 'low':    return { label: ' thinking...', color: 'cyan' };
-    case 'medium': return { label: ' thinking...', color: 'yellow' };
-    case 'high':   return { label: ' thinking...', color: 'magenta' };
-    default: return null;
-  }
-}
-
-/** Token percentage color: ≥85%=red, ≥60%=yellow, <60%=green — matches readline _ctxColor */
+/** Token percentage color: ≥85%=red, ≥60%=yellow, <60%=green */
 function tokenColor(pct: number): 'red' | 'yellow' | 'green' {
   if (pct >= 85) return 'red';
   if (pct >= 60) return 'yellow';
   return 'green';
 }
+
+/** Format token count: ≥1M → "1.71M", else → "128k" */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000)     return `${Math.round(n / 1_000)}k`;
+  return String(n);
+}
+
+const SEP = <Text color="gray" dimColor> | </Text>;
 
 export function StatusBar({
   model,
@@ -53,25 +48,45 @@ export function StatusBar({
   const pctCapped = Math.min(pct, 100);
   const hasTokens = estimatedTokens > 0;
   const tknColor = tokenColor(pctCapped);
-  const modeStr = mode && mode !== 'default' ? ` [${mode}]` : '';
-  const thinking = thinkingInfo(isThinking);
+  const project = basename(process.cwd());
+  const shortId = sessionId.slice(0, 8);
+
+  // Left bracket group: [domain/model | thinking: level]
+  const thinkingPart = isThinking && isThinking !== 'none'
+    ? ` | thinking: ${isThinking}`
+    : '';
 
   return (
-    <Box flexDirection="row" gap={1} paddingLeft={1}>
+    <Box flexDirection="row" paddingLeft={1} paddingTop={0}>
+      {/* [domain/model | thinking] */}
+      <Text color="gray" dimColor>[</Text>
       <Text color="cyan" bold>{domain}</Text>
-      <Text color="gray">·</Text>
+      <Text color="gray" dimColor>/</Text>
       <Text color="white">{model}</Text>
-      {modeStr ? <Text color="yellow">{modeStr}</Text> : null}
-      {thinking ? <Text color={thinking.color} dimColor>{thinking.label}</Text> : null}
+      {thinkingPart ? <Text color="yellow" dimColor>{thinkingPart}</Text> : null}
+      {mode && mode !== 'default' ? <Text color="yellow" dimColor> | {mode}</Text> : null}
+      <Text color="gray" dimColor>]</Text>
+
+      {SEP}
+
+      {/* project name */}
+      <Text color="gray">{project}</Text>
+
+      {/* tokens */}
       {hasTokens ? (
         <>
-          <Text color="gray">·</Text>
-          <Text color={tknColor}>{estimatedTokens.toLocaleString()}/{(contextLength / 1000).toFixed(0)}k</Text>
-          <Text color={tknColor} dimColor>({pctCapped}%)</Text>
+          {SEP}
+          <Text color={tknColor}>{fmtTokens(estimatedTokens)}</Text>
+          {SEP}
+          <Text color={tknColor} bold={pctCapped >= 60}>{pctCapped}%</Text>
         </>
       ) : null}
-      <Text color="gray">·</Text>
-      <Text color="gray" dimColor>#{sessionId.slice(0, 8)}</Text>
+
+      {SEP}
+
+      {/* session ID */}
+      <Text color="gray" dimColor>ID </Text>
+      <Text color="gray">{shortId}</Text>
     </Box>
   );
 }
