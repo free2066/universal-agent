@@ -16,36 +16,17 @@
  *   module  — require() a local JS/TS module that exports a handler function
  *   inject  — simple text injection (no execution needed)
  *   block   — block the event and return a custom message
+ *   http    — POST JSON payload to an HTTP/HTTPS URL (Round 3: claude-code parity)
+ *   agent   — use LLM multi-turn dialog to validate/gate the event (Round 3: claude-code parity)
  *
  * Config example (.uagent/hooks.json):
  * {
  *   "hooks": [
- *     {
- *       "event": "pre_prompt",
- *       "type": "inject",
- *       "content": "Always reply in Chinese.",
- *       "description": "Force Chinese responses"
- *     },
- *     {
- *       "event": "on_slash_cmd",
- *       "command": "/standup",
- *       "type": "shell",
- *       "command_line": "cat .uagent/standup-template.md",
- *       "description": "Load daily standup template"
- *     },
- *     {
- *       "event": "on_tool_call",
- *       "tool": "Bash",
- *       "type": "shell",
- *       "command_line": "echo \"[AUDIT] Tool: $TOOL_NAME, Args: $TOOL_ARGS\" >> .uagent/audit.log",
- *       "description": "Audit log for bash calls"
- *     },
- *     {
- *       "event": "pre_prompt",
- *       "type": "shell",
- *       "command_line": "cat .uagent/context/project-summary.md",
- *       "description": "Prepend project summary to every prompt"
- *     }
+ *     { "event": "pre_prompt", "type": "inject", "content": "Always reply in Chinese." },
+ *     { "event": "on_tool_call", "tool": "Bash", "type": "http",
+ *       "url": "http://localhost:8080/audit", "timeout_ms": 5000 },
+ *     { "event": "on_tool_call", "tool": "Write", "type": "agent",
+ *       "agent_prompt": "Check the file being written doesn't contain hardcoded secrets: $ARGUMENTS" }
  *   ]
  * }
  */
@@ -57,8 +38,64 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
+// ── SSRF protection helper ─────────────────────────────────────────────────────
+//
+// Mirrors claude-code execHttpHook.ts's private IP detection.
+// Blocks 10.x, 172.16-31.x, 192.168.x private ranges.
+// Allows loopback: 127.x, ::1 (needed for local webhook development servers).
+
+function isPrivateIp(hostname: string): boolean {
+  // IPv6 loopback — allow
+  if (hostname === '::1' || hostname === '[::1]') return false;
+  // Named hosts (non-IP) — allow (DNS resolution is out-of-scope for SSRF here)
+  const ipv4 = hostname.replace(/^\[|\]$/g, '');
+  const parts = ipv4.split('.');
+  if (parts.length !== 4) return false;
+  const [a, b] = parts.map(Number);
+  // 127.x.x.x — loopback, allow
+  if (a === 127) return false;
+  // 10.x.x.x — private, block
+  if (a === 10) return true;
+  // 172.16.x.x – 172.31.x.x — private, block
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  // 192.168.x.x — private, block
+  if (a === 192 && b === 168) return true;
+  // 169.254.x.x — link-local, block
+  if (a === 169 && b === 254) return true;
+  // 0.x.x.x — block
+  if (a === 0) return true;
+  return false;
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 const SHELL_HOOK_DEFAULT_TIMEOUT_MS = 5000;
+/** Timeout for tool-related hooks — allows for slower scripts (10 min, claude-code parity) */
+const TOOL_HOOK_TIMEOUT_MS = 10 * 60 * 1000;
+/** Timeout for session-end hooks — must be quick to not delay exit (claude-code parity) */
+const SESSION_END_HOOK_TIMEOUT_MS = 1500;
+
+// ── Permission Decision Merging (claude-code parity) ─────────────────────────
+//
+// When multiple hooks fire for the same event, each may return a permissionDecision.
+// Claude-code's merging rule: deny > ask > allow > passthrough
+// This is a strict priority order — any 'deny' from any hook blocks the operation,
+// regardless of other hooks returning 'allow'.
+
+type PermissionDecision = 'allow' | 'ask' | 'deny' | 'passthrough';
+
+/**
+ * Merge multiple permission decisions using claude-code's priority order:
+ *   deny > ask > allow > passthrough
+ *
+ * Returns 'passthrough' when the input array is empty.
+ */
+export function mergePermissionDecisions(decisions: PermissionDecision[]): PermissionDecision {
+  if (decisions.length === 0) return 'passthrough';
+  if (decisions.includes('deny')) return 'deny';
+  if (decisions.includes('ask')) return 'ask';
+  if (decisions.includes('allow')) return 'allow';
+  return 'passthrough';
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -87,7 +124,7 @@ export type HookEvent =
   | 'domain_switch'        // After /domain switches active domain
   | 'thinking_change';     // After thinking level changes (none/low/medium/high)
 
-export type HookType = 'shell' | 'inject' | 'block' | 'module';
+export type HookType = 'shell' | 'inject' | 'block' | 'module' | 'http' | 'agent';
 
 export interface HookDefinition {
   /** Which lifecycle event this hook fires on */
@@ -112,6 +149,29 @@ export interface HookDefinition {
   // ── module specific ──
   /** Relative path to a local JS module exporting a default handler */
   module_path?: string;
+
+  // ── http specific (Round 3: claude-code HttpHook parity) ──
+  /** POST target URL (for type=http). Must be http:// or https:// */
+  url?: string;
+  /**
+   * Request headers (for type=http). Values support $VAR_NAME interpolation.
+   * Only env vars listed in allowed_env_vars will be interpolated.
+   */
+  headers?: Record<string, string>;
+  /**
+   * Allowlist of environment variable names that can be interpolated into headers.
+   * Prevents accidental secret leakage via header injection.
+   */
+  allowed_env_vars?: string[];
+
+  // ── agent specific (Round 3: claude-code AgentHook parity) ──
+  /**
+   * Prompt for the LLM to evaluate (for type=agent).
+   * Supports $ARGUMENTS placeholder which is replaced with the hook input JSON.
+   */
+  agent_prompt?: string;
+  /** LLM model to use for agent hooks (default: compact model) */
+  agent_model?: string;
 
   // ── event-specific filters ──
   /** For on_slash_cmd: the /command string to match (e.g. "/standup") */
@@ -170,6 +230,26 @@ export interface HookResult {
   injection?: string;
   /** Error message if hook failed */
   error?: string;
+  /**
+   * For PreToolUse shell hooks: modified tool input to use instead of original.
+   * Set via JSON stdout: { "hookSpecificOutput": { "updatedInput": {...} } }
+   */
+  updatedInput?: Record<string, unknown>;
+  /**
+   * Whether the hook requests blocking the tool/operation.
+   * Set via exit code 2 from shell hooks, or { "proceed": false } from module hooks.
+   */
+  blocked?: boolean;
+  /** Human-readable reason for blocking (displayed to user) */
+  blockReason?: string;
+  /**
+   * Four-level permission decision (claude-code parity).
+   * Used to merge decisions from multiple hooks with clear priority:
+   *   deny > ask > allow > passthrough
+   *
+   * Set via JSON stdout: { "hookSpecificOutput": { "permissionDecision": "deny" } }
+   */
+  permissionDecision?: 'allow' | 'ask' | 'deny' | 'passthrough';
 }
 
 // ── HookRunner ────────────────────────────────────────────────────────────────
@@ -282,22 +362,45 @@ export class HookRunner {
 
     if (hooks.length === 0) return { proceed: true };
 
-    let currentValue = ctx.prompt ?? ctx.response ?? '';
-    const injections: string[] = [];
-
-    for (const hook of hooks) {
-      // Apply event-specific filters
+    // Apply event-specific pre-filters to narrow matching hooks
+    const matchingHooks = hooks.filter((hook) => {
       if (ctx.event === 'on_slash_cmd' && hook.command) {
-        const slashCmd = ctx.slashCmd ?? '';
-        if (!slashCmd.startsWith(hook.command)) continue;
+        return (ctx.slashCmd ?? '').startsWith(hook.command);
       }
       if (ctx.event === 'on_tool_call' && hook.tool && hook.tool !== '*') {
-        if (ctx.toolName !== hook.tool) continue;
+        return ctx.toolName === hook.tool;
       }
+      return true;
+    });
 
-      const result = await this.runSingleHook(hook, ctx, currentValue);
-      if (!result.proceed) {
-        return result; // Block: stop processing
+    if (matchingHooks.length === 0) return { proceed: true };
+
+    let currentValue = ctx.prompt ?? ctx.response ?? '';
+    const injections: string[] = [];
+    let updatedInput: Record<string, unknown> | undefined;
+    // ── Four-level permission decision collection (claude-code parity) ────────
+    const permissionDecisions: Array<'allow' | 'ask' | 'deny' | 'passthrough'> = [];
+
+    // ── Concurrent execution (inspired by claude-code's all() generator) ──────
+    // Run all hooks concurrently via Promise.allSettled for maximum throughput.
+    // Results are processed in declaration order (not completion order) to ensure
+    // deterministic precedence: first block wins, last updatedInput wins.
+    //
+    // Exception: if any hook has type='block', we short-circuit immediately.
+    // (Serial fallback would be simpler but 3× slower for 3 concurrent hooks.)
+    const results = await Promise.allSettled(
+      matchingHooks.map((hook) => this.runSingleHook(hook, ctx, currentValue)),
+    );
+
+    for (const settled of results) {
+      if (settled.status === 'rejected') {
+        process.stderr.write(`[hooks] Unhandled hook error: ${String(settled.reason)}\n`);
+        continue;
+      }
+      const result = settled.value;
+      if (!result.proceed || result.blocked) {
+        // Block: a hook vetoed the operation — return immediately
+        return { proceed: false, blocked: true, blockReason: result.blockReason };
       }
       if (result.value !== undefined) {
         currentValue = result.value;
@@ -305,16 +408,31 @@ export class HookRunner {
       if (result.injection) {
         injections.push(result.injection);
       }
+      // Last updatedInput wins (most recently declared hook takes precedence)
+      if (result.updatedInput) {
+        updatedInput = result.updatedInput;
+      }
+      // Collect permission decisions for later merging
+      if (result.permissionDecision) {
+        permissionDecisions.push(result.permissionDecision);
+      }
       if (result.error) {
         // Log hook errors but continue
-        process.stderr.write(`[hooks] Warning: hook "${hook.description ?? hook.type}" failed: ${result.error}\n`);
+        process.stderr.write(`[hooks] Warning: hook "${matchingHooks[results.indexOf(settled)]?.description ?? 'unknown'}" failed: ${result.error}\n`);
       }
     }
+
+    // ── Merge permission decisions: deny > ask > allow > passthrough ──────────
+    // Mirrors claude-code's mergePermissionDecisions() priority order.
+    // If no permission decisions were set, the field is omitted.
+    const mergedPermission = mergePermissionDecisions(permissionDecisions);
 
     return {
       proceed: true,
       value: currentValue,
       injection: injections.length > 0 ? injections.join('\n') : undefined,
+      updatedInput,
+      ...(mergedPermission !== 'passthrough' ? { permissionDecision: mergedPermission } : {}),
     };
   }
 
@@ -343,6 +461,12 @@ export class HookRunner {
         case 'module':
           return await this.runModuleHook(hook, ctx, currentValue);
 
+        case 'http':
+          return await this.runHttpHook(hook, ctx, currentValue);
+
+        case 'agent':
+          return await this.runAgentHook(hook, ctx, currentValue);
+
         default:
           return { proceed: true };
       }
@@ -361,7 +485,19 @@ export class HookRunner {
   ): Promise<HookResult> {
     if (!hook.command_line) return { proceed: true };
 
-    const timeout = hook.timeout_ms ?? SHELL_HOOK_DEFAULT_TIMEOUT_MS;
+    // ── Fine-grained timeout (claude-code parity) ──────────────────────────
+    // Tool hooks: 10 min (heavy scripts like formatters, linters)
+    // Session-end hooks: 1.5 sec (must not delay process exit)
+    // Other hooks: user-configured or 5 sec default
+    let defaultTimeout: number;
+    if (ctx.event === 'on_session_end') {
+      defaultTimeout = SESSION_END_HOOK_TIMEOUT_MS;
+    } else if (ctx.event === 'on_tool_call' || ctx.event === 'tool_permission_request') {
+      defaultTimeout = TOOL_HOOK_TIMEOUT_MS;
+    } else {
+      defaultTimeout = SHELL_HOOK_DEFAULT_TIMEOUT_MS;
+    }
+    const timeout = hook.timeout_ms ?? defaultTimeout;
 
     // #19 Shell injection mitigation: shell-escape env vars that may contain
     // user-controlled content before they are passed into `sh -c command_line`.
@@ -409,7 +545,55 @@ export class HookRunner {
       });
       const output = stdout.trim();
 
-      // If shell hook prints output, treat it as the new/additional value
+      // ── JSON stdout protocol (inspired by claude-code hooks) ───────────────
+      // If the hook outputs a JSON object, parse it for structured control:
+      //   { "hookSpecificOutput": { "updatedInput": {...} } }  → modify tool input
+      //   { "proceed": false, "message": "..." }               → block operation
+      //   { "injection": "..." }                               → inject text
+      //
+      // Plain text stdout (non-JSON) falls through to legacy injection behavior.
+      if (output.startsWith('{')) {
+        try {
+          const json = JSON.parse(output) as Record<string, unknown>;
+          // Block signal: { "proceed": false } or { "block": true }
+          if (json['proceed'] === false || json['block'] === true) {
+            const reason = (json['message'] ?? json['reason'] ?? 'Blocked by hook') as string;
+            return { proceed: false, blocked: true, blockReason: reason };
+          }
+          // updatedInput + permissionDecision: PreToolUse hook-specific fields
+          const hookSpecific = json['hookSpecificOutput'] as Record<string, unknown> | undefined;
+
+          // ── Permission decision (claude-code parity) ───────────────────────
+          // JSON: { "hookSpecificOutput": { "permissionDecision": "deny" } }
+          // Priority: deny > ask > allow > passthrough
+          const rawDecision = hookSpecific?.['permissionDecision'] as string | undefined
+            ?? json['permissionDecision'] as string | undefined;
+          const permissionDecision = (['allow', 'ask', 'deny', 'passthrough'].includes(rawDecision ?? ''))
+            ? (rawDecision as 'allow' | 'ask' | 'deny' | 'passthrough')
+            : undefined;
+
+          if (hookSpecific?.['updatedInput']) {
+            return {
+              proceed: true,
+              updatedInput: hookSpecific['updatedInput'] as Record<string, unknown>,
+              injection: hookSpecific['additionalContext'] as string | undefined,
+              permissionDecision,
+            };
+          }
+          // injection: { "injection": "text to append" }
+          if (json['injection']) {
+            return { proceed: true, injection: String(json['injection']), permissionDecision };
+          }
+          // Permission-only response (no other action)
+          if (permissionDecision && permissionDecision !== 'passthrough') {
+            return { proceed: true, permissionDecision };
+          }
+          // Plain JSON with no recognized fields → treat as injection
+          return { proceed: true, injection: output };
+        } catch { /* not valid JSON — fall through to text handling */ }
+      }
+
+      // Legacy plain-text handling
       if (output) {
         // For pre_prompt: output is injected as context
         // For post_response: output replaces response (if non-empty)
@@ -422,7 +606,13 @@ export class HookRunner {
       }
       return { proceed: true };
     } catch (err: unknown) {
-      const e = err as { stderr?: string; message?: string };
+      const e = err as { code?: number; stderr?: string; message?: string };
+      // ── exit code 2 = blocking error (same as claude-code convention) ──────
+      // exit 0: success, exit 1: non-blocking error, exit 2: BLOCK operation
+      if (e.code === 2) {
+        const reason = (e.stderr?.trim() || 'Operation blocked by hook (exit code 2)').slice(0, 300);
+        return { proceed: false, blocked: true, blockReason: reason };
+      }
       const msg = (e.stderr ?? e.message ?? String(err)).trim().slice(0, 200);
       return { proceed: true, error: msg };
     }
@@ -459,12 +649,215 @@ export class HookRunner {
     }
   }
 
-  // ── Slash command hooks ────────────────────────────────────────────────────
+  // ── HTTP Hook (Round 3: claude-code HttpHook / execHttpHook parity) ─────────
 
   /**
-   * Returns custom slash commands defined by hooks.
-   * Used to display them in /help output.
+   * POST hook context as JSON to a remote URL.
+   *
+   * Key design decisions (mirroring claude-code's execHttpHook.ts):
+   *  1. SSRF protection: block private IP ranges (10.x, 172.16-31.x, 192.168.x)
+   *     while allowing loopback (127.x / ::1) for local webhook servers.
+   *  2. Env var interpolation in headers is restricted to allowed_env_vars whitelist.
+   *  3. No redirects (redirect:'error') prevents SSRF bypass via redirect chains.
+   *  4. 2xx = success, 4xx/5xx = non-blocking error (hook failure does not block).
+   *  5. Response JSON: { proceed: false, message: "..." } → block; else continue.
    */
+  private async runHttpHook(
+    hook: HookDefinition,
+    ctx: HookContext,
+    currentValue: string,
+  ): Promise<HookResult> {
+    if (!hook.url) return { proceed: true };
+
+    // ── SSRF protection ──────────────────────────────────────────────────────
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(hook.url);
+    } catch {
+      return { proceed: true, error: `HTTP hook: invalid URL "${hook.url}"` };
+    }
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      return { proceed: true, error: `HTTP hook: unsupported protocol "${parsedUrl.protocol}"` };
+    }
+    const hostname = parsedUrl.hostname;
+    if (isPrivateIp(hostname)) {
+      return {
+        proceed: true,
+        error: `HTTP hook: SSRF protection — "${hostname}" is in a private IP range. Only loopback (127.x/::1) is allowed.`,
+      };
+    }
+
+    // ── Build headers with env var interpolation (allowlist-controlled) ──────
+    const requestHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'User-Agent': 'universal-agent-hook/1.0',
+    };
+    if (hook.headers) {
+      const allowedVars = new Set(hook.allowed_env_vars ?? []);
+      for (const [key, val] of Object.entries(hook.headers)) {
+        const interpolated = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (match, varName) => {
+          if (allowedVars.has(varName)) return process.env[varName] ?? match;
+          return match;
+        });
+        requestHeaders[key] = interpolated;
+      }
+    }
+
+    // ── Payload ──────────────────────────────────────────────────────────────
+    const payload = JSON.stringify({
+      event: ctx.event,
+      toolName: ctx.toolName,
+      toolArgs: ctx.toolArgs,
+      prompt: ctx.prompt,
+      response: ctx.response,
+      slashCmd: ctx.slashCmd,
+      filePath: ctx.filePath,
+      cwd: ctx.cwd ?? this.cwd,
+      currentValue,
+    });
+
+    // ── Fine-grained timeout ─────────────────────────────────────────────────
+    let defaultTimeout: number;
+    if (ctx.event === 'on_session_end') {
+      defaultTimeout = SESSION_END_HOOK_TIMEOUT_MS;
+    } else if (ctx.event === 'on_tool_call' || ctx.event === 'tool_permission_request') {
+      defaultTimeout = TOOL_HOOK_TIMEOUT_MS;
+    } else {
+      defaultTimeout = SHELL_HOOK_DEFAULT_TIMEOUT_MS;
+    }
+    const timeout = hook.timeout_ms ?? defaultTimeout;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const res = await fetch(hook.url, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: payload,
+        signal: controller.signal,
+        redirect: 'error',
+      });
+      clearTimeout(timer);
+
+      const bodyText = await res.text().catch(() => '');
+      if (!res.ok) {
+        return { proceed: true, error: `HTTP hook: server returned ${res.status}` };
+      }
+
+      // ── Parse response for structured decisions ───────────────────────────
+      if (bodyText.startsWith('{')) {
+        try {
+          const json = JSON.parse(bodyText) as Record<string, unknown>;
+          if (json['proceed'] === false || json['block'] === true) {
+            const reason = String(json['message'] ?? json['reason'] ?? 'Blocked by HTTP hook');
+            return { proceed: false, blocked: true, blockReason: reason };
+          }
+          const rawDecision = json['permissionDecision'] as string | undefined;
+          const permissionDecision = (['allow', 'ask', 'deny', 'passthrough'].includes(rawDecision ?? ''))
+            ? (rawDecision as 'allow' | 'ask' | 'deny' | 'passthrough')
+            : undefined;
+          const hookSpecific = (json['hookSpecificOutput'] as Record<string, unknown>) ?? json;
+          if (hookSpecific['updatedInput']) {
+            return {
+              proceed: true,
+              updatedInput: hookSpecific['updatedInput'] as Record<string, unknown>,
+              injection: hookSpecific['additionalContext'] as string | undefined,
+              permissionDecision,
+            };
+          }
+          if (json['injection']) {
+            return { proceed: true, injection: String(json['injection']), permissionDecision };
+          }
+          if (permissionDecision && permissionDecision !== 'passthrough') {
+            return { proceed: true, permissionDecision };
+          }
+        } catch { /* non-JSON body — not an error */ }
+      }
+      return { proceed: true };
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('aborted') || msg.includes('signal')) {
+        return { proceed: true, error: `HTTP hook: timeout after ${timeout}ms` };
+      }
+      return { proceed: true, error: `HTTP hook: ${msg.slice(0, 200)}` };
+    }
+  }
+
+  // ── Agent Hook (Round 3: claude-code AgentHook / execAgentHook parity) ──────
+
+  /**
+   * Use LLM multi-turn evaluation to gate the operation.
+   *
+   * Key design decisions (mirroring claude-code's execAgentHook.ts):
+   *  1. Isolated context: fresh LLM call with no main agent history contamination.
+   *  2. Compact model: fast decisions (< 5 seconds typical).
+   *  3. Structured output: forces { ok: boolean, reason?: string } JSON.
+   *  4. ok=false → block with reason; ok=true → proceed; failure → fail-open.
+   *  5. $ARGUMENTS placeholder in agent_prompt is replaced with hook input JSON.
+   */
+  private async runAgentHook(
+    hook: HookDefinition,
+    ctx: HookContext,
+    currentValue: string,
+  ): Promise<HookResult> {
+    if (!hook.agent_prompt) return { proceed: true };
+
+    const timeout = hook.timeout_ms ?? (ctx.event === 'on_session_end' ? SESSION_END_HOOK_TIMEOUT_MS : 30_000);
+
+    const args = JSON.stringify({
+      event: ctx.event,
+      toolName: ctx.toolName,
+      toolArgs: ctx.toolArgs,
+      prompt: ctx.prompt?.slice(0, 500),
+      filePath: ctx.filePath,
+      cwd: ctx.cwd ?? this.cwd,
+      currentValue: currentValue.slice(0, 500),
+    });
+
+    const evaluationPrompt = hook.agent_prompt.replace(/\$ARGUMENTS/g, args);
+
+    const systemPrompt =
+      `You are evaluating a hook condition in an AI agent system.\n` +
+      `Your response must be a JSON object matching exactly ONE of these schemas:\n` +
+      `1. If the condition is met (OK to proceed): {"ok": true}\n` +
+      `2. If the condition is not met (should block): {"ok": false, "reason": "Brief reason why"}\n` +
+      `Do not include any other text — only the JSON object.`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const { modelManager } = await import('../models/model-manager.js');
+      const client = modelManager.getClient('compact');
+
+      const response = await client.chat({
+        systemPrompt,
+        messages: [{ role: 'user', content: evaluationPrompt }],
+      });
+      clearTimeout(timer);
+
+      const rawContent = (response.content ?? '').trim();
+      const jsonMatch = rawContent.match(/\{[\s\S]*?\}/);
+      if (!jsonMatch) {
+        return { proceed: true, error: 'Agent hook: no JSON response from LLM' };
+      }
+
+      const result = JSON.parse(jsonMatch[0]) as { ok: boolean; reason?: string };
+      if (!result.ok) {
+        const reason = String(result.reason ?? 'Condition not met by agent hook');
+        return { proceed: false, blocked: true, blockReason: `[Agent hook] ${reason}` };
+      }
+      return { proceed: true };
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Agent hook failures are always non-blocking (fail-open)
+      return { proceed: true, error: `Agent hook: ${msg.slice(0, 200)}` };
+    }
+  }
+
+  // ── Slash command hooks ────────────────────────────────────────────────────
   listSlashCommands(): Array<{ command: string; description: string }> {
     return this.config.hooks
       .filter((h) => h.event === 'on_slash_cmd' && h.command && h.enabled !== false)

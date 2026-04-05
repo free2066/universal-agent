@@ -39,6 +39,7 @@ export class AgentCore {
   private _appendSystemPrompt: string | null = null;
   private _thinkingLevel: import('../../models/types.js').ThinkingLevel | undefined = undefined;
   private _disabledTools: Record<string, boolean> | undefined = undefined;
+  private _outputStyle: string | null = null;  // Batch 3: 'plain' | 'markdown' | 'compact'
   private uncertainItems: string[] = [];
 
   /** Mutable ref so agent-loop can read/write without holding `this`. */
@@ -153,6 +154,84 @@ export class AgentCore {
   injectContext(text: string): void {
     this.history.push({ role: 'user', content: `[shell output injected]\n${text}` });
     this.history.push({ role: 'assistant', content: '(noted)' });
+  }
+
+  /**
+   * setOutputStyle — upgrade: load from Markdown file + persist to config.
+   *
+   * Resolution order (same as claude-code):
+   *  1. Look up in getAllOutputStyles() — covers builtin, user, and project styles
+   *  2. If found: use config.prompt as the injection directive
+   *  3. Persist selected style name to ~/.uagent/config via setConfigValue()
+   *     so the style survives process restarts
+   *
+   * Supports:
+   *   setOutputStyle('plain')    — builtin
+   *   setOutputStyle('compact')  — builtin
+   *   setOutputStyle('my-style') — user/project .uagent/output-styles/my-style.md
+   */
+  setOutputStyle(style: string): void {
+    this._outputStyle = style;
+
+    // Resolve via loader (builtin + user + project Markdown files)
+    import('../../core/output-styles/loader.js').then(({ getOutputStyle, buildOutputStylePrompt }) => {
+      const config = getOutputStyle(style);
+
+      // Fallback to legacy STYLE_PROMPTS for backward compatibility
+      const LEGACY_PROMPTS: Record<string, string> = {
+        plain:
+          'IMPORTANT: Format ALL your responses as plain text. Do NOT use markdown, ' +
+          'code fences, headers, bold, italics, bullet lists, or any other markdown syntax. ' +
+          'Write in simple, clean prose.',
+        compact:
+          'IMPORTANT: Keep all responses concise and minimal. Avoid preamble, lengthy ' +
+          'explanations, or redundant headers. Prefer short bullet points over paragraphs. ' +
+          'Omit confirmations like "I will…" or "Sure, I can…".',
+        markdown: '',
+      };
+
+      const directive = config
+        ? buildOutputStylePrompt(config)
+        : (LEGACY_PROMPTS[style] ?? '');
+
+      // Compose with existing appendSystemPrompt (strip old style directive first)
+      const existing = (this._appendSystemPrompt ?? '')
+        .replace(/\n?# Output Style:.*?(?=\n#|\n?$)/s, '')
+        .replace(/\nIMPORTANT: (?:Format ALL|Keep all responses concise)[^\n]*/g, '')
+        .trim();
+      this._appendSystemPrompt = directive
+        ? (existing ? `${existing}\n${directive}` : directive)
+        : (existing || null);
+
+      // Persist selected style name to user config (survives restart)
+      import('../../cli/config-store.js').then(({ setConfigValue }) => {
+        try { setConfigValue('outputStyle', style); } catch { /* non-fatal */ }
+      }).catch(() => { /* non-fatal */ });
+    }).catch(() => {
+      // Loader unavailable — fallback to legacy behavior
+      const STYLE_PROMPTS: Record<string, string> = {
+        plain:
+          'IMPORTANT: Format ALL your responses as plain text. Do NOT use markdown, ' +
+          'code fences, headers, bold, italics, bullet lists, or any other markdown syntax. ' +
+          'Write in simple, clean prose.',
+        compact:
+          'IMPORTANT: Keep all responses concise and minimal. Avoid preamble, lengthy ' +
+          'explanations, or redundant headers. Prefer short bullet points over paragraphs. ' +
+          'Omit confirmations like "I will…" or "Sure, I can…".',
+        markdown: '',
+      };
+      const directive = STYLE_PROMPTS[style] ?? '';
+      const existing = (this._appendSystemPrompt ?? '')
+        .replace(/\nIMPORTANT: (?:Format ALL|Keep all responses concise)[^\n]*/g, '')
+        .trim();
+      this._appendSystemPrompt = directive
+        ? (existing ? `${existing}\n${directive}` : directive)
+        : (existing || null);
+    });
+  }
+
+  getOutputStyle(): string {
+    return this._outputStyle ?? 'markdown';
   }
 
   injectImagePrompt(

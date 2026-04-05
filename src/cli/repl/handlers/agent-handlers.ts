@@ -139,9 +139,23 @@ export async function handleContext(ctx: SlashContext): Promise<true> {
   const { shouldCompact } = await import('../../../core/context/context-compressor.js');
   const history = agent.getHistory();
   const decision = shouldCompact(history);
-  const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
+
+  // ── Token counting: usage-based local computation (claude-code parity) ──────
+  // Primary: reuse LLM response usage field + rough estimate for newer messages
+  //   → No network round-trip, instant, handles parallel tool call ID dedup
+  // Optional precise mode: pass --precise flag to force Anthropic API call
+  const { countTokens } = await import('../../../utils/token-counter.js');
+  const countResult = await countTokens(history);
+
+  const tokenCount = countResult.inputTokens;
+  const pct = ((tokenCount / decision.contextLength) * 100).toFixed(1);
+  const methodNote =
+    countResult.method === 'api' ? chalk.green(' (API exact)') :
+    countResult.method === 'usage+estimate' ? chalk.cyan(' (usage+estimate)') :
+    chalk.gray(' (estimated)');
+
   console.log(chalk.yellow('\n📊 Context Window Stats:'));
-  console.log(`  Estimated tokens : ${chalk.white(decision.estimatedTokens.toLocaleString())}`);
+  console.log(`  Input tokens     : ${chalk.white(tokenCount.toLocaleString())}${methodNote}`);
   console.log(`  Context limit    : ${chalk.white(decision.contextLength.toLocaleString())}`);
   console.log(`  Usage            : ${chalk.white(pct + '%')}`);
   console.log(`  Messages in ctx  : ${chalk.white(String(history.length))}`);

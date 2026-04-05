@@ -24,6 +24,24 @@ export interface Message {
   content: string | ContentBlock[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  /**
+   * LLM API usage data attached after each assistant response.
+   * Used by countTokensFromHistory() for precise token counting
+   * without an additional network round-trip.
+   * Mirrors claude-code's AssistantMessage.usage field.
+   */
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+  /**
+   * Unique message ID from the LLM API response.
+   * Used for parallel tool call sibling detection in token counting:
+   * parallel tool_use produces multiple assistant records sharing the same messageId.
+   */
+  messageId?: string;
 }
 
 /** Extract the plain-text portion of a message's content (for logging / display). */
@@ -87,6 +105,17 @@ export interface ChatOptions {
   stream?: boolean;
   /** Claude extended-thinking level (only applied for claude-* models) */
   thinkingLevel?: ThinkingLevel;
+  /**
+   * StreamingToolExecutor callback (claude-code parity).
+   * Called for each partial tool call JSON delta during streaming.
+   * Allows eager tool execution before the stream completes.
+   *
+   * @param index     Tool call index (0-based)
+   * @param toolName  Tool name (set on first chunk for each index)
+   * @param deltaArgs Partial JSON string for this chunk
+   * @param toolCallId  Optional ID from the LLM stream
+   */
+  onToolCallDelta?: (index: number, toolName: string, deltaArgs: string, toolCallId?: string) => void;
 }
 
 /**

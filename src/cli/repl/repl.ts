@@ -741,13 +741,12 @@ export async function runREPL(
     if (history.length >= 4) {
       (async () => {
         try {
-          const { getMemoryStore } = await import('../../core/memory/memory-store.js');
-          const store = getMemoryStore(process.cwd());
-          const result = await store.ingest(history);
-          if (result.added > 0) {
-            process.stdout.write(chalk.gray(`\n🌙 Dream Mode: +${result.added} insights saved to memory.\n`));
-          }
-        } catch (err) { process.stderr.write(`[repl] Memory ingest failed: ${String(err)}\n`); }
+          // Drain incremental ingest tasks (fired per-round in agent-loop.ts).
+          // Inspired by claude-code's drainPendingExtraction pattern:
+          // wait up to 5s for any in-flight extraction to finish before exit.
+          const { drainIngest } = await import('../../core/memory/memory-store.js');
+          await drainIngest(5000);
+        } catch (err) { process.stderr.write(`[repl] Memory drain failed: ${String(err)}\n`); }
       })().finally(() => {
         clearStatusBar();
         console.log(chalk.dim('\nGoodbye!'));

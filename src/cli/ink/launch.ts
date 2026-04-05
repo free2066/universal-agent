@@ -171,14 +171,12 @@ export async function runInkREPL(
           try { saveSnapshot(`session-${SESSION_ID}`, history); } catch { /* non-fatal */ }
         }).catch(() => {});
       }
-      // Dream mode on Ctrl+C too
+      // Drain incremental memory ingest on Ctrl+C — wait up to 60s for in-flight tasks
+      // Inspired by claude-code's drainPendingExtraction pattern.
+      // triggerIncrementalIngest() fires per round; here we just ensure tasks finish.
       if (history.length >= 4) {
-        import('../../core/memory/memory-store.js').then(({ getMemoryStore }) => {
-          getMemoryStore(process.cwd()).ingest(history).then((result: { added?: number }) => {
-            if (result && (result.added ?? 0) > 0) {
-              process.stdout.write(`\n🌙 Dream Mode: +${result.added ?? 0} insights saved to memory.\n`);
-            }
-          }).catch(() => {});
+        import('../../core/memory/memory-store.js').then(({ drainIngest }) => {
+          drainIngest(5000).catch(() => {}); // short timeout on Ctrl+C
         }).catch(() => {});
       }
       // Trigger notification on Ctrl+C (readline parity: rl.on('close') triggers notification)

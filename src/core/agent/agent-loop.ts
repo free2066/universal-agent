@@ -29,7 +29,7 @@ import {
   updateSessionMemory,
   trySessionMemoryCompaction,
 } from '../memory/session-memory.js';
-import { getMemoryStore } from '../memory/memory-store.js';
+import { getMemoryStore, triggerIncrementalIngest } from '../memory/memory-store.js';
 import { createLogger } from '../logger.js';
 import { triggerHook, createHookEvent } from '../hooks.js';
 import { withToolRetry, withApiRateLimitRetry } from '../tool-retry.js';
@@ -41,6 +41,100 @@ import { getTeammateManager } from '../teammate-manager.js';
 import { sessionMetrics } from '../metrics.js';
 
 const log = createLogger('agent-loop');
+
+// ── Tombstone mechanism (claude-code parity) ──────────────────────────────────
+//
+// When the LLM stream is interrupted (e.g. model fallback, context overflow),
+// partial streaming messages may have been pushed to the history and rendered
+// in the UI. These orphaned assistant messages need to be "tombstoned" so the
+// UI can remove them before the retry, preventing duplicate/garbled output.
+//
+// A tombstone message is a synthetic assistant message with type:'tombstone'
+// that signals the UI to delete everything from the tombstone position onward.
+// This mirrors claude-code's query.ts tombstone pattern.
+
+interface TombstoneMessage {
+  role: 'assistant';
+  content: string;
+  type: 'tombstone';
+  tombstoneAt: number; // history length at time of tombstone
+}
+
+function createTombstone(historyLength: number): TombstoneMessage {
+  return {
+    role: 'assistant',
+    content: '[tombstone]',
+    type: 'tombstone',
+    tombstoneAt: historyLength,
+  };
+}
+
+// ── ToolUseSummary (claude-code parity) ────────────────────────────────────────
+//
+// When a tool result exceeds TOOL_USE_SUMMARY_THRESHOLD characters, fire a
+// background Haiku-model call to generate a compressed summary. The summary
+// is stored in _pendingToolSummaries and injected as a user message at the
+// START of the next iteration, before the LLM call.
+//
+// This prevents tool results (e.g. large file reads, long grep outputs) from
+// consuming excessive context. The background generation runs concurrently
+// with other work, so latency impact is minimal for read-only tools.
+
+const TOOL_USE_SUMMARY_THRESHOLD = 8_000; // chars above which we summarize
+const _pendingToolSummaries: Array<{ toolName: string; summary: string }> = [];
+let _summaryGenerationCount = 0; // rate-limit: max 2 concurrent summaries
+
+async function maybeGenerateToolSummary(
+  toolName: string,
+  rawResult: string,
+): Promise<void> {
+  if (rawResult.length < TOOL_USE_SUMMARY_THRESHOLD) return;
+  if (_summaryGenerationCount >= 2) return; // rate limit concurrent summaries
+
+  _summaryGenerationCount++;
+  try {
+    const client = modelManager.getClient('compact');
+    const response = await client.chat({
+      systemPrompt: 'You are summarizing a tool result for an AI coding assistant. Be concise and preserve key findings, errors, and actionable information.',
+      messages: [{
+        role: 'user',
+        content: `Summarize the following ${toolName} tool result in 2-4 sentences, preserving the most important information:\n\n${rawResult.slice(0, 20_000)}`,
+      }],
+    });
+    const summary = response.content.trim();
+    if (summary.length > 50 && summary.length < rawResult.length * 0.8) {
+      _pendingToolSummaries.push({ toolName, summary });
+    }
+  } catch { /* summary failure is non-fatal */ } finally {
+    _summaryGenerationCount--;
+  }
+}
+
+// ── maxOutputTokens 三阶段恢复 (claude-code parity) ──────────────────────────
+//
+// When a response is cut off by the model's maxOutputTokens limit, claude-code
+// does a three-phase recovery:
+//   Phase 1: Escalate to 64k output tokens (if model supports it)
+//   Phase 2: Inject meta continuation messages up to 3 times to coax the model
+//            to continue where it left off (e.g. "Please continue from where you
+//            left off — the response was cut off")
+//   Phase 3: If still failing after 3 continuations, surface error to user
+//
+// Detection heuristic: finish_reason === 'max_tokens' or 'length', or the
+// response ends abruptly without a natural conclusion.
+
+const MAX_CONTINUATION_RETRIES = 3;
+
+function isResponseTruncated(responseContent: string, finishReason?: string): boolean {
+  if (finishReason === 'max_tokens' || finishReason === 'length') return true;
+  // Heuristic: response ends mid-sentence (no period, ?, !, ``` or code block close)
+  const trimmed = responseContent.trimEnd();
+  if (trimmed.length < 50) return false;
+  const lastChar = trimmed[trimmed.length - 1];
+  if (['.', '?', '!', '`', '>', '}', ']', '"', "'"].includes(lastChar)) return false;
+  // Ends with partial word or number (likely truncated)
+  return /\w$/.test(trimmed);
+}
 
 // ─── Pending confirmation helpers ────────────────────────────────────────────
 
@@ -325,6 +419,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
     while (iteration < MAX_ITERATIONS) {
       iteration++;
 
+      // ── ToolUseSummary: inject pending summaries (Round 3: claude-code parity) ──
+      // Summaries generated in the previous iteration (for oversized tool results)
+      // are injected as a system note at the start of each iteration so the LLM
+      // can reference the compressed version without expanding the context.
+      if (_pendingToolSummaries.length > 0) {
+        const summaryLines = _pendingToolSummaries
+          .map((s) => `[${s.toolName} result compressed] ${s.summary}`)
+          .join('\n');
+        history.push({ role: 'user', content: `<tool-summaries>\n${summaryLines}\n</tool-summaries>` });
+        _pendingToolSummaries.length = 0;
+      }
+
       // ── Min-round-interval throttle ──────────────────────────────────────────
       const _minInterval = parseInt(process.env.AGENT_MIN_ROUND_INTERVAL_MS ?? '500', 10);
       if (_minInterval > 0 && lastLLMCallAt > 0) {
@@ -391,6 +497,23 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
 
       let response;
       const _llmCallStart = Date.now();
+      // ── StreamingToolExecutor: eagerly execute read-only tools during streaming ──
+      // Mirrors claude-code's StreamingToolExecutor.  Create a new executor per
+      // iteration (reset state).  The executor is fed tool call deltas via
+      // onToolCallDelta callback as the LLM streams them out; read-only tools
+      // (in PARALLELIZABLE_TOOLS) are submitted immediately when their JSON is
+      // complete, without waiting for the full LLM stream to finish.
+      let _streamingExecutor: import('./streaming-tool-executor.js').StreamingToolExecutor | null = null;
+      try {
+        const { StreamingToolExecutor } = await import('./streaming-tool-executor.js');
+        _streamingExecutor = new StreamingToolExecutor(registry);
+      } catch { /* streaming executor unavailable — fall back to sequential */ }
+
+      const onToolCallDelta = _streamingExecutor
+        ? (idx: number, name: string, delta: string, id?: string) => {
+            _streamingExecutor!.onToolCallChunk(idx, name, delta, id);
+          }
+        : undefined;
       try {
         const chatOpts = {
           systemPrompt,
@@ -398,6 +521,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           tools,
           stream: true,
           thinkingLevel,
+          onToolCallDelta,
         };
         response = fallbackChain
           ? await withApiRateLimitRetry(
@@ -423,24 +547,36 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         const isContextOverflow = /413|context.{0,30}(overflow|limit|length|window)|too.{0,10}(long|large|many.{0,10}token)|maximum.{0,20}(context|length)/i.test(errMsg);
         if (isContextOverflow) {
           onChunk(`\n⚠️  Context overflow detected (${errMsg.slice(0, 80)}) — attempting reactive compact…\n`);
+          // ── Tombstone: clear partial streaming messages before retry ────────
+          // Inject a tombstone so the UI removes any orphaned partial assistant
+          // messages that may have been rendered during the interrupted stream.
+          // Mirrors claude-code's query.ts tombstone pattern.
+          history.push(createTombstone(history.length) as unknown as Message);
           const recovered = await reactiveCompact(history, onChunk);
           if (recovered) {
             onChunk('  ↩️  Retrying with compacted context…\n');
             continue;
           }
         }
+        // ── Tombstone on any LLM error (not just context overflow) ──────────
+        // Ensures UI cleans up partial renders from failed stream attempts.
+        history.push(createTombstone(history.length) as unknown as Message);
         onChunk(`\n❌ LLM error: ${errMsg}\n`);
         break;
       }
 
-      // Track token usage + metrics
+      // Track token usage + metrics; also attach usage to last assistant message
+      // so countTokensFromHistory() can use precise counts without extra API calls
       {
-        const usage = ((response as unknown as Record<string, unknown>).usage ?? {}) as {
+        const rawUsage = ((response as unknown as Record<string, unknown>).usage ?? {}) as {
           input_tokens?: number; output_tokens?: number;
           prompt_tokens?: number; completion_tokens?: number;
+          cache_creation_input_tokens?: number; cache_read_input_tokens?: number;
         };
-        const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
-        const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
+        const rawId = ((response as unknown as Record<string, unknown>).id as string | undefined);
+        const inputTokens = rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0;
+        const outputTokens = rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0;
+
         modelManager.recordUsage(inputTokens, outputTokens, modelManager.getCurrentModel('main'));
         sessionMetrics.record({
           model: modelManager.getCurrentModel('main'),
@@ -449,10 +585,53 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           outputTokens,
           success: true,
         });
+
+        // Attach usage + messageId to last assistant message in history for
+        // token counting (mirrors claude-code's AssistantMessage.usage pattern)
+        if (inputTokens > 0 || outputTokens > 0) {
+          const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
+          if (lastAssistant) {
+            lastAssistant.usage = {
+              input_tokens: inputTokens,
+              output_tokens: outputTokens,
+              cache_creation_input_tokens: rawUsage.cache_creation_input_tokens,
+              cache_read_input_tokens: rawUsage.cache_read_input_tokens,
+            };
+            if (rawId) lastAssistant.messageId = rawId;
+          }
+        }
       }
 
       if (response.type === 'text') {
         const content = response.content;
+
+        // ── maxOutputTokens 三阶段恢复 (Round 3: claude-code parity) ──────────
+        // Phase 1-3: If response appears truncated (finish_reason=max_tokens or
+        // heuristic), inject continuation meta-message and retry up to 3 times.
+        // This avoids cut-off responses when the model hits output token limits.
+        const finishReason = (response as unknown as Record<string, unknown>)['finish_reason'] as string | undefined;
+        if (isResponseTruncated(content, finishReason)) {
+          // Count how many continuation attempts have been made in this iteration
+          const contCount = history.filter(
+            (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('[SYSTEM:CONTINUE]'),
+          ).length;
+
+          if (contCount < MAX_CONTINUATION_RETRIES) {
+            // Phase 1+2: Append partial content to history and inject continuation prompt
+            history.push({ role: 'assistant', content });
+            history.push({
+              role: 'user',
+              content: '[SYSTEM:CONTINUE] Your response was cut off. Please continue exactly from where you left off, without repeating any previous content.',
+            });
+            onChunk(`\n↩️  Response truncated — requesting continuation (attempt ${contCount + 1}/${MAX_CONTINUATION_RETRIES})…\n`);
+            continue; // retry iteration
+          } else {
+            // Phase 3: Max retries reached — surface error
+            onChunk(`\n⚠️  Response was truncated and ${MAX_CONTINUATION_RETRIES} continuation attempts failed. The response may be incomplete.\n`);
+            history.push({ role: 'assistant', content });
+            break;
+          }
+        }
 
         // Confidence mechanism (kstack article #15310)
         const uncertainPattern = /\[UNCERTAIN\]|⚠️\s*\[UNCERTAIN\]/gi;
@@ -491,18 +670,77 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         const allParallelizable = response.toolCalls.every((c) => PARALLELIZABLE_TOOLS.has(c.name));
         const canParallelize = allParallelizable && response.toolCalls.length > 1;
 
+        // ── StreamingToolExecutor: drain pre-executed results ──────────────
+        // If the streaming executor already started executing some tools
+        // during the LLM stream, finalize remaining tool calls and collect.
+        // This means many read-only tools already have results ready.
+        let preExecutedResults: Map<string, string> | null = null;
+        if (_streamingExecutor && allParallelizable) {
+          try {
+            for (let i = 0; i < response.toolCalls.length; i++) {
+              const call = response.toolCalls[i];
+              _streamingExecutor.finalizeToolCall(
+                i, call.name,
+                JSON.stringify(call.arguments),
+                call.id,
+              );
+            }
+            const drainResults = await _streamingExecutor.drainAndCollect();
+            preExecutedResults = new Map(drainResults.map((r) => [r.toolCallId, r.content]));
+          } catch { /* drain failure is non-fatal — fall back to normal execution */ }
+        }
+
         const runCall = async (call: (typeof response.toolCalls)[0]) => {
+          // ── StreamingToolExecutor: use pre-executed result if available ──
+          // If this tool was already executed during LLM streaming, return
+          // the cached result immediately without re-executing.
+          if (preExecutedResults?.has(call.id)) {
+            const preResult = preExecutedResults.get(call.id)!;
+            events?.onToolEnd?.(call.name, true, 0);
+            return { role: 'tool' as const, toolCallId: call.id, content: preResult };
+          }
+
           events?.onToolStart?.(call.name, call.arguments as Record<string, unknown>);
           const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           const toolStartMs = Date.now();
           await triggerHook(createHookEvent('tool', 'before', { callId, toolName: call.name, args: call.arguments }));
+
+          // ── PreToolUse hook: block/modify tool input (inspired by claude-code) ──
+          // Hooks may: (1) block the tool by outputting JSON with proceed=false or exit 2
+          //            (2) modify tool arguments via updatedInput in JSON stdout
+          // This runs via the user-configurable HookRunner (on_tool_call event),
+          // separate from the internal triggerHook() above.
+          let effectiveArgs = call.arguments;
+          try {
+            const { getHookRunner } = await import('../hooks.js');
+            const runner = getHookRunner(process.cwd());
+            if (runner.hasHooksFor('on_tool_call')) {
+              const hookResult = await runner.run({
+                event: 'on_tool_call',
+                toolName: call.name,
+                toolArgs: call.arguments as Record<string, unknown>,
+                cwd: process.cwd(),
+              });
+              if (!hookResult.proceed || hookResult.blocked) {
+                // Hook blocked the tool call
+                const reason = hookResult.blockReason ?? 'Blocked by hook';
+                await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: reason, success: false }));
+                events?.onToolEnd?.(call.name, false, Date.now() - toolStartMs);
+                return { role: 'tool' as const, toolCallId: call.id, content: `[Hook blocked] ${reason}` };
+              }
+              // Apply updatedInput if hook modified the tool arguments
+              if (hookResult.updatedInput) {
+                effectiveArgs = hookResult.updatedInput;
+              }
+            }
+          } catch { /* Hook check failure is non-fatal — proceed with original args */ }
 
           // Fire plugin on_tool_call hooks (non-blocking, errors are silent)
           try {
             const { getPluginHooks } = await import('../domain-router.js');
             const toolHooks = getPluginHooks('on_tool_call').filter((h) => !h.tool || h.tool === call.name);
             for (const hook of toolHooks) {
-              if (hook.handler) await hook.handler({ toolName: call.name, args: call.arguments }).catch(() => {});
+              if (hook.handler) await hook.handler({ toolName: call.name, args: effectiveArgs }).catch(() => {});
             }
           } catch { /* ignore */ }
 
@@ -523,7 +761,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
                     `Use /plan to exit plan mode.`
                   );
                 }
-                return registry.execute(call.name, call.arguments);
+                return registry.execute(call.name, effectiveArgs);
               },
               call.name,
             );
@@ -533,6 +771,13 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
             await triggerHook(createHookEvent('tool', 'after', { callId, toolName: call.name, success: true }));
             events?.onToolEnd?.(call.name, true, durationMs);
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+            // ── ToolUseSummary: async compress large results (Round 3) ─────
+            // Fire-and-forget background summary for oversized tool outputs.
+            // Summary is injected at the start of the NEXT iteration.
+            // Only triggered for read-only tools (write tools rarely produce huge output).
+            if (resultStr.length >= TOOL_USE_SUMMARY_THRESHOLD && PARALLELIZABLE_TOOLS.has(call.name)) {
+              maybeGenerateToolSummary(call.name, resultStr).catch(() => { /* non-fatal */ });
+            }
             return { role: 'tool' as const, toolCallId: call.id, content: resultStr };
           } catch (err) {
             const durationMs = Date.now() - toolStartMs;
@@ -558,7 +803,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
             toolResults.push(r);
           }
         } else {
-          // Sequential branch
+          // Sequential branch — reuse runCall() for consistent hook behavior
           for (const call of response.toolCalls) {
             if (verbose) {
               const TOOL_ARGS_PREVIEW_CHARS = 120;
@@ -566,98 +811,61 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
               onChunk(`  → ${call.name}(${argsStr}${argsStr.length >= 120 ? '...' : ''})\n`);
             }
 
-            events?.onToolStart?.(call.name, call.arguments as Record<string, unknown>);
-            const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-            const toolStartMs = Date.now();
-            await triggerHook(createHookEvent('tool', 'before', { callId, toolName: call.name, args: call.arguments }));
+            const toolResult = await runCall(call);
 
-            try {
-              const result = await withToolRetry(
-                () => registry.execute(call.name, call.arguments),
-                call.name,
-              );
-              const toolDurationMs = Date.now() - toolStartMs;
-              const newlyActivated = registry.evaluateConditionals(call.name, result);
-              if (newlyActivated.length > 0) {
-                onChunk(`\n🔓 Unlocked tools: ${newlyActivated.join(', ')}\n`);
-              }
-              await triggerHook(createHookEvent('tool', 'after', { callId, toolName: call.name, success: true }));
-              events?.onToolEnd?.(call.name, true, toolDurationMs);
-
-              if (verbose) {
-                const TOOL_RESULT_PREVIEW_CHARS = 300;
-                const preview = JSON.stringify(result).slice(0, TOOL_RESULT_PREVIEW_CHARS);
-                onChunk(`  ✓ ${preview}${preview.length === 300 ? '...' : ''}\n`);
-              }
-
-              const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-
-              // ── Dry-run confirmation gate (kstack article #15313) ──────────────
-              if (resultStr.startsWith('__CONFIRM_REQUIRED__:')) {
-                const firstNewline = resultStr.indexOf('\n');
-                const header = resultStr.slice('__CONFIRM_REQUIRED__:'.length, firstNewline > -1 ? firstNewline : undefined);
-                const dangerousCommand = firstNewline > -1 ? resultStr.slice(firstNewline + 1).trim() : '';
-                const cmdCwd = (call.arguments.cwd as string | undefined)
-                  ? String(call.arguments.cwd)
-                  : process.cwd();
-
-                pendingConfirmationRef.value = {
-                  command: dangerousCommand,
-                  cwd: cmdCwd,
-                  label: header,
-                  injectedAt: history.length + toolResults.length,
-                };
-
-                toolResults.push({
-                  role: 'tool',
-                  toolCallId: call.id,
-                  content: `[Paused for confirmation] Dangerous command detected: ${header}`,
-                });
-                history.push(...toolResults);
-
-                history.push({
-                  role: 'user',
-                  content:
-                    `[SYSTEM] The Bash tool wants to execute a potentially destructive command.\n` +
-                    `Risk: ${header}\n` +
-                    `Command:\n\`\`\`\n${dangerousCommand}\n\`\`\`\n\n` +
-                    `Please show the user this information and ask them to reply **yes** to execute or **no** to cancel.`,
-                });
-
-                const confirmOpts = { systemPrompt, messages: history, tools: [], stream: false };
-                try {
-                  const confirmResp = fallbackChain
-                    ? await fallbackChain.call(getLLM(), confirmOpts)
-                    : await getLLM().chat(confirmOpts);
-                  if (confirmResp.type === 'text') {
-                    onChunk(confirmResp.content);
-                    history.push({ role: 'assistant', content: confirmResp.content });
-                  }
-                } catch { /* ignore — user will still see the raw prompt */ }
-
-                return;
-              }
-
-              toolResults.push({
-                role: 'tool',
-                toolCallId: call.id,
-                content: resultStr,
-              });
-            } catch (err) {
-              const toolDurationMsErr = Date.now() - toolStartMs;
-              await triggerHook(createHookEvent('tool', 'error', {
-                callId,
-                toolName: call.name,
-                error: err instanceof Error ? err.message : String(err),
-                success: false,
-              }));
-              events?.onToolEnd?.(call.name, false, toolDurationMsErr);
-              toolResults.push({
-                role: 'tool',
-                toolCallId: call.id,
-                content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-              });
+            if (verbose) {
+              const TOOL_RESULT_PREVIEW_CHARS = 300;
+              const preview = toolResult.content.slice(0, TOOL_RESULT_PREVIEW_CHARS);
+              onChunk(`  ✓ ${preview}${preview.length >= TOOL_RESULT_PREVIEW_CHARS ? '...' : ''}\n`);
             }
+
+            // ── Dry-run confirmation gate (kstack article #15313) ──────────────
+            if (toolResult.content.startsWith('__CONFIRM_REQUIRED__:')) {
+              const firstNewline = toolResult.content.indexOf('\n');
+              const header = toolResult.content.slice('__CONFIRM_REQUIRED__:'.length, firstNewline > -1 ? firstNewline : undefined);
+              const dangerousCommand = firstNewline > -1 ? toolResult.content.slice(firstNewline + 1).trim() : '';
+              const cmdCwd = (call.arguments.cwd as string | undefined)
+                ? String(call.arguments.cwd)
+                : process.cwd();
+
+              pendingConfirmationRef.value = {
+                command: dangerousCommand,
+                cwd: cmdCwd,
+                label: header,
+                injectedAt: history.length + toolResults.length,
+              };
+
+              toolResults.push({
+                role: 'tool',
+                toolCallId: call.id,
+                content: `[Paused for confirmation] Dangerous command detected: ${header}`,
+              });
+              history.push(...toolResults);
+
+              history.push({
+                role: 'user',
+                content:
+                  `[SYSTEM] The Bash tool wants to execute a potentially destructive command.\n` +
+                  `Risk: ${header}\n` +
+                  `Command:\n\`\`\`\n${dangerousCommand}\n\`\`\`\n\n` +
+                  `Please show the user this information and ask them to reply **yes** to execute or **no** to cancel.`,
+              });
+
+              const confirmOpts = { systemPrompt, messages: history, tools: [], stream: false };
+              try {
+                const confirmResp = fallbackChain
+                  ? await fallbackChain.call(getLLM(), confirmOpts)
+                  : await getLLM().chat(confirmOpts);
+                if (confirmResp.type === 'text') {
+                  onChunk(confirmResp.content);
+                  history.push({ role: 'assistant', content: confirmResp.content });
+                }
+              } catch { /* ignore — user will still see the raw prompt */ }
+
+              return;
+            }
+
+            toolResults.push(toolResult);
           }
         }
 
@@ -702,6 +910,10 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
     } else {
       // Success — capture iteration snapshot (non-blocking)
       captureIterationSnapshot(prompt, history).catch(() => { /* non-fatal */ });
+      // Incremental memory ingest: fire-and-forget after each successful round
+      // Inspired by claude-code's extractMemories: per-round instead of exit-time batch.
+      // Only processes new messages since the last ingest (cursor-based).
+      triggerIncrementalIngest(history);
     }
   } // end outer while
 

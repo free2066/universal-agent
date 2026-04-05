@@ -31,10 +31,12 @@ const SLASH_COMPLETIONS = [
   '/image', '/history', '/hooks', '/insights', '/init', '/rules', '/memory',
   '/mcp', '/log', '/logs',
   '/context', '/status', '/copy', '/export',
+  '/search',
   '/branch', '/rename', '/add-dir',
   '/terminal-setup', '/bug', '/doctor', '/output-style',
   '/skills', '/plugin', '/logout',
   '/metrics', '/plugins',
+  '/thinkback',
 ];
 
 export interface AppProps {
@@ -170,6 +172,14 @@ export function App({
   const [historyQuery, setHistoryQuery] = useState('');
   const historySearchIdxRef = useRef(-1);
   const [historySearchMatch, setHistorySearchMatch] = useState<string | null>(null);
+
+  // ── Ctrl+F global session search state (Batch 3) ─────────────────────────
+  const [globalSearchVisible, setGlobalSearchVisible] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [globalSearchResults, setGlobalSearchResults] = useState<Array<{
+    sessionId: string; savedAt: number; role: string; snippet: string; messageIndex: number;
+  }>>([]);
+  const [globalSearchIdx, setGlobalSearchIdx] = useState(0);
 
   // Shared helper: resolve search match
   const findHistoryMatch = useCallback((query: string, fromIdx: number, history: string[]): { match: string | null; idx: number } => {
@@ -618,7 +628,8 @@ export function App({
         title: 'Rewind to snapshot  (↑↓ navigate · Enter restore · Esc cancel)',
         items: snaps.map((s) => ({
           id: s.sessionId,
-          label: s.sessionId.slice(0, 28),
+          // displayTitle: customTitle (user) wins over aiTitle (AI), fallback to sessionId
+          label: s.displayTitle ?? s.sessionId.slice(0, 28),
           detail: `${fmtAge(s.savedAt)}  ${s.messageCount} msgs`,
         })),
         onSelect: (item) => {
@@ -688,7 +699,8 @@ export function App({
           title: 'Resume session  (↑↓ navigate · Enter select · Esc cancel)',
           items: snaps.map((s) => ({
             id: s.sessionId,
-            label: s.sessionId.slice(0, 28),
+            // displayTitle: customTitle (user) wins over aiTitle (AI), fallback to sessionId
+            label: s.displayTitle ?? s.sessionId.slice(0, 28),
             detail: `${fmtAge(s.savedAt)}  ${s.messageCount} msgs`,
           })),
           onSelect: (item) => doRestore(item.id),
@@ -828,6 +840,35 @@ export function App({
       return;
     }
 
+    // ── /search [query] (Batch 3: global session history search) ─────────────
+    if (cmd.startsWith('/search')) {
+      const query = cmd.replace('/search', '').trim();
+      if (!query) {
+        // No query: open interactive Ctrl+F search panel
+        setGlobalSearchVisible(true);
+        setGlobalSearchQuery('');
+        setGlobalSearchResults([]);
+        setGlobalSearchIdx(0);
+        appendSystem('Ctrl+F search opened. Type to search all session history. Enter=resume Esc=close');
+        return;
+      }
+      const { searchSnapshots, formatAge } = await import('../../core/memory/session-snapshot.js');
+      const results = searchSnapshots(query, 10);
+      if (!results.length) {
+        appendSystem(`No sessions found matching "${query}"`);
+        return;
+      }
+      const lines = [`Search results for "${query}" (${results.length} found):`, ''];
+      for (const r of results) {
+        lines.push(`  [${r.role}]  ${r.snippet.slice(0, 100)}${r.snippet.length > 100 ? '…' : ''}`);
+        lines.push(`          Session: ${r.sessionId}  (${formatAge(r.savedAt)})`);
+        lines.push('');
+      }
+      lines.push('  Tip: /resume <sessionId> to restore a session  |  Ctrl+F for interactive search');
+      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
+      return;
+    }
+
     // ── /tasks ───────────────────────────────────────────────────────────────
     if (cmd === '/tasks') {
       const { getTaskBoard } = await import('../../core/task-board.js');
@@ -951,6 +992,37 @@ export function App({
       return;
     }
 
+    // ── /mcp auth <server> ───────────────────────────────────────────────────
+    if (cmd.startsWith('/mcp auth')) {
+      const srvName = cmd.replace('/mcp auth', '').trim();
+      if (!srvName) {
+        appendSystem('Usage: /mcp auth <server-name>');
+        return;
+      }
+      appendSystem(`Starting OAuth flow for MCP server "${srvName}"...`);
+      try {
+        const { MCPManager } = await import('../../core/mcp-manager.js');
+        const { getMcpAuth } = await import('../../core/mcp-auth.js');
+        const mgr = new MCPManager(process.cwd());
+        const serverList = mgr.listServers();
+        const srv = serverList.find((s) => s.name === srvName);
+        if (!srv) {
+          appendSystem(`MCP server "${srvName}" not found in config.`);
+          return;
+        }
+        if (!(srv as { oauth?: unknown }).oauth) {
+          appendSystem(`Server "${srvName}" has no oauth config. Add oauth.authorizationUrl/tokenUrl/clientId to .mcp.json.`);
+          return;
+        }
+        const auth = getMcpAuth(srvName);
+        const token = await auth.authorize((srv as { oauth: Parameters<typeof auth.authorize>[0] }).oauth);
+        appendSystem(`OAuth success for "${srvName}". Token valid for ${Math.floor((token.expiresAt - Date.now()) / 60000)} minutes.`);
+      } catch (e) {
+        appendSystem(`OAuth error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return;
+    }
+
     // ── /mcp ─────────────────────────────────────────────────────────────────
     if (cmd === '/mcp') {
       const { servers, tools } = agent.getMcpInfo();
@@ -963,7 +1035,15 @@ export function App({
           const detail = s.type === 'stdio'
             ? `${s.command ?? ''} ${(s.args ?? []).join(' ')}`.trim()
             : s.url ?? '';
-          lines.push(`  [${status}] ${s.name.padEnd(20)} [${s.type ?? 'stdio'}]  ${detail}`);
+          // Show OAuth auth status for servers that have oauth config (Batch 3)
+          let oauthStr = '';
+          if ((s as { oauth?: unknown }).oauth) {
+            try {
+              const { getMcpAuth } = await import('../../core/mcp-auth.js');
+              oauthStr = `  [oauth: ${getMcpAuth(s.name).status()}]`;
+            } catch { oauthStr = '  [oauth: unavailable]'; }
+          }
+          lines.push(`  [${status}] ${s.name.padEnd(20)} [${s.type ?? 'stdio'}]  ${detail}${oauthStr}`);
         }
         if (tools.length > 0) {
           lines.push('', 'Active MCP tools:', '');
@@ -1544,7 +1624,7 @@ export function App({
       return;
     }
 
-    // ── /output-style [style] ─────────────────────────────────────────────────
+    // ── /output-style [style] (Batch 3 enhanced: injects into system prompt) ──
     if (cmd.startsWith('/output-style')) {
       const style = cmd.replace('/output-style', '').trim();
       const OUTPUT_STYLES = [
@@ -1554,12 +1634,14 @@ export function App({
       ];
       if (!style) {
         // No arg: show interactive picker
+        const current = (agent as unknown as { getOutputStyle?: () => string }).getOutputStyle?.() ?? 'markdown';
         setGenericPicker({
-          title: 'Select Output Style',
+          title: `Select Output Style  (current: ${current})`,
           items: OUTPUT_STYLES,
           onSelect: (item) => {
-            agent.injectContext(`[Output style changed to: ${item.id}]\nFrom now on, format all responses as ${item.id}.`);
-            appendSystem(`Output style → ${item.id}`);
+            // Batch 3: persist style into system prompt via setOutputStyle
+            (agent as unknown as { setOutputStyle?: (s: string) => void }).setOutputStyle?.(item.id);
+            appendSystem(`Output style → ${item.id} (injected into system prompt)`);
           },
         });
         setGenericPickerIdx(0);
@@ -1570,8 +1652,9 @@ export function App({
         appendSystem(`Unknown style "${style}". Choose: ${validStyles.join(', ')}`);
         return;
       }
-      agent.injectContext(`[Output style changed to: ${style}]\nFrom now on, format all responses as ${style}.`);
-      appendSystem(`Output style → ${style}`);
+      // Batch 3: inject as persistent system prompt directive, not just context message
+      (agent as unknown as { setOutputStyle?: (s: string) => void }).setOutputStyle?.(style);
+      appendSystem(`Output style → ${style} (injected into system prompt)`);
       return;
     }
 
@@ -1661,6 +1744,47 @@ export function App({
     // ── /cost — now handled by /usage above (Batch 2 merged) ────────────────
     // kept as stub for safety; actual logic is in /usage block above
 
+    // ── /thinkback (Batch 3: self-criticism / reflection mode) ───────────────
+    if (cmd.startsWith('/thinkback')) {
+      const history = agent.getHistory();
+      // Find last assistant response
+      const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
+      if (!lastAssistant) {
+        appendSystem('No previous AI response to reflect on.');
+        return;
+      }
+      const prevContent = typeof lastAssistant.content === 'string'
+        ? lastAssistant.content.slice(0, 2000)
+        : '[previous response]';
+      // Optional focus hint from command argument
+      const focusHint = cmd.replace('/thinkback', '').trim();
+      const focusStr = focusHint
+        ? `Pay special attention to: ${focusHint}`
+        : 'Consider accuracy, completeness, correctness, and missed edge cases.';
+      const thinkbackPrompt = [
+        '**Self-Reflection Request**',
+        '',
+        'Please critically review your previous response:',
+        '',
+        '```',
+        prevContent,
+        '```',
+        '',
+        `${focusStr}`,
+        '',
+        'In your reflection:',
+        '1. Identify any errors, incorrect assumptions, or misleading statements',
+        '2. Note gaps or missing information that would have been helpful',
+        '3. Point out anything that could be clearer or better structured',
+        '4. Provide a corrected/improved version if significant issues were found',
+        '5. If the response was correct and complete, briefly confirm why',
+        '',
+        'Be concise and specific.',
+      ].join('\n');
+      void handleSubmit(thinkbackPrompt);
+      return;
+    }
+
     // ── /help ────────────────────────────────────────────────────────────────
     if (cmd === '/help') {
       setInfoOverlay([
@@ -1707,7 +1831,9 @@ export function App({
         '    /tasks           task board (with worktree bindings)',
         '    /worktrees       worktree ↔ task sync table (Batch 2)',
         '    /diff [ref]      git diff stats — staged, HEAD, or vs <ref> (Batch 2)',
-        '    /mcp             MCP servers',
+        '    /mcp             MCP servers (+ OAuth status for oauth-configured servers)',
+        '    /mcp auth <srv>  trigger OAuth flow for a server (Batch 3)',
+        '    /search [query]  search all session history (Batch 3) — Ctrl+F for interactive',
         '    /team            active teammates',
         '    /inbox           lead inbox',
         '    /skills          custom slash commands',
@@ -1724,6 +1850,7 @@ export function App({
         '    /spec:brainstorm <topic>  brainstorm ideas',
         '    /spec:write-plan [topic]  generate implementation plan',
         '    /spec:execute-plan        execute last plan',
+        '    /thinkback [focus]        self-criticism — AI reflects on its last response (Batch 3)',
         '    /init            create .uagent/AGENTS.md',
         '    /rules           show loaded rules',
         '',
@@ -2437,7 +2564,81 @@ export function App({
       }
       return;
     }
-  });
+
+    // ── Ctrl+F: global session search (Batch 3) ──────────────────────────
+    if (key.ctrl && input === 'f') {
+      if (globalSearchVisible) {
+        setGlobalSearchVisible(false);
+        setGlobalSearchQuery('');
+        setGlobalSearchResults([]);
+      } else {
+        setGlobalSearchVisible(true);
+        setGlobalSearchQuery('');
+        setGlobalSearchResults([]);
+        setGlobalSearchIdx(0);
+      }
+      return;
+    }
+
+    // ── Navigate global search results (when visible) ────────────────────
+    if (globalSearchVisible) {
+      if (key.escape) {
+        setGlobalSearchVisible(false);
+        setGlobalSearchQuery('');
+        setGlobalSearchResults([]);
+        return;
+      }
+      if (key.upArrow) {
+        setGlobalSearchIdx((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setGlobalSearchIdx((i) => Math.min(globalSearchResults.length - 1, i + 1));
+        return;
+      }
+      if (key.return && globalSearchResults.length > 0) {
+        const sel = globalSearchResults[globalSearchIdx];
+        if (sel) {
+          // Resume the selected session
+          void handleSlashCommand(`/resume ${sel.sessionId}`);
+          setGlobalSearchVisible(false);
+          setGlobalSearchQuery('');
+          setGlobalSearchResults([]);
+        }
+        return;
+      }
+      // Typing: update query and search
+      if (!key.ctrl && !key.meta && input) {
+        if (input === '\x7f' || input === '\b') {
+          // Backspace
+          const newQ = globalSearchQuery.slice(0, -1);
+          setGlobalSearchQuery(newQ);
+          if (newQ.trim().length >= 2) {
+            import('../../core/memory/session-snapshot.js').then(({ searchSnapshots }) => {
+              setGlobalSearchResults(searchSnapshots(newQ, 15));
+              setGlobalSearchIdx(0);
+            }).catch(() => {});
+          } else {
+            setGlobalSearchResults([]);
+          }
+        } else {
+          const newQ = globalSearchQuery + input;
+          setGlobalSearchQuery(newQ);
+          if (newQ.trim().length >= 2) {
+            import('../../core/memory/session-snapshot.js').then(({ searchSnapshots }) => {
+              setGlobalSearchResults(searchSnapshots(newQ, 15));
+              setGlobalSearchIdx(0);
+            }).catch(() => {});
+          } else {
+            setGlobalSearchResults([]);
+          }
+        }
+        return;
+      }
+      return; // absorb other keys when search is open
+    }
+
+  }); // end useInput
 
   // ── Sync verbose state to agent ──────────────────────────────────────────
   useEffect(() => {
@@ -2546,6 +2747,41 @@ export function App({
             : <Text color="gray" dimColor>{historyQuery ? 'no match' : '_'}</Text>
           }
           <Text color="gray" dimColor>  [Enter=accept  Esc/Ctrl+C=cancel  Ctrl+R=next]</Text>
+        </Box>
+      )}
+
+      {/* Ctrl+F global session history search overlay (Batch 3) */}
+      {globalSearchVisible && (
+        <Box flexDirection="column" paddingLeft={2} paddingBottom={1} borderStyle="single" borderColor="blue">
+          <Box flexDirection="row" gap={1}>
+            <Text color="blue" bold>🔍 Session Search</Text>
+            <Text color="gray" dimColor>  Ctrl+F=close  ↑↓=navigate  Enter=resume  Esc=close</Text>
+          </Box>
+          <Box flexDirection="row" gap={1}>
+            <Text color="gray" dimColor>Query: </Text>
+            <Text color="white">{globalSearchQuery || '_'}</Text>
+            {globalSearchQuery.trim().length < 2 && (
+              <Text color="gray" dimColor>  (type 2+ chars)</Text>
+            )}
+          </Box>
+          {globalSearchResults.length > 0 && (
+            <Box flexDirection="column">
+              {globalSearchResults.slice(0, 8).map((r, idx) => {
+                const isSel = idx === globalSearchIdx;
+                return (
+                  <Box key={`${r.sessionId}-${r.messageIndex}`} flexDirection="row" gap={1}>
+                    <Text color={isSel ? 'blue' : 'gray'}>{isSel ? '▶' : ' '}</Text>
+                    <Text color={isSel ? 'white' : 'gray'} bold={isSel}>[{r.role}]</Text>
+                    <Text color={isSel ? 'white' : 'gray'} dimColor={!isSel}>{r.snippet.slice(0, 70)}</Text>
+                    <Text color="gray" dimColor>  ({r.sessionId.slice(-8)})</Text>
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+          {globalSearchQuery.trim().length >= 2 && globalSearchResults.length === 0 && (
+            <Text color="gray" dimColor>  No matches found</Text>
+          )}
         </Box>
       )}
 

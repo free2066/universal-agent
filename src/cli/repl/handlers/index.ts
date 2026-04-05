@@ -44,6 +44,7 @@ import {
   handleSkills, handlePlugin, handleLogout, handleHooks, handleInsights,
   handleImage, handleAddDir, handleTerminalSetup, handleOutputStyle, handleCost,
   handleDomainPlugins, handleMetrics,
+  handleSearch, handleThinkback,
 } from './tool-handlers.js';
 
 /**
@@ -105,6 +106,8 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
   if (input === '/cost') return handleCost(ctx);
   if (input === '/metrics') return handleMetrics(ctx);
   if (input === '/plugins') return handleDomainPlugins(ctx);
+  if (input.startsWith('/search')) return handleSearch(input, ctx);
+  if (input.startsWith('/thinkback')) return handleThinkback(input, ctx);
 
   // ── Plugin-contributed slash commands ─────────────────────────────────────
   if (input.startsWith('/')) {

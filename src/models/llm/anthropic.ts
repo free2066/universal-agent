@@ -116,6 +116,14 @@ export class AnthropicClient implements LLMClient {
             const partialJson = (event.delta as { type: string; partial_json?: string }).partial_json ?? '';
             if (currentToolUseIdx >= 0 && toolUseBlocks[currentToolUseIdx]) {
               toolUseBlocks[currentToolUseIdx]!.inputJson += partialJson;
+              // ── StreamingToolExecutor: eager tool call notification ──────
+              // Notify the caller so it can start executing read-only tools
+              // as soon as their argument JSON is complete, without waiting
+              // for the whole LLM stream to finish.
+              if (options.onToolCallDelta) {
+                const tb = toolUseBlocks[currentToolUseIdx]!;
+                options.onToolCallDelta(currentToolUseIdx, tb.name, partialJson, tb.id);
+              }
             }
           }
         } else if (event.type === 'content_block_stop') {

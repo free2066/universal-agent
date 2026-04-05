@@ -17,13 +17,21 @@ function timeoutSignal(ms: number): AbortSignal {
 
 export interface MCPServer {
   name: string;
-  type: 'stdio' | 'sse' | 'http';
+  type: 'stdio' | 'sse' | 'http' | 'ws';
   url?: string;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
   enabled: boolean;
   description?: string;  // human-readable note stored in config
+  /** OAuth config for servers that require authentication (Batch 3) */
+  oauth?: {
+    authorizationUrl: string;
+    tokenUrl: string;
+    clientId: string;
+    clientSecret?: string;
+    scopes?: string[];
+  };
 }
 
 export interface MCPConfig {
@@ -270,19 +278,34 @@ export class MCPManager {
     if (!server.url) throw new Error(`SSE server "${server.name}" missing URL`);
     const baseUrl = server.url.replace(/\/sse$/, '');
     const timeout = parseInt(process.env.MCP_CONNECTION_TIMEOUT_MS || '5000');
+
+    // Build auth headers — OAuth Bearer token if configured (Batch 3)
+    const authHeaders: Record<string, string> = { Accept: 'application/json' };
+    if (server.oauth) {
+      try {
+        const { getMcpAuth } = await import('./mcp-auth.js');
+        const auth = getMcpAuth(server.name);
+        const token = await auth.getToken(server.oauth);
+        authHeaders['Authorization'] = `Bearer ${token.access_token}`;
+      } catch (err) {
+        process.stderr.write(`[MCP OAuth] ${server.name}: auth failed — ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+    }
+
     const res = await fetch(`${baseUrl}/tools`, {
       signal: timeoutSignal(timeout),
-      headers: { Accept: 'application/json' },
+      headers: authHeaders,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status} from ${baseUrl}/tools`);
     const data = await res.json() as { tools?: Array<{ name: string; description: string; inputSchema?: unknown }> };
-    return (data.tools || []).map((t) => this.wrapSSETool(t, baseUrl, server.name));
+    return (data.tools || []).map((t) => this.wrapSSETool(t, baseUrl, server.name, authHeaders));
   }
 
   private wrapSSETool(
     mcpTool: { name: string; description: string; inputSchema?: unknown },
     baseUrl: string,
     serverName: string,
+    authHeaders: Record<string, string> = {},
   ): ToolRegistration {
     const toolDef: ToolDefinition = {
       name: `mcp_${serverName}_${mcpTool.name}`,
@@ -295,7 +318,7 @@ export class MCPManager {
         const timeout = parseInt(process.env.MCP_TOOL_TIMEOUT || '30000');
         const res = await fetch(`${baseUrl}/tools/${mcpTool.name}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify({ arguments: args }),
           signal: timeoutSignal(timeout),
         });
@@ -306,7 +329,116 @@ export class MCPManager {
     };
   }
 
-  // ── stdio server (JSON-RPC 2.0) ──────────────────────────────────────────────
+  // ── WebSocket server (Batch 3) — JSON-RPC 2.0 over WebSocket ─────────────────
+
+  private async connectWSServer(server: MCPServer): Promise<ToolRegistration[]> {
+    if (!server.url) throw new Error(`WS server "${server.name}" missing URL`);
+    const timeout = parseInt(process.env.MCP_CONNECTION_TIMEOUT_MS || '10000');
+
+    // Build optional auth header for ws upgrade
+    let authToken: string | undefined;
+    if (server.oauth) {
+      try {
+        const { getMcpAuth } = await import('./mcp-auth.js');
+        const auth = getMcpAuth(server.name);
+        const token = await auth.getToken(server.oauth);
+        authToken = token.access_token;
+      } catch (err) {
+        process.stderr.write(`[MCP OAuth] ${server.name}: auth failed — ${err instanceof Error ? err.message : String(err)}\n`);
+      }
+    }
+
+    // Use the ws package if available, otherwise fall back to a simple HTTP-based
+    // mock so we don't add a hard dependency. In production, users install 'ws'.
+    let ws: import('ws').WebSocket;
+    try {
+      const WS = (await import('ws')).default;
+      const headers: Record<string, string> = {};
+      if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+      ws = new WS(server.url, { headers });
+    } catch {
+      throw new Error(
+        `WS transport requires the 'ws' package: npm install ws. ` +
+        `Server "${server.name}" (${server.url}) could not connect.`,
+      );
+    }
+
+    // Wait for connection
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.terminate();
+        reject(new Error(`WS connection timeout for "${server.name}"`));
+      }, timeout);
+      ws.once('open', () => { clearTimeout(timer); resolve(); });
+      ws.once('error', (err: Error) => { clearTimeout(timer); reject(err); });
+    });
+
+    // JSON-RPC helper
+    let _reqId = 1;
+    const pending = new Map<number, (r: { result?: unknown; error?: { message: string } }) => void>();
+    ws.on('message', (raw: Buffer | string) => {
+      try {
+        const msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf-8')) as {
+          id?: number; result?: unknown; error?: { message: string };
+        };
+        if (msg.id !== undefined) {
+          pending.get(msg.id)?.(msg);
+          pending.delete(msg.id);
+        }
+      } catch { /* ignore parse errors */ }
+    });
+
+    const rpc = (method: string, params: unknown): Promise<unknown> => {
+      const id = _reqId++;
+      const toolTimeout = parseInt(process.env.MCP_TOOL_TIMEOUT || '30000');
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`WS RPC timeout: ${method}`));
+        }, toolTimeout);
+        pending.set(id, (r) => {
+          clearTimeout(timer);
+          if (r.error) reject(new Error(r.error.message));
+          else resolve(r.result);
+        });
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+      });
+    };
+
+    // Initialize
+    await rpc('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: { tools: {} },
+      clientInfo: { name: 'universal-agent', version: '1.0' },
+    });
+
+    // Discover tools
+    const toolsResult = await rpc('tools/list', {}) as { tools?: Array<{ name: string; description?: string; inputSchema?: unknown }> };
+    const toolDefs = toolsResult.tools ?? [];
+
+    // Store WS in stdioClients map (abuse of field — it's just for cleanup)
+    // We register a synthetic client that stops the WS
+    this.stdioClients.set(server.name, {
+      stop: () => { try { ws.close(); } catch { /* ignore */ } },
+    } as unknown as StdioMCPClient);
+
+    return toolDefs.map((t) => {
+      const toolDef: ToolDefinition = {
+        name: `mcp_${server.name}_${t.name}`,
+        description: `[MCP:${server.name}] ${t.description ?? t.name}`,
+        parameters: (t.inputSchema as ToolDefinition['parameters']) ?? { type: 'object', properties: {} },
+      };
+      return {
+        definition: toolDef,
+        handler: async (args: Record<string, unknown>): Promise<string> => {
+          const result = await rpc('tools/call', { name: t.name, arguments: args });
+          const r = result as { content?: Array<{ type?: string; text?: string }> } | string;
+          if (typeof r === 'string') return r;
+          return (r.content ?? []).map((c) => c.text ?? '').join('\n');
+        },
+      };
+    });
+  }
 
   private async connectStdioServer(server: MCPServer): Promise<ToolRegistration[]> {
     const client = new StdioMCPClient(server);

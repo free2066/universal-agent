@@ -6,7 +6,7 @@
  */
 import chalk from 'chalk';
 import type { SlashContext } from './shared.js';
-import { done } from './shared.js';
+import { done, streamWithPause } from './shared.js';
 import { codeInspectorTool } from '../../../core/tools/code/code-inspector.js';
 import { selfHealTool } from '../../../core/tools/code/self-heal.js';
 import { modelManager } from '../../../models/model-manager.js';
@@ -381,16 +381,18 @@ export async function handleOutputStyle(input: string, ctx: SlashContext): Promi
   if (!style) {
     console.log(chalk.yellow('\n🎨 Output Styles:\n'));
     validStyles.forEach((s) => console.log(`  • ${chalk.white(s)}`));
+    const current = (agent as unknown as { getOutputStyle?: () => string }).getOutputStyle?.() ?? 'markdown';
+    console.log(chalk.gray(`\n  Currently: ${current}`));
     console.log(chalk.gray('\n  Usage: /output-style <style>\n'));
-    console.log(chalk.gray('  Currently: markdown (default — all output rendered as markdown)\n'));
     return done(rl);
   }
   if (!validStyles.includes(style)) {
     console.log(chalk.red(`\n✗ Unknown style "${style}". Choose: ${validStyles.join(', ')}\n`));
     return done(rl);
   }
-  agent.injectContext(`[Output style changed to: ${style}]\nFrom now on, format all responses as ${style}.`);
-  console.log(chalk.green(`\n✓ Output style → ${style}\n`));
+  // Batch 3: persist as system prompt directive
+  (agent as unknown as { setOutputStyle?: (s: string) => void }).setOutputStyle?.(style);
+  console.log(chalk.green(`\n✓ Output style → ${style} (injected into system prompt)\n`));
   return done(rl);
 }
 
@@ -475,5 +477,78 @@ export async function handleDomainPlugins(ctx: SlashContext): Promise<true> {
   console.log(chalk.gray('      hooks: [{ event: "pre_prompt", description: "...", handler: async (payload) => { return undefined; } }],'));
   console.log(chalk.gray('    };'));
   console.log(chalk.gray('    // Save to .uagent/plugins/<name>.js and restart uagent\n'));
+  return done(rl);
+}
+
+// ── /search [query] (Batch 3) ─────────────────────────────────────────────────
+
+export async function handleSearch(input: string, ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  const query = input.replace('/search', '').trim();
+  if (!query) {
+    console.log(chalk.yellow('\n🔍 Session History Search\n'));
+    console.log(chalk.gray('  Usage: /search <query>'));
+    console.log(chalk.gray('  Searches all saved session snapshots for matching messages.\n'));
+    return done(rl);
+  }
+  const { searchSnapshots, formatAge } = await import('../../../core/memory/session-snapshot.js');
+  const results = searchSnapshots(query, 10);
+  if (!results.length) {
+    console.log(chalk.gray(`\n  No sessions found matching "${query}"\n`));
+    return done(rl);
+  }
+  console.log(chalk.yellow(`\n🔍 Search results for "${query}" (${results.length} found):\n`));
+  for (const r of results) {
+    console.log(`  ${chalk.gray('[' + r.role + ']')}  ${r.snippet.slice(0, 90)}${r.snippet.length > 90 ? '…' : ''}`);
+    console.log(`  ${chalk.gray('Session:')} ${r.sessionId}  ${chalk.gray('(' + formatAge(r.savedAt) + ')')}`);
+    console.log();
+  }
+  console.log(chalk.gray('  Tip: /resume <sessionId> to restore a session\n'));
+  return done(rl);
+}
+
+// ── /thinkback [focus] (Batch 3) ──────────────────────────────────────────────
+
+export async function handleThinkback(input: string, ctx: SlashContext): Promise<true> {
+  const { agent, rl } = ctx;
+  const history = agent.getHistory();
+  const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
+  if (!lastAssistant) {
+    console.log(chalk.gray('\n  No previous AI response to reflect on.\n'));
+    return done(rl);
+  }
+  const prevContent = typeof lastAssistant.content === 'string'
+    ? lastAssistant.content.slice(0, 2000)
+    : '[previous response]';
+  const focusHint = input.replace('/thinkback', '').trim();
+  const focusStr = focusHint
+    ? `Pay special attention to: ${focusHint}`
+    : 'Consider accuracy, completeness, correctness, and missed edge cases.';
+  const thinkbackPrompt = [
+    '**Self-Reflection Request**',
+    '',
+    'Please critically review your previous response:',
+    '',
+    '```',
+    prevContent,
+    '```',
+    '',
+    focusStr,
+    '',
+    'In your reflection:',
+    '1. Identify any errors, incorrect assumptions, or misleading statements',
+    '2. Note gaps or missing information that would have been helpful',
+    '3. Point out anything that could be clearer or better structured',
+    '4. Provide a corrected/improved version if significant issues were found',
+    '5. If the response was correct and complete, briefly confirm why',
+    '',
+    'Be concise and specific.',
+  ].join('\n');
+
+  console.log(chalk.yellow('\n🪞 Thinkback — requesting AI self-reflection...\n'));
+  await streamWithPause(rl, async () => {
+    await agent.runStream(thinkbackPrompt, (chunk: string) => process.stdout.write(chunk));
+  });
+  console.log('\n');
   return done(rl);
 }

@@ -125,15 +125,57 @@ export async function handleBranch(ctx: SlashContext): Promise<true> {
 }
 
 export async function handleRename(input: string, ctx: SlashContext): Promise<true> {
-  const { agent, rl, saveSnapshot } = ctx;
-  const newName = input.replace('/rename', '').trim();
-  if (!newName) {
-    console.log(chalk.gray('\n  Usage: /rename <session-name>\n'));
-    return done(rl);
-  }
+  const { agent, rl, saveSnapshot, SESSION_ID } = ctx;
+  const nameArg = input.replace('/rename', '').trim();
   const history = agent.getHistory();
-  saveSnapshot(`named-${newName}`, history);
-  console.log(chalk.green(`\n✓ Session renamed to: ${newName}`));
+
+  // ── AI auto-generate title if no argument provided ────────────────────────
+  // Inspired by claude-code's /rename + saveAiGeneratedTitle():
+  //   - AI-generated titles use 'ai-title' semantics (lower priority)
+  //   - User-provided names use 'custom-title' semantics (highest priority)
+  // This prevents AI from ever overwriting a user's explicit rename.
+  let finalName = nameArg;
+  const isUserProvided = !!nameArg;
+
+  if (!finalName) {
+    if (history.length < 2) {
+      console.log(chalk.gray('\n  No conversation history to generate a title from.\n  Usage: /rename <session-name>\n'));
+      return done(rl);
+    }
+    const spinner = (await import('ora')).default({ text: 'Generating session title...', spinner: 'dots' }).start();
+    try {
+      const { generateSessionTitle } = await import('../../../core/memory/session-snapshot.js');
+      const generated = await generateSessionTitle(history);
+      if (generated) {
+        finalName = generated;
+        spinner.succeed(`Generated title: ${chalk.cyan(finalName)}`);
+      } else {
+        spinner.fail('Could not generate title — please provide a name manually');
+        console.log(chalk.gray('  Usage: /rename <session-name>\n'));
+        return done(rl);
+      }
+    } catch {
+      spinner.fail('Title generation failed');
+      console.log(chalk.gray('  Usage: /rename <session-name>\n'));
+      return done(rl);
+    }
+  }
+
+  // Save snapshot under new name
+  saveSnapshot(`named-${finalName}`, history);
+
+  // ── Type-separated title storage (claude-code parity) ─────────────────────
+  // User-provided → setCustomTitle (highest priority, AI can never overwrite)
+  // AI-generated  → setAiGeneratedTitle (lower priority, skipped if customTitle exists)
+  const { setCustomTitle, setAiGeneratedTitle } = await import('../../../core/memory/session-snapshot.js');
+  if (isUserProvided) {
+    setCustomTitle(`session-${SESSION_ID}`, finalName);
+  } else {
+    setAiGeneratedTitle(`session-${SESSION_ID}`, finalName);
+  }
+
+  const sourceNote = isUserProvided ? '' : chalk.gray(' (AI-generated)');
+  console.log(chalk.green(`\n✓ Session renamed to: ${finalName}`) + sourceNote);
   console.log(chalk.gray('  Restore with: /resume (then pick from list)\n'));
   return done(rl);
 }

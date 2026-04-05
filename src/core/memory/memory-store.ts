@@ -415,6 +415,16 @@ ${convText}`;
     return result;
   }
 
+  /**
+   * ingestBackground — DEPRECATED: replaced by triggerIncrementalIngest().
+   *
+   * Kept as thin wrapper for backward compatibility with any callers that
+   * still invoke it. Internally delegates to the incremental mechanism.
+   */
+  async ingestBackground(conversation: import('../../models/types.js').Message[]): Promise<void> {
+    triggerIncrementalIngest(conversation, this.project);
+  }
+
   // ── GC ───────────────────────────────────────────────────────────────────
 
   /**
@@ -528,4 +538,134 @@ export function getMemoryStore(projectRoot?: string): MemoryStore {
 
 export function resetMemoryStore(): void {
   _storeCache.clear();
+}
+
+// ─── Incremental Ingest Engine ────────────────────────────────────────────────
+//
+// Inspired by claude-code's extractMemories.ts design:
+//
+//   1. Message cursor (lastIngestUuidByProject): record the UUID of the last
+//      processed message per project. Only new messages are processed each
+//      time, avoiding redundant LLM calls.
+//
+//   2. inFlightIngests: Set<Promise<void>> that tracks all pending ingest
+//      tasks. drainIngest() waits on this set before process exit.
+//
+//   3. trailing-run: if triggerIncrementalIngest() is called while a run is
+//      in progress, the latest messages are stashed as pendingMessages. The
+//      current run triggers a trailing run in its finally block, ensuring no
+//      messages are dropped even under rapid back-to-back calls.
+//
+//   4. drainIngest(timeoutMs): soft-timeout Promise.race so the process can
+//      always exit. Uses setTimeout().unref() so it doesn't block Node.js exit.
+//
+// Key difference vs old ingestBackground():
+//   Old: spawns a detached OS child process at exit → complex, unreliable
+//   New: same-process async, fire-and-forget per round, drains at exit
+
+/** Per-project cursor: UUID/hash of the last message that was ingested */
+const _lastIngestUuidByProject = new Map<string, string>();
+
+/** Whether a per-project ingest run is currently in flight */
+const _inProgressByProject = new Map<string, boolean>();
+
+/** Per-project stash for trailing-run */
+const _pendingMessagesByProject = new Map<string, import('../../models/types.js').Message[]>();
+
+/** Global set of all in-flight ingest Promises (for drain) */
+const _inFlightIngests = new Set<Promise<void>>();
+
+/**
+ * Trigger incremental memory ingest for a conversation.
+ *
+ * Upgraded to use:
+ *  1. Dual-threshold gate (claude-code parity): only fires when BOTH
+ *     token delta >= 5000 AND tool calls >= 3 since last extraction
+ *  2. Isolated forked context: extraction uses memory-extractor.ts which
+ *     runs in its own LLM context, preventing main agent context pollution
+ *  3. Same cursor + trailing-run mechanics as before
+ *
+ * Call this fire-and-forget after each agent round completes.
+ */
+export function triggerIncrementalIngest(
+  messages: import('../../models/types.js').Message[],
+  projectRoot?: string,
+): void {
+  const project = resolve(projectRoot ?? process.cwd());
+  const p = _runIncrementalIngest(messages, project);
+  _inFlightIngests.add(p);
+  p.finally(() => _inFlightIngests.delete(p));
+}
+
+async function _runIncrementalIngest(
+  messages: import('../../models/types.js').Message[],
+  project: string,
+): Promise<void> {
+  // Coalesce: if already running, stash latest messages for trailing run
+  if (_inProgressByProject.get(project)) {
+    _pendingMessagesByProject.set(project, messages);
+    return;
+  }
+
+  _inProgressByProject.set(project, true);
+  try {
+    const lastUuid = _lastIngestUuidByProject.get(project);
+    // Find new messages since the cursor
+    const { getMessagesSince, shouldTriggerExtraction, resetExtractionCounters } =
+      await import('./memory-extractor.js');
+    const newMessages = getMessagesSince(messages, lastUuid);
+
+    // Need at least 2 messages to extract meaningful insights
+    if (newMessages.length < 2) return;
+
+    // ── Dual-threshold gate (claude-code parity) ──────────────────────────
+    // Only trigger extraction when both token delta AND tool call count thresholds
+    // are met, preventing too-frequent LLM extraction calls.
+    if (!shouldTriggerExtraction(newMessages, project)) {
+      return;
+    }
+
+    // ── Isolated forked extraction (claude-code parity) ───────────────────
+    // Use memory-extractor.ts which creates its own isolated LLM context
+    // instead of calling store.ingest() which runs in the main agent context.
+    const { extractMemoriesIsolated, getMessageCursor } = await import('./memory-extractor.js');
+    const result = await extractMemoriesIsolated(messages, project);
+
+    // Only advance cursor on success
+    if (result.added > 0 || result.updated > 0) {
+      resetExtractionCounters(project);
+      const lastMsg = messages.at(-1);
+      if (lastMsg) {
+        _lastIngestUuidByProject.set(project, getMessageCursor(lastMsg));
+      }
+    }
+  } catch {
+    // Ingest failure is non-fatal — cursor stays put, retry next round
+  } finally {
+    _inProgressByProject.set(project, false);
+
+    // trailing run: process any messages that arrived while we were running
+    const trailing = _pendingMessagesByProject.get(project);
+    _pendingMessagesByProject.delete(project);
+    if (trailing) {
+      await _runIncrementalIngest(trailing, project);
+    }
+  }
+}
+
+/**
+ * Wait for all in-flight incremental ingest tasks to complete.
+ *
+ * Call this before process exit to ensure pending insights are saved.
+ * Uses a soft timeout so the process can always exit even if ingest hangs.
+ *
+ * @param timeoutMs Maximum wait time in milliseconds (default: 60 000)
+ */
+export async function drainIngest(timeoutMs = 60_000): Promise<void> {
+  if (_inFlightIngests.size === 0) return;
+  await Promise.race([
+    Promise.all(_inFlightIngests).catch(() => { /* swallow errors */ }),
+    // .unref() so this timer won't keep the Node.js event loop alive
+    new Promise<void>((r) => setTimeout(r, timeoutMs).unref()),
+  ]);
 }
