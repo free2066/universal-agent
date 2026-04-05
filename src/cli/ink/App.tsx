@@ -20,6 +20,7 @@ import { ToolCallLine, type ToolCallInfo } from './ToolCallLine.js';
 import type { AgentCore } from '../../core/agent.js';
 import { HookRunner } from '../../core/hooks.js';
 import { modelManager } from '../../models/model-manager.js';
+import { SessionLogger } from '../session-logger.js';
 
 const SLASH_COMPLETIONS = [
   '/help', '/clear', '/exit', '/resume', '/compact', '/tokens', '/cost',
@@ -78,6 +79,15 @@ export function App({
   const toolSeqRef = useRef(0);
   const toolStartRef = useRef<Map<string, number>>(new Map());
   const isSubmittingRef = useRef(false); // debounce guard
+
+  // ── Real SessionLogger (created once per session) ──────────────────────
+  const sessionLogger = useRef<SessionLogger>(
+    new SessionLogger({
+      sessionId,
+      model: modelDisplayName || modelManager.getCurrentModel('main'),
+      domain: initialDomain,
+    })
+  );
 
   // ── Helper: append message ──────────────────────────────────────────────
   const appendMessage = useCallback((role: ChatMessage['role'], text: string) => {
@@ -188,22 +198,11 @@ export function App({
         removeListener: () => fakeRl,
       };
 
-      const fakeLogger = {
-        logInput: () => {},
-        logChunk: () => {},
-        logToolStart: () => {},
-        logToolEnd: () => {},
-        logError: () => {},
-        flushOutput: () => {},
-        close: () => {},
-        path: '',
-      };
-
       const slashCtx = {
         agent,
         rl: fakeRl,
         hookRunner: hookRunner.current,
-        sessionLogger: fakeLogger,
+        sessionLogger: sessionLogger.current,
         options: { domain, verbose: false },
         SESSION_ID: sessionId,
         getModelDisplayName: (id: string) => id,
@@ -277,6 +276,8 @@ export function App({
         ...prev,
         { role: 'user', content: trimmed, timestamp: new Date().toISOString() },
       ]);
+      // Log user input
+      sessionLogger.current.logInput(trimmed);
       setToolCalls([]);
       setIsStreaming(true);
       toolSeqRef.current = 0;
@@ -308,6 +309,7 @@ export function App({
               setStatusInfo((s) => ({ ...s, isThinking: 'medium' }));
             }
             appendAssistant(chunk);
+            sessionLogger.current.logChunk(chunk);
           },
           {
             onToolStart: (name, args) => {
@@ -317,6 +319,7 @@ export function App({
                 .slice(0, 3)
                 .map(([k, v]) => `${k}=${String(v).slice(0, 30)}`)
                 .join(', ');
+              sessionLogger.current.logToolStart(name, args as Record<string, unknown>);
               setToolCalls((prev) => [
                 ...prev,
                 { id: seqKey, name, args: argsStr, status: 'running' },
@@ -326,6 +329,7 @@ export function App({
             onToolEnd: (name, success, durationMs) => {
               const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
               if (seqKey) toolStartRef.current.delete(seqKey);
+              sessionLogger.current.logToolEnd(name, success, durationMs ?? 0);
               setToolCalls((prev) =>
                 prev.map((tc) =>
                   tc.id === seqKey
@@ -340,11 +344,14 @@ export function App({
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        sessionLogger.current.logError(msg);
         appendAssistant(`\n[Error] ${msg}`);
       } finally {
         abortRef.current = null;
         setIsStreaming(false);
         setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
+        // Flush buffered output to log
+        sessionLogger.current.flushOutput();
 
         // Update token estimate
         try {
