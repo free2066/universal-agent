@@ -255,6 +255,8 @@ export function App({
         }
         lines.push('');
         lines.push('  /models switch <name>  — switch main model');
+        lines.push('  uagent models add       — add custom model');
+        lines.push('  uagent models set <ptr> <model>  — set pointer');
         appendSystem(lines.join('\n'));
       }
       return;
@@ -1536,6 +1538,8 @@ export function App({
               mimeType: imgBlock.mimeType,
             });
             finalInput = ''; // already injected
+            // Confirm image was consumed (readline parity: repl.ts prints "(Image attached to this request)" at submit time)
+            appendSystem('(Image attached to this request)');
           } catch { /* provider may not support images */ }
         }
 
