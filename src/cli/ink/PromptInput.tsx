@@ -19,6 +19,12 @@ export interface PromptInputProps {
   onAbort?: () => void;
   historyItems?: string[];
   slashCompletions?: string[];
+  // Ctrl+R reverse-search
+  historySearch?: boolean;
+  historySearchMatch?: string | null;
+  onHistorySearchInput?: (ch: string, isBackspace: boolean) => void;
+  onHistorySearchAccept?: (val: string | null) => void;
+  onHistorySearchCancel?: () => void;
 }
 
 const MODE_COLORS: Record<string, string> = {
@@ -36,6 +42,11 @@ export function PromptInput({
   onAbort,
   historyItems = [],
   slashCompletions = [],
+  historySearch = false,
+  historySearchMatch = null,
+  onHistorySearchInput,
+  onHistorySearchAccept,
+  onHistorySearchCancel,
 }: PromptInputProps): React.JSX.Element {
   const [value, setValue] = useState('');
   const [historyIdx, setHistoryIdx] = useState(-1);
@@ -59,6 +70,27 @@ export function PromptInput({
   }, [slashCompletions]);
 
   useInput((input, key) => {
+    // ── Ctrl+R search mode input handling ─────────────────────────────────
+    if (historySearch) {
+      if (key.return) {
+        onHistorySearchAccept?.(historySearchMatch ?? null);
+        return;
+      }
+      if (key.escape || (key.ctrl && input === 'c')) {
+        onHistorySearchCancel?.();
+        return;
+      }
+      if (key.backspace || key.delete) {
+        onHistorySearchInput?.('', true);
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) {
+        onHistorySearchInput?.(input, false);
+        return;
+      }
+      return; // eat all other keys in search mode
+    }
+
     // Streaming: only allow Esc to abort
     if (isStreaming) {
       if (key.escape && onAbort) {

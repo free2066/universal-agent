@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Box, Text, useApp } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import { MessageList, type ChatMessage } from './MessageList.js';
 import { PromptInput } from './PromptInput.js';
 import { StatusBar, type StatusBarProps } from './StatusBar.js';
@@ -68,7 +68,7 @@ export function App({
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [domain, setDomain] = useState(initialDomain);
-  const [mode] = useState('default');
+  const [mode, setMode] = useState<'default' | 'plan' | 'brainstorm' | 'auto-edit'>('default');
   const [statusInfo, setStatusInfo] = useState<Omit<StatusBarProps, 'model' | 'domain' | 'sessionId'>>({
     isThinking: 'none',
     estimatedTokens: 0,
@@ -79,6 +79,39 @@ export function App({
   const toolSeqRef = useRef(0);
   const toolStartRef = useRef<Map<string, number>>(new Map());
   const isSubmittingRef = useRef(false); // debounce guard
+
+  // ── Thinking level cycle (Ctrl+T) ────────────────────────────────────────
+  const THINKING_CYCLE = [undefined, 'low', 'medium', 'high'] as const;
+  type ThinkingLevel = typeof THINKING_CYCLE[number];
+  const thinkingIdxRef = useRef(0);
+
+  // ── Agent mode cycle (Shift+Tab) ─────────────────────────────────────────
+  const AGENT_MODES = ['default', 'plan', 'brainstorm', 'auto-edit'] as const;
+  const modeIdxRef = useRef(0);
+  const MODE_PROMPTS: Record<string, string> = {
+    'default': '',
+    'plan': 'You are in PLAN mode. Think step by step and produce a detailed plan before taking any action. Do NOT edit files directly.',
+    'brainstorm': 'You are in BRAINSTORM mode. Generate creative ideas and explore multiple approaches freely.',
+    'auto-edit': 'You are in AUTO-EDIT mode. Apply code edits directly and immediately without asking for confirmation.',
+  };
+
+  // ── Esc×2 rollback timer ─────────────────────────────────────────────────
+  const lastEscRef = useRef(0);
+
+  // ── Ctrl+R reverse-search state ─────────────────────────────────────────
+  const [historySearch, setHistorySearch] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const historySearchIdxRef = useRef(-1);
+  const [historySearchMatch, setHistorySearchMatch] = useState<string | null>(null);
+
+  // Shared helper: resolve search match
+  const findHistoryMatch = useCallback((query: string, fromIdx: number, history: string[]): { match: string | null; idx: number } => {
+    const rev = [...history].reverse();
+    const sliced = rev.slice(fromIdx);
+    const ni = sliced.findIndex((h) => h.includes(query));
+    if (ni === -1) return { match: null, idx: -1 };
+    return { match: sliced[ni]!, idx: fromIdx + ni };
+  }, []);
 
   // ── Real SessionLogger (created once per session) ──────────────────────
   const sessionLogger = useRef<SessionLogger>(
@@ -993,6 +1026,108 @@ export function App({
     }
   }, [appendAssistant]);
 
+  // ── Global hotkeys (Ink useInput, active when not in PromptInput text) ───
+  // Note: Ink's useInput receives ALL key events including those in PromptInput,
+  // so we guard ctrl/special combos only.
+  useInput((input, key) => {
+    // ── Ctrl+T: cycle thinking level ────────────────────────────────────
+    if (key.ctrl && input === 't') {
+      thinkingIdxRef.current = (thinkingIdxRef.current + 1) % THINKING_CYCLE.length;
+      const level = THINKING_CYCLE[thinkingIdxRef.current] as ThinkingLevel;
+      try { agent.setThinkingLevel(level); } catch { /* not all providers support thinking */ }
+      const label = level ?? 'none';
+      appendSystem(`Thinking level: ${label}`);
+      setStatusInfo((s) => ({ ...s, isThinking: (level ?? 'none') as 'none' | 'low' | 'medium' | 'high' }));
+      return;
+    }
+
+    // ── Ctrl+L: clear screen (Ink equivalent — clear messages) ──────────
+    if (key.ctrl && input === 'l') {
+      setMessages([]);
+      setToolCalls([]);
+      return;
+    }
+
+    // ── Shift+Tab: cycle agent mode ──────────────────────────────────────
+    if (key.shift && key.tab) {
+      modeIdxRef.current = (modeIdxRef.current + 1) % AGENT_MODES.length;
+      const nextMode = AGENT_MODES[modeIdxRef.current];
+      setMode(nextMode);
+      const prompt = MODE_PROMPTS[nextMode] ?? '';
+      try { agent.setSystemPrompt(prompt); } catch { /* non-fatal */ }
+      appendSystem(`Mode: ${nextMode}`);
+      return;
+    }
+
+    // ── Esc×2: rollback last turn ─────────────────────────────────────────
+    if (key.escape && !isStreaming) {
+      const now = Date.now();
+      if (now - lastEscRef.current < 500) {
+        const history = agent.getHistory();
+        if (history.length >= 2) {
+          const removed = history.slice(-2);
+          agent.setHistory(history.slice(0, -2));
+          setMessages((prev) => prev.slice(0, -2));
+          const preview = String(
+            (removed[0] as { content?: unknown })?.content ?? ''
+          ).slice(0, 80).replace(/\n/g, ' ');
+          appendSystem(`Rolled back: "${preview}"`);
+        } else {
+          appendSystem('(nothing to roll back)');
+        }
+        lastEscRef.current = 0;
+      } else {
+        lastEscRef.current = now;
+      }
+      return;
+    }
+    if (!key.escape) lastEscRef.current = 0;
+
+    // ── Ctrl+V: paste image from clipboard ───────────────────────────────
+    if (key.ctrl && input === 'v') {
+      void (async () => {
+        const { spawnSync, execSync } = await import('child_process');
+        const { existsSync, readFileSync, unlinkSync } = await import('fs');
+        const { join } = await import('path');
+        const tmpPath = join('/tmp', `uagent-clip-${Date.now()}.png`);
+        let handled = false;
+        try {
+          execSync('which pngpaste 2>/dev/null', { stdio: 'pipe' });
+          try {
+            spawnSync('pngpaste', [tmpPath]);
+            if (existsSync(tmpPath)) {
+              const base64 = readFileSync(tmpPath).toString('base64');
+              try { unlinkSync(tmpPath); } catch { /* */ }
+              (agent as typeof agent & { _pendingImage?: { data: string; mimeType: string } })._pendingImage = { data: base64, mimeType: 'image/png' };
+              appendSystem('Image from clipboard attached. Now type your question.');
+              handled = true;
+            }
+          } catch { /* pngpaste failed */ }
+        } catch { /* pngpaste not installed */ }
+        if (!handled) {
+          appendSystem('No image in clipboard. (macOS: brew install pngpaste)');
+        }
+      })();
+      return;
+    }
+
+    // ── Ctrl+R: toggle reverse-search mode ──────────────────────────────
+    if (key.ctrl && input === 'r') {
+      if (!historySearch) {
+        setHistorySearch(true);
+        setHistoryQuery('');
+        setHistorySearchMatch(null);
+        historySearchIdxRef.current = -1;
+      } else {
+        const nextIdx = historySearchIdxRef.current + 1;
+        const { match, idx } = findHistoryMatch(historyQuery, nextIdx, inputHistory);
+        historySearchIdxRef.current = idx;
+        setHistorySearchMatch(match);
+      }
+      return;
+    }
+  });
+
   // ── Fire initialPrompt on mount ──────────────────────────────────────────
   const firedInitial = useRef(false);
   useEffect(() => {
@@ -1029,6 +1164,20 @@ export function App({
         </Box>
       )}
 
+      {/* Ctrl+R reverse-search overlay */}
+      {historySearch && (
+        <Box paddingLeft={2} paddingBottom={1}>
+          <Text color="cyan" dimColor>(reverse-search) </Text>
+          <Text color="cyan">{historyQuery}</Text>
+          <Text>: </Text>
+          {historySearchMatch
+            ? <Text color="white">{historySearchMatch}</Text>
+            : <Text color="gray" dimColor>{historyQuery ? 'no match' : '_'}</Text>
+          }
+          <Text color="gray" dimColor>  [Enter=accept  Esc/Ctrl+C=cancel  Ctrl+R=next]</Text>
+        </Box>
+      )}
+
       {/* Prompt input */}
       <Box paddingTop={1} paddingLeft={2} paddingBottom={1}>
         <PromptInput
@@ -1039,6 +1188,40 @@ export function App({
           onAbort={handleAbort}
           historyItems={inputHistory}
           slashCompletions={SLASH_COMPLETIONS}
+          historySearch={historySearch}
+          historySearchMatch={historySearchMatch}
+          onHistorySearchInput={(ch, isBackspace) => {
+            if (isBackspace) {
+              setHistoryQuery((q) => {
+                const nq = q.slice(0, -1);
+                historySearchIdxRef.current = -1;
+                const { match } = findHistoryMatch(nq, 0, inputHistory);
+                setHistorySearchMatch(match);
+                return nq;
+              });
+            } else {
+              setHistoryQuery((q) => {
+                const nq = q + ch;
+                historySearchIdxRef.current = -1;
+                const { match } = findHistoryMatch(nq, 0, inputHistory);
+                setHistorySearchMatch(match);
+                return nq;
+              });
+            }
+          }}
+          onHistorySearchAccept={(val) => {
+            setHistorySearch(false);
+            setHistoryQuery('');
+            setHistorySearchMatch(null);
+            historySearchIdxRef.current = -1;
+            if (val) handleSubmit(val).catch(() => {});
+          }}
+          onHistorySearchCancel={() => {
+            setHistorySearch(false);
+            setHistoryQuery('');
+            setHistorySearchMatch(null);
+            historySearchIdxRef.current = -1;
+          }}
         />
       </Box>
 
