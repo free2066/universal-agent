@@ -33,6 +33,8 @@ export interface PromptInputProps {
   onValueChange?: (val: string) => void;
   /** External value injection — when set, overrides the internal input state (used by Ctrl+G backfill) */
   externalValue?: string;
+  /** Called when Ctrl+D is pressed on an empty line (readline parity: EOF exits REPL) */
+  onEOF?: () => void;
 }
 
 const MODE_COLORS: Record<string, string> = {
@@ -59,9 +61,13 @@ export function PromptInput({
   onHistorySearchCancel,
   onValueChange,
   externalValue,
+  onEOF,
 }: PromptInputProps): React.JSX.Element {
   const [value, setValue] = useState('');
   const [historyIdx, setHistoryIdx] = useState(-1);
+  // draftValue: save the user's in-progress input before navigating history
+  // (readline parity: pressing Up saves current line as draft, Down at idx=-1 restores it)
+  const draftValueRef = useRef('');
   const [pendingLines, setPendingLines] = useState<string[]>([]);
   const [isMultiline, setIsMultiline] = useState(false);
   const [suggestion, setSuggestion] = useState<string | null>(null);
@@ -201,9 +207,21 @@ export function PromptInput({
       return;
     }
 
-    // Up: navigate history back
-    if (key.upArrow) {
+    // Ctrl+D: EOF on empty line → exit REPL (readline parity: rl emits 'close' on Ctrl+D when line is empty)
+    if (key.ctrl && input === 'd') {
+      if (!value && pendingLines.length === 0) {
+        onEOF?.();
+      }
+      return;
+    }
+
+    // Up / Ctrl+P: navigate history back (readline parity: both Up and Ctrl+P go back)
+    if (key.upArrow || (key.ctrl && input === 'p')) {
       if (historyItems.length === 0) return;
+      if (historyIdx === -1) {
+        // Save current draft before entering history navigation
+        draftValueRef.current = value;
+      }
       const newIdx = Math.min(historyIdx + 1, historyItems.length - 1);
       setHistoryIdx(newIdx);
       const histVal = historyItems[historyItems.length - 1 - newIdx] ?? '';
@@ -212,12 +230,15 @@ export function PromptInput({
       return;
     }
 
-    // Down: navigate history forward
-    if (key.downArrow) {
+    // Down / Ctrl+N: navigate history forward (readline parity: both Down and Ctrl+N go forward)
+    if (key.downArrow || (key.ctrl && input === 'n')) {
       if (historyIdx <= 0) {
+        // Restore draft when returning to current input position
         setHistoryIdx(-1);
-        setValue('');
-        setSuggestion(null);
+        const draft = draftValueRef.current;
+        draftValueRef.current = '';
+        setValue(draft);
+        updateSuggestion(draft);
         return;
       }
       const newIdx = historyIdx - 1;

@@ -1496,7 +1496,7 @@ export function App({
         let finalInput = resolvedInput;
         if (!hookCtx.proceed) {
           // Yellow warning style (matches readline chalk.yellow)
-          appendSystem(`[hook blocked] ${hookCtx.value ?? 'no reason given'}`);
+          appendSystem(`[hook] Blocked: ${hookCtx.value ?? 'no reason given'}`);
           return;
         }
         if (hookCtx.injection) {
@@ -2008,6 +2008,7 @@ export function App({
           }}
           onValueChange={(val) => { currentPromptRef.current = val; }}
           externalValue={externalPromptValue}
+          onEOF={() => { void handleSlashCommand('/exit'); }}
         />
       </Box>
 

@@ -186,6 +186,13 @@ export async function runInkREPL(
           }).catch(() => {});
         }).catch(() => {});
       }
+      // Trigger notification on Ctrl+C (readline parity: rl.on('close') triggers notification)
+      if (extra.notification !== undefined && extra.notification !== false) {
+        const notifVal = extra.notification;
+        import('../notification.js').then(({ triggerNotification }) => {
+          triggerNotification(notifVal).catch(() => {});
+        }).catch(() => {});
+      }
       unmount();
       process.stdout.write('\n');
       resolve();
