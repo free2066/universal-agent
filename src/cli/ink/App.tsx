@@ -754,7 +754,7 @@ export function App({
     // ── /metrics ─────────────────────────────────────────────────────────────
     if (cmd === '/metrics') {
       const { sessionMetrics } = await import('../../core/metrics.js');
-      appendSystem(sessionMetrics.getSummary());
+      appendSystem('LLM Call Metrics (this session):\n\n' + sessionMetrics.getSummary());
       return;
     }
 
@@ -776,6 +776,20 @@ export function App({
       if (cmds.size > 0) {
         lines.push('', 'Plugin Slash Commands:');
         for (const [c, def] of cmds) lines.push(`  ${c.padEnd(20)} ${def.description}`);
+      }
+      // Plugin Hooks (readline parity: tool-handlers.ts handleDomainPlugins lists hooks by event)
+      const { getPluginHooks } = await import('../../core/domain-router.js');
+      const allHookEvents = ['pre_prompt', 'post_response', 'on_tool_call', 'on_session_end'] as const;
+      const hookLines: string[] = [];
+      for (const ev of allHookEvents) {
+        const hooks = getPluginHooks(ev);
+        for (const h of hooks) {
+          hookLines.push(`  ${ev.padEnd(20)} ${(h as { pluginName?: string }).pluginName ?? '?'} — ${(h as { description?: string }).description ?? '(no description)'}`);
+        }
+      }
+      if (hookLines.length > 0) {
+        lines.push('', 'Plugin Hooks:');
+        hookLines.forEach((l) => lines.push(l));
       }
       appendSystem(lines.join('\n'));
       return;
@@ -2013,7 +2027,13 @@ export function App({
             setHistoryQuery('');
             setHistorySearchMatch(null);
             historySearchIdxRef.current = -1;
-            if (val) handleSubmit(val).catch(() => {});
+            // Backfill into input box, do NOT auto-submit
+            // (readline parity: repl.ts injects into rl.line and writes text to prompt,
+            //  requiring the user to press Enter again to actually send)
+            if (val) {
+              setExternalPromptValue(val);
+              setTimeout(() => setExternalPromptValue(undefined), 50);
+            }
           }}
           onHistorySearchCancel={() => {
             setHistorySearch(false);
