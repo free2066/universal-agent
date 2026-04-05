@@ -25,7 +25,7 @@ function truncate(text: string, maxLen: number): string {
 
 function UserMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
   return (
-    <Box flexDirection="row" paddingTop={1} gap={1}>
+    <Box flexDirection="row" gap={1}>
       <Text color="cyan" bold>you</Text>
       <Text color="gray">›</Text>
       <Text wrap="wrap">{msg.content}</Text>
@@ -40,7 +40,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
     ? msg.content.slice(0, MAX_DISPLAY) + `\n... (${msg.content.length - MAX_DISPLAY} chars hidden — full content in session log)`
     : msg.content;
   return (
-    <Box flexDirection="column" paddingTop={1} paddingBottom={1}>
+    <Box flexDirection="column">
       <Box gap={1}>
         <Text color="green" bold>agent</Text>
         <Text color="gray">›</Text>
@@ -69,7 +69,7 @@ export function MessageList({ messages }: { messages: ChatMessage[] }): React.JS
         if (msg.role === 'assistant') return <AssistantMessage key={key} msg={msg} />;
         // system/tool messages rendered dimmed
         return (
-          <Box key={key} paddingTop={1}>
+          <Box key={key}>
             <Text color="gray" dimColor>[{msg.role}] {truncate(msg.content, 120)}</Text>
           </Box>
         );

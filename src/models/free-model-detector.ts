@@ -280,13 +280,36 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
   // 防御性解析：UAGENT_MODEL 可能误写成 ep-xxx:名称 格式，只取冒号前的 ID 部分
   const wqModel = (process.env.UAGENT_MODEL || '').split(':')[0].trim() || undefined;
   const wqBase = process.env.OPENAI_BASE_URL;
-  // WQ_MODELS 支持逗号分隔多个万擎 endpoint，格式：ep-xxx 或 ep-xxx:显示名称
+  // WQ_MODELS 支持逗号分隔多个万擎 endpoint
+  // 格式：ep-xxx  或  ep-xxx:显示名称  或  ep-xxx:显示名称:contextLength(k)
+  // 示例：ep-abc123:MiMo-V2-Pro:1000k,ep-def456:Kimi-K2:128k
   const wqModelsRaw = process.env.WQ_MODELS || '';
-  // 解析：只取冒号前的 ep-xxx 部分作为 ID，冒号后是可选的显示名称（供 picker 使用）
-  const extraModels = wqModelsRaw
+
+  interface WqModelEntry { id: string; contextLength: number; }
+  const extraModelEntries: WqModelEntry[] = wqModelsRaw
     .split(',')
-    .map(s => s.trim().split(':')[0].trim())   // 只取 ID 部分，去掉 :显示名称
-    .filter(s => s && !s.startsWith('ep-xxxxxx') && (s.startsWith('ep-') || s.startsWith('api-')));
+    .map(s => {
+      const parts = s.trim().split(':');
+      const id = parts[0]?.trim() ?? '';
+      // 第三段可选：contextLength，支持 "1000k"/"1000000"/"128k"/"200k" 等写法
+      let ctxLen = 128000;
+      const ctxRaw = parts[2]?.trim();
+      if (ctxRaw) {
+        const match = ctxRaw.match(/^(\d+(?:\.\d+)?)(k|m)?$/i);
+        if (match) {
+          const num = parseFloat(match[1]!);
+          const unit = (match[2] ?? '').toLowerCase();
+          ctxLen = unit === 'm' ? Math.round(num * 1_000_000)
+                 : unit === 'k' ? Math.round(num * 1_000)
+                 : Math.round(num);
+        }
+      }
+      return { id, contextLength: ctxLen };
+    })
+    .filter(e => e.id && !e.id.startsWith('ep-xxxxxx') && (e.id.startsWith('ep-') || e.id.startsWith('api-')));
+  const extraModels = extraModelEntries.map(e => e.id);
+  // Build id→contextLength map for WQ_MODELS entries
+  const wqCtxMap = new Map<string, number>(extraModelEntries.map(e => [e.id, e.contextLength]));
 
   // 万擎识别条件：有 WQ_API_KEY，且满足以下任一：
   //   1. UAGENT_MODEL 已填（不是占位符）
@@ -305,11 +328,36 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
     // 合并主模型 + WQ_MODELS 里的额外模型，去重
     const allIds = [primaryId, ...extraModels.filter(id => id !== primaryId)];
     if (!silent) process.stdout.write(`✅ Using 万擎 (Wanqing) internal API: ${primaryId}${allIds.length > 1 ? ` (+${allIds.length - 1} more)` : ''}\n`);
+
+    // Infer contextLength for a WQ endpoint:
+    //   1. If explicitly set in WQ_MODELS (ep-xxx:name:ctxLen), use that value.
+    //   2. Otherwise fall back to 128k default.
+    //   Users can also pass WQ_CTX_<EPID>=1000000 env var for fine-grained control.
+    const inferWqCtx = (id: string): number => {
+      // Explicit WQ_MODELS third-field value takes priority
+      const fromMap = wqCtxMap.get(id);
+      if (fromMap) return fromMap;
+      // Env var override: WQ_CTX_EP_ABC123 (replace - with _)
+      const envKey = `WQ_CTX_${id.replace(/-/g, '_').toUpperCase()}`;
+      const envVal = process.env[envKey];
+      if (envVal) {
+        const match = envVal.match(/^(\d+(?:\.\d+)?)(k|m)?$/i);
+        if (match) {
+          const num = parseFloat(match[1]!);
+          const unit = (match[2] ?? '').toLowerCase();
+          return unit === 'm' ? Math.round(num * 1_000_000)
+               : unit === 'k' ? Math.round(num * 1_000)
+               : Math.round(num);
+        }
+      }
+      return 128000;
+    };
+
     const models: RankedFreeModel[] = allIds.map((id, i) => ({
       id,
       name: `万擎: ${id}`,
       score: 100 - i,   // 第一个得分最高，作为默认
-      contextLength: 128000,
+      contextLength: inferWqCtx(id),
       supportsTools: true,
       isFree: true,
     }));
