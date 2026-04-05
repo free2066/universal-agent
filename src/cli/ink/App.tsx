@@ -224,6 +224,13 @@ export function App({
       if (sub) {
         agent.setModel(sub);
         modelManager.setPointer('main', sub);
+        // Update StatusBar model display and context length
+        // (readline parity: agent-handlers.ts handleModel lines 50-51
+        //  calls updateStatusBar({ model, contextLength }) + rl.setPrompt after switch)
+        const newProfile = modelManager.listProfiles().find((p) => p.name === sub);
+        const newCtxLen = newProfile?.contextLength ?? 128000;
+        setCurrentModelDisplay(sub);
+        setStatusInfo((s) => ({ ...s, contextLength: newCtxLen }));
         appendSystem(`Model switched to: ${sub}`);
       } else {
         const current = modelManager.getCurrentModel('main');
@@ -286,8 +293,9 @@ export function App({
       return;
     }
 
-    // ── /logs ───────────────────────────────────────────────────────────────
-    if (cmd === '/logs') {
+    // ── /logs [list] ─────────────────────────────────────────────────────────
+    // (readline parity: handlers/index.ts line 58 routes '/logs' OR '/logs list')
+    if (cmd === '/logs' || cmd === '/logs list') {
       const { listLogs } = await import('../session-logger.js');
       const logs = listLogs();
       if (!logs.length) {
