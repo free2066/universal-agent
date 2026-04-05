@@ -166,6 +166,17 @@ export function App({
           saveSnapshot(sessionId, h);
         } catch { /* non-fatal */ }
       }
+      // Dream Mode: ingest session insights on clean /exit (readline parity:
+      // rl.on('close') calls getMemoryStore().ingest() when history.length >= 4)
+      if (h.length >= 4) {
+        try {
+          const { getMemoryStore } = await import('../../core/memory/memory-store.js');
+          const result = await getMemoryStore(process.cwd()).ingest(h);
+          if (result && (result.added ?? 0) > 0) {
+            appendSystem(`Dream Mode: +${result.added ?? 0} insights saved to memory.`);
+          }
+        } catch { /* non-fatal */ }
+      }
       sessionLogger.current.close();
       onExit?.();
       exit();
@@ -480,7 +491,7 @@ export function App({
       if (!newName) { appendSystem('Usage: /rename <session-name>'); return; }
       const history = agent.getHistory();
       saveSnapshot(`named-${newName}`, history);
-      appendSystem(`Session saved as: named-${newName}`);
+      appendSystem(`Session renamed to: ${newName}`);
       return;
     }
 
@@ -1697,9 +1708,18 @@ export function App({
         const currentPromptValue = currentPromptRef.current ?? '';
         try {
           writeFileSync(tmpFile, currentPromptValue, 'utf-8');
+          // Suspend raw mode before spawning editor (readline parity:
+          // repl.ts calls setRawMode(false) before editor, setRawMode(true) after)
+          if (process.stdin.isTTY) {
+            try { process.stdin.setRawMode(false); } catch { /* non-fatal */ }
+          }
           // Temporarily suspend Ink rendering by writing a note
           process.stdout.write(`\r\nOpening ${editor}...\r\n`);
           spawnSync(editor, [tmpFile], { stdio: 'inherit' });
+          // Restore raw mode after editor exits
+          if (process.stdin.isTTY) {
+            try { process.stdin.setRawMode(true); } catch { /* non-fatal */ }
+          }
           if (existsSync(tmpFile)) {
             const content = readFileSync(tmpFile, 'utf-8').trim();
             if (content) {
