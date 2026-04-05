@@ -48,6 +48,7 @@ import { databaseQueryTool } from '../tools/productivity/database-query.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from '../task-board.js';
 import { backgroundRunTool, checkBackgroundTool, killBashTool } from '../tools/productivity/background-tools.js';
 import { todoWriteTool } from '../tools/productivity/todo-tool.js';
+import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
 import {
   spawnTeammateTool,
   listTeammatesTool,
@@ -214,6 +215,9 @@ export function registerAllTools(
     worktreeEventsTool,
     taskBindWorktreeTool,
   ]);
+
+  // s13 — structured / synthetic output
+  reg(syntheticOutputTool);
 
   // Domain-specific tools
   router.registerTools(registry, domain);
