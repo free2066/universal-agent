@@ -633,6 +633,9 @@ export function App({
         } catch (e) {
           appendSystem(`Ingest failed: ${e instanceof Error ? e.message : String(e)}`);
         }
+      } else {
+        // (readline parity: memory-handlers.ts line 65 shows unknown subcommand hint)
+        appendSystem(`Unknown /memory subcommand. Try: /memory  /memory pin <text>  /memory list  /memory forget  /memory ingest`);
       }
       return;
     }
@@ -845,6 +848,21 @@ export function App({
         lines.push('', 'Plugin Hooks:');
         hookLines.forEach((l) => lines.push(l));
       }
+      // (readline parity: tool-handlers.ts handleDomainPlugins lines 466-477)
+      const external = plugins.filter((p: { source: string }) => p.source !== 'builtin');
+      if (external.length === 0) {
+        lines.push('', '  No external plugins loaded.');
+      }
+      lines.push(
+        '',
+        '  To add a plugin with slash commands:',
+        '    export default {',
+        '      name: "my-plugin", description: "...", keywords: [], systemPrompt: "", tools: [],',
+        '      slashCommands: [{ command: "/standup", description: "...", handler: async (args, ctx) => { ctx.onChunk("..."); } }],',
+        '      hooks: [{ event: "pre_prompt", description: "...", handler: async (payload) => { return undefined; } }],',
+        '    };',
+        '    // Save to .uagent/plugins/<name>.js and restart uagent',
+      );
       appendSystem(lines.join('\n'));
       return;
     }
