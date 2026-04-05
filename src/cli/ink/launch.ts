@@ -79,6 +79,24 @@ export async function runInkREPL(
     } catch { /* non-fatal */ }
   }
 
+  // ── Startup hint: show last session availability ───────────────────────
+  let startupHint: string | undefined;
+  if (!extra.resumeSessionId && !extra.continueSession) {
+    try {
+      const { loadLastSnapshot } = await import('../../core/memory/session-snapshot.js');
+      const snap = loadLastSnapshot();
+      if (snap && snap.messages.length >= 2) {
+        const ageMs = Date.now() - snap.savedAt;
+        let ageStr: string;
+        if (ageMs < 60000) ageStr = `${Math.round(ageMs / 1000)}s ago`;
+        else if (ageMs < 3600000) ageStr = `${Math.round(ageMs / 60000)}m ago`;
+        else if (ageMs < 86400000) ageStr = `${Math.round(ageMs / 3600000)}h ago`;
+        else ageStr = `${Math.round(ageMs / 86400000)}d ago`;
+        startupHint = `Last session available (${ageStr}, ${snap.messages.length} messages) — type /resume to restore`;
+      }
+    } catch { /* non-fatal */ }
+  }
+
   return new Promise<void>((resolve) => {
     const { unmount } = render(
       React.createElement(App, {
@@ -90,12 +108,20 @@ export async function runInkREPL(
         contextLength,
         initialPrompt: extra.initialPrompt,
         inferProviderEnvKey: extra.inferProviderEnvKey,
+        startupHint,
         onExit: () => {
           // Save session snapshot
           const history = agent.getHistory();
           if (history.length >= 2) {
             import('../../core/memory/session-snapshot.js').then(({ saveSnapshot }) => {
               try { saveSnapshot(`session-${SESSION_ID}`, history); } catch { /* non-fatal */ }
+            }).catch(() => {});
+          }
+          // ── Dream Mode: auto-ingest insights on exit ─────────────────────
+          if (history.length >= 4) {
+            import('../../core/memory/memory-store.js').then(({ getMemoryStore }) => {
+              const store = getMemoryStore(process.cwd());
+              store.ingest(history).catch(() => {});
             }).catch(() => {});
           }
           // Trigger notification
@@ -118,6 +144,12 @@ export async function runInkREPL(
       if (history.length >= 2) {
         import('../../core/memory/session-snapshot.js').then(({ saveSnapshot }) => {
           try { saveSnapshot(`session-${SESSION_ID}`, history); } catch { /* non-fatal */ }
+        }).catch(() => {});
+      }
+      // Dream mode on Ctrl+C too
+      if (history.length >= 4) {
+        import('../../core/memory/memory-store.js').then(({ getMemoryStore }) => {
+          getMemoryStore(process.cwd()).ingest(history).catch(() => {});
         }).catch(() => {});
       }
       unmount();

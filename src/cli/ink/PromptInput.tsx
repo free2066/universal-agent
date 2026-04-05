@@ -19,6 +19,10 @@ export interface PromptInputProps {
   onAbort?: () => void;
   historyItems?: string[];
   slashCompletions?: string[];
+  /** @file fuzzy completions (relative paths from cwd) */
+  fileCompletions?: string[];
+  /** @run-agent-xxx completions */
+  agentCompletions?: string[];
   // Ctrl+R reverse-search
   historySearch?: boolean;
   historySearchMatch?: string | null;
@@ -42,6 +46,8 @@ export function PromptInput({
   onAbort,
   historyItems = [],
   slashCompletions = [],
+  fileCompletions = [],
+  agentCompletions = [],
   historySearch = false,
   historySearchMatch = null,
   onHistorySearchInput,
@@ -61,13 +67,31 @@ export function PromptInput({
 
   // Update inline suggestion based on current value
   const updateSuggestion = useCallback((val: string) => {
+    // /slash completions
     if (val.startsWith('/') && slashCompletions.length > 0) {
       const match = slashCompletions.find((c) => c.startsWith(val) && c !== val);
       setSuggestion(match ? match.slice(val.length) : null);
-    } else {
-      setSuggestion(null);
+      return;
     }
-  }, [slashCompletions]);
+    // @file / @agent completions — find last @token in the input
+    const atMatch = val.match(/@([^\s]*)$/);
+    if (atMatch) {
+      const query = atMatch[1] ?? '';
+      // Try @run-agent-xxx first
+      const agentMatch = agentCompletions.find((a) => a.startsWith(query) && a !== query);
+      if (agentMatch) {
+        setSuggestion(agentMatch.slice(query.length));
+        return;
+      }
+      // Then @file
+      const fileMatch = fileCompletions.find((f) => f.toLowerCase().includes(query.toLowerCase()) && f !== query);
+      if (fileMatch) {
+        setSuggestion(fileMatch.slice(query.length));
+        return;
+      }
+    }
+    setSuggestion(null);
+  }, [slashCompletions, fileCompletions, agentCompletions]);
 
   useInput((input, key) => {
     // ── Ctrl+R search mode input handling ─────────────────────────────────

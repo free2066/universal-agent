@@ -47,17 +47,21 @@ export interface AppProps {
   onExit?: () => void;
   initialPrompt?: string;
   inferProviderEnvKey?: (msg: string) => string | undefined;
+  /** Shown once at startup if a previous session is available */
+  startupHint?: string;
 }
 
 export function App({
   agent,
   domain: initialDomain,
+  verbose: initialVerbose,
   sessionId,
   modelDisplayName,
   contextLength = 128000,
   onExit,
   initialPrompt,
   inferProviderEnvKey,
+  startupHint,
 }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const hookRunner = useRef(new HookRunner(process.cwd()));
@@ -69,6 +73,7 @@ export function App({
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [domain, setDomain] = useState(initialDomain);
   const [mode, setMode] = useState<'default' | 'plan' | 'brainstorm' | 'auto-edit'>('default');
+  const [verbose, setVerbose] = useState(initialVerbose ?? false);
   const [statusInfo, setStatusInfo] = useState<Omit<StatusBarProps, 'model' | 'domain' | 'sessionId'>>({
     isThinking: 'none',
     estimatedTokens: 0,
@@ -97,6 +102,9 @@ export function App({
 
   // ── Esc×2 rollback timer ─────────────────────────────────────────────────
   const lastEscRef = useRef(0);
+
+  // ── Ctrl+L double-press timer ────────────────────────────────────────────
+  const lastCtrlLRef = useRef(0);
 
   // ── Ctrl+R reverse-search state ─────────────────────────────────────────
   const [historySearch, setHistorySearch] = useState(false);
@@ -918,7 +926,49 @@ export function App({
         return;
       }
 
+      // ── !cmd shell prefix ────────────────────────────────────────────────
+      if (trimmed.startsWith('!')) {
+        const shellCmd = trimmed.slice(1).trim();
+        if (!shellCmd) return;
+        appendSystem(`$ ${shellCmd}`);
+        try {
+          const { execSync } = await import('child_process');
+          const out = execSync(shellCmd, {
+            cwd: process.cwd(),
+            timeout: 30000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          }).toString().trim();
+          appendSystem(out || '(no output)');
+          // Inject into agent context for follow-up questions
+          agent.injectContext(`Shell command: ${shellCmd}\n\nOutput:\n${out}`);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          appendSystem(`[shell error] ${errMsg}`);
+        }
+        return;
+      }
+
+      // ── @file reference resolution ────────────────────────────────────────
+      const resolveAtRefs = async (input: string): Promise<string> => {
+        const { existsSync, readFileSync } = await import('fs');
+        const { join, extname } = await import('path');
+        return input.replace(/@([^\s,;]+)/g, (_match, ref: string) => {
+          // Skip @run-agent-xxx — subagent mentions, not file refs
+          if (ref.startsWith('run-agent-') || ref.startsWith('ask-')) return _match;
+          const fullPath = join(process.cwd(), ref);
+          if (!existsSync(fullPath)) return _match;
+          try {
+            const content = readFileSync(fullPath, 'utf-8');
+            const lang = extname(ref).slice(1) || '';
+            return `\n<file path="${ref}">\n\`\`\`${lang}\n${content}\n\`\`\`\n</file>\n`;
+          } catch { return _match; }
+        });
+      };
+
       // ── LLM path ────────────────────────────────────────────────────────
+      // Resolve @file references before sending
+      const resolvedInput = await resolveAtRefs(trimmed);
+
       setMessages((prev) => [
         ...prev,
         { role: 'user', content: trimmed, timestamp: new Date().toISOString() },
@@ -936,19 +986,37 @@ export function App({
       try {
         // Run hook pre_prompt
         const hookCtx = await hookRunner.current.run({
-          event: 'pre_prompt', prompt: trimmed, cwd: process.cwd(),
+          event: 'pre_prompt', prompt: resolvedInput, cwd: process.cwd(),
         }).catch(() => ({ proceed: true, value: undefined, injection: undefined }));
 
-        let finalInput = trimmed;
+        let finalInput = resolvedInput;
         if (!hookCtx.proceed) {
           appendSystem(`[hook] Blocked: ${hookCtx.value ?? 'no reason given'}`);
           return;
         }
         if (hookCtx.injection) {
-          finalInput = `${trimmed}\n\n---\n${hookCtx.injection}`;
+          finalInput = `${resolvedInput}\n\n---\n${hookCtx.injection}`;
         }
 
-        await agent.runStream(
+        // ── Consume pending image (from Ctrl+V) ───────────────────────────
+        type AgentWithImage = typeof agent & { _pendingImage?: { data: string; mimeType: string } };
+        const agentWithImg = agent as AgentWithImage;
+        if (agentWithImg._pendingImage) {
+          const imgBlock = agentWithImg._pendingImage;
+          delete agentWithImg._pendingImage;
+          // injectImagePrompt expects ImageBlock with 'type' field
+          try {
+            agent.injectImagePrompt(finalInput, {
+              type: 'image',
+              data: imgBlock.data,
+              mimeType: imgBlock.mimeType,
+            });
+            finalInput = ''; // already injected
+          } catch { /* provider may not support images */ }
+        }
+
+        if (finalInput) {
+          await agent.runStream(
           finalInput,
           (chunk) => {
             if (firstChunk) {
@@ -989,10 +1057,25 @@ export function App({
           undefined,
           abortRef.current.signal,
         );
+        } // end if (finalInput)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         sessionLogger.current.logError(msg);
-        appendAssistant(`\n[Error] ${msg}`);
+        // ── API 401/403: auto-trigger configureAgent ─────────────────────
+        const isAuthError = /401|403|unauthorized|invalid.api.key|authentication/i.test(msg);
+        if (isAuthError) {
+          appendSystem(`[Auth Error] ${msg}\n\nLaunching API key setup...`);
+          try {
+            const { configureAgent } = await import('../configure.js');
+            await configureAgent(
+              'API authentication failed — please add or update your key',
+              inferProviderEnvKey?.(msg),
+            );
+            appendSystem('API key saved. Please restart uagent to apply the new key.');
+          } catch { /* configure not available */ }
+        } else {
+          appendAssistant(`\n[Error] ${msg}`);
+        }
       } finally {
         abortRef.current = null;
         setIsStreaming(false);
@@ -1041,10 +1124,47 @@ export function App({
       return;
     }
 
-    // ── Ctrl+L: clear screen (Ink equivalent — clear messages) ──────────
+    // ── Ctrl+L: single=clear messages, double=toggle verbose ────────────
     if (key.ctrl && input === 'l') {
-      setMessages([]);
-      setToolCalls([]);
+      const now = Date.now();
+      if (now - lastCtrlLRef.current < 500) {
+        // Double press — toggle verbose/debug mode
+        const nextVerbose = !verbose;
+        setVerbose(nextVerbose);
+        appendSystem(`Debug mode: ${nextVerbose ? 'ON' : 'OFF'}`);
+        lastCtrlLRef.current = 0;
+      } else {
+        lastCtrlLRef.current = now;
+        setMessages([]);
+        setToolCalls([]);
+      }
+      return;
+    }
+
+    // ── Ctrl+G: open $EDITOR to compose input ───────────────────────────
+    if (key.ctrl && input === 'g') {
+      void (async () => {
+        const editor = process.env.VISUAL ?? process.env.EDITOR ?? 'vi';
+        const { join } = await import('path');
+        const { writeFileSync, readFileSync, unlinkSync, existsSync } = await import('fs');
+        const { spawnSync } = await import('child_process');
+        const tmpFile = join('/tmp', `uagent-input-${Date.now()}.txt`);
+        try {
+          writeFileSync(tmpFile, '', 'utf-8');
+          // Temporarily suspend Ink rendering by writing a note
+          process.stdout.write(`\r\nOpening ${editor}...\r\n`);
+          spawnSync(editor, [tmpFile], { stdio: 'inherit' });
+          if (existsSync(tmpFile)) {
+            const content = readFileSync(tmpFile, 'utf-8').trim();
+            if (content) {
+              void handleSubmit(content);
+            }
+            try { unlinkSync(tmpFile); } catch { /* */ }
+          }
+        } catch (err) {
+          appendSystem(`Editor error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
       return;
     }
 
@@ -1128,6 +1248,14 @@ export function App({
     }
   });
 
+  // ── Sync verbose state to agent ──────────────────────────────────────────
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (agent as any).verbose = verbose;
+    } catch { /* */ }
+  }, [agent, verbose]);
+
   // ── Fire initialPrompt on mount ──────────────────────────────────────────
   const firedInitial = useRef(false);
   useEffect(() => {
@@ -1135,9 +1263,48 @@ export function App({
       firedInitial.current = true;
       handleSubmit(initialPrompt).catch(() => {});
     }
-  }, [initialPrompt, handleSubmit]);
+    // Show startup hint once (last session available)
+    if (startupHint) {
+      appendSystem(startupHint);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const currentModel = modelManager.getCurrentModel('main');
+
+  // ── @file and @agent tab completions (computed lazily on mount) ──────────
+  const [fileCompletions, setFileCompletions] = useState<string[]>([]);
+  const [agentCompletions, setAgentCompletions] = useState<string[]>([]);
+  useEffect(() => {
+    void (async () => {
+      const { readdirSync, statSync } = await import('fs');
+      const { join, relative } = await import('path');
+      const cwd = process.cwd();
+      const IGNORE = new Set(['node_modules', '.git', 'dist', '.cache', '__pycache__']);
+      const results: string[] = [];
+      function collect(dir: string, depth: number): void {
+        if (depth > 3 || results.length > 500) return;
+        let entries: string[];
+        try { entries = readdirSync(dir); } catch { return; }
+        for (const entry of entries) {
+          if (IGNORE.has(entry)) continue;
+          const full = join(dir, entry);
+          try {
+            const st = statSync(full);
+            if (st.isDirectory()) collect(full, depth + 1);
+            else results.push(relative(cwd, full));
+          } catch { /* */ }
+        }
+      }
+      collect(cwd, 0);
+      setFileCompletions(results);
+    })();
+    void (async () => {
+      const { subagentSystem } = await import('../../core/subagent-system.js');
+      setAgentCompletions(subagentSystem.listAgents().map((a) => `run-agent-${a.name}`));
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <Box flexDirection="column" height="100%">
@@ -1188,6 +1355,8 @@ export function App({
           onAbort={handleAbort}
           historyItems={inputHistory}
           slashCompletions={SLASH_COMPLETIONS}
+          fileCompletions={fileCompletions}
+          agentCompletions={agentCompletions}
           historySearch={historySearch}
           historySearchMatch={historySearchMatch}
           onHistorySearchInput={(ch, isBackspace) => {
