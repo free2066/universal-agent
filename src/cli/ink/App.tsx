@@ -1231,17 +1231,29 @@ export function App({
       if (trimmed.startsWith('!')) {
         const shellCmd = trimmed.slice(1).trim();
         if (!shellCmd) return;
-        appendSystem(`$ ${shellCmd}`);
+        // dim style: "  $ cmd" (matches readline chalk.dim)
+        appendSystem(`  $ ${shellCmd}`);
         try {
           const { execSync } = await import('child_process');
-          const out = execSync(shellCmd, {
-            cwd: process.cwd(),
-            timeout: 30000,
-            stdio: ['pipe', 'pipe', 'pipe'],
-          }).toString().trim();
-          appendSystem(out || '(no output)');
+          let shellOut = '';
+          try {
+            shellOut = execSync(shellCmd, {
+              cwd: process.cwd(),
+              timeout: 30000,
+              encoding: 'utf-8',
+              stdio: ['ignore', 'pipe', 'pipe'],
+            }) as unknown as string;
+          } catch (shellErr) {
+            const se = shellErr as { stdout?: string; stderr?: string };
+            shellOut = se.stdout ?? '';
+            // stderr shown in red-ish style with [stderr] prefix
+            if (se.stderr) appendSystem(`[stderr] ${se.stderr.trim()}`);
+          }
+          const trimOut = shellOut.trim();
+          if (trimOut) appendSystem(trimOut);
+          else appendSystem('(no output)');
           // Inject into agent context for follow-up questions
-          agent.injectContext(`Shell command: ${shellCmd}\n\nOutput:\n${out}`);
+          agent.injectContext(`$ ${shellCmd}\n${shellOut}`);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           appendSystem(`[shell error] ${errMsg}`);
@@ -1292,7 +1304,8 @@ export function App({
 
         let finalInput = resolvedInput;
         if (!hookCtx.proceed) {
-          appendSystem(`[hook] Blocked: ${hookCtx.value ?? 'no reason given'}`);
+          // Yellow warning style (matches readline chalk.yellow)
+          appendSystem(`[hook blocked] ${hookCtx.value ?? 'no reason given'}`);
           return;
         }
         if (hookCtx.injection) {
@@ -1331,10 +1344,26 @@ export function App({
             onToolStart: (name, args) => {
               const seqKey = `${name}#${toolSeqRef.current++}`;
               toolStartRef.current.set(seqKey, Date.now());
-              const argsStr = Object.entries(args as Record<string, unknown>)
-                .slice(0, 3)
-                .map(([k, v]) => `${k}=${String(v).slice(0, 30)}`)
-                .join(', ');
+              // summarizeArgs: priority keys first (matches spinner.ts summarizeArgs)
+              const PRIO_KEYS = ['path', 'file', 'filepath', 'filename', 'dir', 'directory', 'command', 'cmd', 'script', 'query', 'url', 'text', 'content'];
+              const argsObj = args as Record<string, unknown>;
+              let bestVal = '';
+              for (const k of PRIO_KEYS) {
+                const v = argsObj[k];
+                if (typeof v === 'string' && v.length > 0) { bestVal = v; break; }
+              }
+              if (!bestVal) {
+                for (const v of Object.values(argsObj)) {
+                  if (typeof v === 'string' && v.length > 0) { bestVal = v; break; }
+                }
+              }
+              // Terminal-width-aware truncation (matches cols - name.length - 4)
+              const cols = process.stdout.columns ?? 120;
+              const maxArgLen = Math.max(0, cols - name.length - 4);
+              const truncated = bestVal.length > maxArgLen;
+              const argsStr = bestVal.length > 0
+                ? bestVal.slice(0, maxArgLen) + (truncated ? '…' : '')
+                : '';
               sessionLogger.current.logToolStart(name, args as Record<string, unknown>);
               setToolCalls((prev) => [
                 ...prev,
@@ -1353,13 +1382,13 @@ export function App({
                     : tc
                 )
               );
-              // Append tool result as a permanent system message (readline parity)
+              // Append tool result as permanent system message (readline parity, with trailing period)
               const dur = durationMs !== undefined
                 ? durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
                 : '';
               const resultLine = success
-                ? `↳ ${name} done${dur ? ` (${dur})` : ''}`
-                : `↳ ${name} failed${dur ? ` (${dur})` : ''}`;
+                ? `↳ ${name} done${dur ? ` (${dur})` : ''}.`
+                : `[failed] ↳ ${name} failed${dur ? ` (${dur})` : ''}.`;
               appendSystem(resultLine);
             },
           },
@@ -1371,16 +1400,29 @@ export function App({
         const msg = err instanceof Error ? err.message : String(err);
         sessionLogger.current.logError(msg);
         // ── API 401/403: auto-trigger configureAgent ─────────────────────
+        const isAbortError = msg.includes('aborted') || msg.includes('AbortError') || msg.includes('signal');
+        if (isAbortError) {
+          // Abort is handled by handleAbort (Esc key), don't show error
+          return;
+        }
         const isAuthError = /401|403|unauthorized|invalid.api.key|authentication/i.test(msg);
         if (isAuthError) {
-          appendSystem(`[Auth Error] ${msg}\n\nLaunching API key setup...`);
+          appendSystem(`[auth error] ${msg}`);
+          appendSystem('Starting API key setup...');
           try {
             const { configureAgent } = await import('../configure.js');
             await configureAgent(
               'API authentication failed — please add or update your key',
               inferProviderEnvKey?.(msg),
             );
-            appendSystem('API key saved. Please restart uagent to apply the new key.');
+            // Reload .env and clear client cache (matches readline configureAgent flow)
+            try {
+              const { config: loadEnv } = await import('dotenv');
+              const { resolve: r } = await import('path');
+              loadEnv({ path: r(process.cwd(), '.env'), override: true });
+              modelManager.clearClientCache();
+            } catch { /* non-fatal */ }
+            appendSystem('Keys updated. Try your request again.');
           } catch { /* configure not available */ }
         } else {
           appendAssistant(`\n[Error] ${msg}`);

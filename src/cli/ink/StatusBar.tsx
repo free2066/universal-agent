@@ -18,13 +18,26 @@ export interface StatusBarProps {
   mode?: string;
 }
 
-function thinkingLabel(level: StatusBarProps['isThinking']): string {
+type ThinkingInfo = {
+  label: string;
+  color: 'cyan' | 'yellow' | 'magenta';
+} | null;
+
+/** Matches readline statusbar.ts _thinkingPart: low=cyan, medium=yellow, high=magenta */
+function thinkingInfo(level: StatusBarProps['isThinking']): ThinkingInfo {
   switch (level) {
-    case 'low': return ' thinking...';
-    case 'medium': return ' thinking...';
-    case 'high': return ' thinking...';
-    default: return '';
+    case 'low':    return { label: ' thinking...', color: 'cyan' };
+    case 'medium': return { label: ' thinking...', color: 'yellow' };
+    case 'high':   return { label: ' thinking...', color: 'magenta' };
+    default: return null;
   }
+}
+
+/** Token percentage color: ≥85%=red, ≥60%=yellow, <60%=green — matches readline _ctxColor */
+function tokenColor(pct: number): 'red' | 'yellow' | 'green' {
+  if (pct >= 85) return 'red';
+  if (pct >= 60) return 'yellow';
+  return 'green';
 }
 
 export function StatusBar({
@@ -37,9 +50,11 @@ export function StatusBar({
   mode,
 }: StatusBarProps): React.JSX.Element {
   const pct = contextLength > 0 ? Math.round((estimatedTokens / contextLength) * 100) : 0;
-  const tokenStr = estimatedTokens > 0 ? ` ${estimatedTokens.toLocaleString()}/${(contextLength / 1000).toFixed(0)}k (${pct}%)` : '';
+  const pctCapped = Math.min(pct, 100);
+  const hasTokens = estimatedTokens > 0;
+  const tknColor = tokenColor(pctCapped);
   const modeStr = mode && mode !== 'default' ? ` [${mode}]` : '';
-  const thinkStr = thinkingLabel(isThinking);
+  const thinking = thinkingInfo(isThinking);
 
   return (
     <Box borderStyle="single" borderColor="gray" paddingLeft={1} paddingRight={1} flexDirection="row" justifyContent="space-between">
@@ -47,11 +62,16 @@ export function StatusBar({
         <Text color="cyan" bold>{domain}</Text>
         <Text color="gray">·</Text>
         <Text color="white">{model}</Text>
-        {modeStr && <Text color="yellow">{modeStr}</Text>}
-        {thinkStr && <Text color="yellow" dimColor>{thinkStr}</Text>}
+        {modeStr ? <Text color="yellow">{modeStr}</Text> : null}
+        {thinking ? <Text color={thinking.color} dimColor>{thinking.label}</Text> : null}
       </Box>
       <Box flexDirection="row" gap={1}>
-        {tokenStr && <Text color="gray">{tokenStr}</Text>}
+        {hasTokens ? (
+          <>
+            <Text color={tknColor}>{estimatedTokens.toLocaleString()}/{(contextLength / 1000).toFixed(0)}k</Text>
+            <Text color={tknColor} dimColor>({pctCapped}%)</Text>
+          </>
+        ) : null}
         <Text color="gray" dimColor>#{sessionId}</Text>
       </Box>
     </Box>
