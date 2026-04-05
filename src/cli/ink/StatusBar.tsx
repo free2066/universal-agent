@@ -57,24 +57,21 @@ export function StatusBar({
   const thinking = thinkingInfo(isThinking);
 
   return (
-    <Box borderStyle="single" borderColor="gray" paddingLeft={1} paddingRight={1} flexDirection="row">
-      <Box flexDirection="row" gap={1}>
-        <Text color="cyan" bold>{domain}</Text>
-        <Text color="gray">·</Text>
-        <Text color="white">{model}</Text>
-        {modeStr ? <Text color="yellow">{modeStr}</Text> : null}
-        {thinking ? <Text color={thinking.color} dimColor>{thinking.label}</Text> : null}
-      </Box>
-      <Box flexGrow={1} />
-      <Box flexDirection="row" gap={1}>
-        {hasTokens ? (
-          <>
-            <Text color={tknColor}>{estimatedTokens.toLocaleString()}/{(contextLength / 1000).toFixed(0)}k</Text>
-            <Text color={tknColor} dimColor>({pctCapped}%)</Text>
-          </>
-        ) : null}
-        <Text color="gray" dimColor>#{sessionId}</Text>
-      </Box>
+    <Box flexDirection="row" gap={1} paddingLeft={1}>
+      <Text color="cyan" bold>{domain}</Text>
+      <Text color="gray">·</Text>
+      <Text color="white">{model}</Text>
+      {modeStr ? <Text color="yellow">{modeStr}</Text> : null}
+      {thinking ? <Text color={thinking.color} dimColor>{thinking.label}</Text> : null}
+      {hasTokens ? (
+        <>
+          <Text color="gray">·</Text>
+          <Text color={tknColor}>{estimatedTokens.toLocaleString()}/{(contextLength / 1000).toFixed(0)}k</Text>
+          <Text color={tknColor} dimColor>({pctCapped}%)</Text>
+        </>
+      ) : null}
+      <Text color="gray">·</Text>
+      <Text color="gray" dimColor>#{sessionId.slice(0, 8)}</Text>
     </Box>
   );
 }
