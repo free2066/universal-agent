@@ -2,14 +2,7 @@
  * StatusBar — compact bottom info line.
  *
  * Format:
- *   [domain/model | thinking: low] | project | sentTokens | sessionTokens/maxCtx (pct%) | sessionId
- *
- * Fields:
- *   1. [domain/model]           — bracket group; thinking appended when active
- *   2. project                  — basename(cwd)
- *   3. sentTokens               — tokens actually sent to model (post-compact)
- *   4. sessionTokens/maxCtx(%)  — raw session size / model max context
- *   5. sessionId                — first 8 chars
+ *   [domain/model | thinking: low] | project | sentTokens | sessionTokens/maxCtx (pct%) | ID xxxxxxxx
  */
 
 import React from 'react';
@@ -55,18 +48,12 @@ export function StatusBar({
   isThinking = 'none',
   mode,
 }: StatusBarProps): React.JSX.Element {
-  const project  = basename(process.cwd());
-  const shortId  = sessionId.slice(0, 8);
-
-  // Sent-to-model tokens (post-compact)
-  const hasSent  = estimatedTokens > 0;
-
-  // Session tokens / context ratio
-  const sessTokens = sessionTokens ?? estimatedTokens;  // fallback to estimatedTokens if not provided
+  const project    = basename(process.cwd());
+  const shortId    = sessionId.slice(0, 8);
+  const sessTokens = sessionTokens ?? estimatedTokens;
   const pct        = contextLength > 0 ? Math.round((sessTokens / contextLength) * 100) : 0;
   const pctCapped  = Math.min(pct, 100);
   const tknColor   = tokenColor(pctCapped);
-  const hasSession = sessTokens > 0;
 
   return (
     <Box flexDirection="row" paddingLeft={1}>
@@ -89,29 +76,22 @@ export function StatusBar({
       {/* 2. project name */}
       <Text color="gray">{project}</Text>
 
-      {/* 3. sent tokens — what model actually received (post-compact) */}
-      {hasSent ? (
-        <>
-          {SEP}
-          <Text color="white">{fmtN(estimatedTokens)}</Text>
-        </>
-      ) : null}
+      {/* 3. sent tokens — what model actually received (post-compact), always shown */}
+      {SEP}
+      <Text color="white">{fmtN(estimatedTokens)}</Text>
 
-      {/* 4. session/max (pct%) — raw session size vs model context limit */}
-      {hasSession ? (
-        <>
-          {SEP}
-          <Text color={tknColor}>{fmtN(sessTokens)}</Text>
-          <Text color="gray" dimColor>/</Text>
-          <Text color={tknColor}>{fmtN(contextLength)}</Text>
-          <Text color={tknColor} dimColor>{` (${pctCapped}%)`}</Text>
-        </>
-      ) : null}
+      {/* 4. session/max (pct%) — raw session size vs model context limit, always shown */}
+      {SEP}
+      <Text color={tknColor}>{fmtN(sessTokens)}</Text>
+      <Text color="gray" dimColor>/</Text>
+      <Text color={tknColor}>{fmtN(contextLength)}</Text>
+      <Text color={tknColor} dimColor>{` (${pctCapped}%)`}</Text>
 
       {SEP}
 
-      {/* 5. session ID */}
-      <Text color="gray" dimColor>{shortId}</Text>
+      {/* 5. session ID with "ID" label */}
+      <Text color="gray" dimColor>ID </Text>
+      <Text color="gray">{shortId}</Text>
 
     </Box>
   );
