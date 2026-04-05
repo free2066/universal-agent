@@ -45,7 +45,7 @@ import {
 } from '../tools/productivity/terminal-ipc-tool.js';
 import { redisProbeTool } from '../tools/productivity/redis-probe.js';
 import { databaseQueryTool } from '../tools/productivity/database-query.js';
-import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool } from '../task-board.js';
+import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool } from '../task-board.js';
 import { backgroundRunTool, checkBackgroundTool, killBashTool } from '../tools/productivity/background-tools.js';
 import { todoWriteTool } from '../tools/productivity/todo-tool.js';
 import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
@@ -187,7 +187,7 @@ export function registerAllTools(
   reg(autopilotRunTool);
 
   // s07 — persistent task board (+ s11 claim)
-  regMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool]);
+  regMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool]);
   reg(claimTaskFromBoardTool);
 
   // s08 — background command execution

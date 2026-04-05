@@ -30,7 +30,7 @@ import type { ToolRegistration } from '../models/types.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
 export interface Task {
   id: number;
@@ -173,7 +173,7 @@ export class TaskBoard {
       } catch { return []; }
     });
     const lines = tasks.map((t) => {
-      const marker = { pending: '[ ]', in_progress: '[>]', completed: '[x]' }[t.status] ?? '[?]';
+      const marker = { pending: '[ ]', in_progress: '[>]', completed: '[x]', cancelled: '[✗]' }[t.status] ?? '[?]';
       const blocked = t.blockedBy.length > 0 ? ` (blocked by: ${t.blockedBy.join(', ')})` : '';
       const owner = t.owner ? ` @${t.owner}` : '';
       return `${marker} #${t.id}: ${t.subject}${owner}${blocked}`;
@@ -207,6 +207,26 @@ export class TaskBoard {
     task.updatedAt = Date.now();
     this.save(task);
     return `Claimed task #${id} for ${owner}`;
+  }
+
+  /**
+   * Cancel / stop a task.
+   * Sets status to 'cancelled' and optionally records a reason.
+   * Cancelled tasks are treated like completed tasks for dependency resolution.
+   */
+  cancel(id: number, reason?: string): string {
+    const task = this.load(id);
+    if (task.status === 'completed') {
+      return `Task #${id} is already completed — nothing to cancel.`;
+    }
+    task.status = 'cancelled';
+    (task as Task & { cancelledReason?: string }).cancelledReason = reason ?? 'stopped by agent';
+    task.updatedAt = Date.now();
+    this.save(task);
+    // Treat cancellation like completion for dependency resolution
+    this.clearDependency(id);
+    const reasonStr = reason ? ` Reason: ${reason}` : '';
+    return `Task #${id} cancelled.${reasonStr}`;
   }
 }
 
@@ -272,7 +292,7 @@ export const taskUpdateTool: ToolRegistration = {
         task_id: { type: "number", description: 'Task ID to update.' },
         status: {
           type: 'string',
-          enum: ['pending', 'in_progress', 'completed'],
+          enum: ['pending', 'in_progress', 'completed', 'cancelled'],
           description: 'New status.',
         },
         add_blocked_by: {
@@ -326,5 +346,34 @@ export const taskGetTool: ToolRegistration = {
   },
   handler: async (args: Record<string, unknown>): Promise<string> => {
     return getTaskBoard(process.cwd()).get(args.task_id as number);
+  },
+};
+
+export const taskStopTool: ToolRegistration = {
+  definition: {
+    name: 'task_stop',
+    description: [
+      'Cancel / stop a running or pending task.',
+      'Marks the task as cancelled and unblocks any tasks that were waiting for it.',
+      'Use this when a task is no longer needed, has been superseded, or encountered',
+      'an unrecoverable error that prevents completion.',
+    ].join(' '),
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'number', description: 'ID of the task to cancel.' },
+        reason: {
+          type: 'string',
+          description: 'Optional reason for cancellation (recorded in the task file).',
+        },
+      },
+      required: ['task_id'],
+    },
+  },
+  handler: async (args: Record<string, unknown>): Promise<string> => {
+    return getTaskBoard(process.cwd()).cancel(
+      args.task_id as number,
+      args.reason as string | undefined,
+    );
   },
 };
