@@ -1,9 +1,13 @@
 /**
- * MessageList — scrollable history of chat messages.
+ * MessageList — virtualized-style message history for Ink terminal.
  *
- * Renders the agent conversation history.
- * Kept simple: no full virtualization (Ink doesn't support scroll),
- * but limits visible messages to the last N to avoid terminal overflow.
+ * Ink doesn't support real DOM virtualization, so we implement a
+ * "window" approach: only render a fixed-size window of messages,
+ * controlled by scrollOffset prop.  Messages outside the window are
+ * replaced by a compact summary line.
+ *
+ * Keyboard scrolling (PageUp/PageDown) is handled in App.tsx which
+ * passes the scrollOffset state down here.
  */
 
 import React from 'react';
@@ -16,11 +20,28 @@ export interface ChatMessage {
   timestamp?: string;
 }
 
-const MAX_VISIBLE = 20; // show last N messages
+/** How many messages to show in the visible window */
+export const MSG_WINDOW_SIZE = 30;
+/** Max chars to show per assistant message before truncating */
+const MAX_ASSISTANT_CHARS = 6000;
+/** Max lines to show per assistant message */
+const MAX_ASSISTANT_LINES = 80;
 
-function truncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen - 3) + '...';
+function truncateAssistant(text: string): { display: string; truncated: boolean } {
+  const lines = text.split('\n');
+  if (lines.length > MAX_ASSISTANT_LINES) {
+    return {
+      display: lines.slice(0, MAX_ASSISTANT_LINES).join('\n'),
+      truncated: true,
+    };
+  }
+  if (text.length > MAX_ASSISTANT_CHARS) {
+    return {
+      display: text.slice(0, MAX_ASSISTANT_CHARS),
+      truncated: true,
+    };
+  }
+  return { display: text, truncated: false };
 }
 
 function UserMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
@@ -34,11 +55,7 @@ function UserMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
 }
 
 function AssistantMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
-  // Truncate very long assistant messages in the history view
-  const MAX_DISPLAY = 8000;
-  const display = msg.content.length > MAX_DISPLAY
-    ? msg.content.slice(0, MAX_DISPLAY) + `\n... (${msg.content.length - MAX_DISPLAY} chars hidden — full content in session log)`
-    : msg.content;
+  const { display, truncated } = truncateAssistant(msg.content);
   return (
     <Box flexDirection="column">
       <Box gap={1}>
@@ -48,34 +65,64 @@ function AssistantMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
       <Box paddingLeft={2}>
         <Text wrap="wrap">{display}</Text>
       </Box>
+      {truncated && (
+        <Box paddingLeft={2}>
+          <Text color="gray" dimColor>
+            ... ({msg.content.length - display.length} chars hidden — full content in session log)
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }
 
-export function MessageList({ messages }: { messages: ChatMessage[] }): React.JSX.Element {
-  const visible = messages.slice(-MAX_VISIBLE);
-  const hidden = messages.length - visible.length;
+export interface MessageListProps {
+  messages: ChatMessage[];
+  /** Scroll offset from the end: 0 = show latest, 1 = scroll back 1 window, etc. */
+  scrollOffset?: number;
+}
+
+export function MessageList({ messages, scrollOffset = 0 }: MessageListProps): React.JSX.Element {
+  const total = messages.length;
+
+  // Calculate visible window
+  // scrollOffset=0 → show last MSG_WINDOW_SIZE
+  // scrollOffset=1 → show MSG_WINDOW_SIZE before last window, etc.
+  const windowEnd = Math.max(0, total - scrollOffset * Math.floor(MSG_WINDOW_SIZE / 2));
+  const windowStart = Math.max(0, windowEnd - MSG_WINDOW_SIZE);
+  const visible = messages.slice(windowStart, windowEnd);
+  const hiddenAbove = windowStart;
+  const hiddenBelow = total - windowEnd;
 
   return (
     <Box flexDirection="column" flexGrow={1}>
-      {hidden > 0 && (
+      {hiddenAbove > 0 && (
         <Box paddingBottom={1}>
-          <Text color="gray" dimColor>... {hidden} earlier messages (use /compact to trim)</Text>
+          <Text color="gray" dimColor>
+            ↑ {hiddenAbove} earlier message{hiddenAbove !== 1 ? 's' : ''} hidden
+            {scrollOffset > 0 ? ' — PgDn to scroll down' : ' — PgUp to scroll up'}
+          </Text>
         </Box>
       )}
+
       {visible.map((msg, idx) => {
-        const key = `${msg.role}-${idx}`;
+        const key = `${msg.role}-${windowStart + idx}`;
         if (msg.role === 'user') return <UserMessage key={key} msg={msg} />;
         if (msg.role === 'assistant') return <AssistantMessage key={key} msg={msg} />;
-        // system/tool messages rendered dimmed
-        // NOTE: do NOT truncate system messages — /models list and other multi-line
-        // system outputs need the full content to be visible.
         return (
           <Box key={key}>
             <Text color="gray" dimColor>{msg.content}</Text>
           </Box>
         );
       })}
+
+      {hiddenBelow > 0 && (
+        <Box paddingTop={1}>
+          <Text color="gray" dimColor>
+            ↓ {hiddenBelow} newer message{hiddenBelow !== 1 ? 's' : ''} — PgDn to scroll down
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }

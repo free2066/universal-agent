@@ -35,6 +35,24 @@ export function loadSnapshot(sessionId: string): SessionSnapshot | null {
   } catch { return null; }
 }
 
+/** Return all snapshots sorted by mtime descending (newest first), up to limit. */
+export function listAllSnapshots(limit = 15): Array<{ sessionId: string; savedAt: number; messageCount: number; mtime: number }> {
+  try {
+    ensureDir();
+    const files = readdirSync(SESSIONS_DIR)
+      .filter((f) => f.endsWith('.json'));
+    const items = files.map((f) => {
+      try {
+        const p = resolve(SESSIONS_DIR, f);
+        const mtime = statSync(p).mtimeMs;
+        const raw = JSON.parse(readFileSync(p, 'utf-8')) as SessionSnapshot;
+        return { sessionId: raw.sessionId, savedAt: raw.savedAt, messageCount: raw.messages.length, mtime };
+      } catch { return null; }
+    }).filter(Boolean) as Array<{ sessionId: string; savedAt: number; messageCount: number; mtime: number }>;
+    return items.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+  } catch { return []; }
+}
+
 /** Return the most recently modified snapshot (any session). */
 export function loadLastSnapshot(): SessionSnapshot | null {
   try {

@@ -23,7 +23,7 @@ import { modelManager } from '../../models/model-manager.js';
 import { SessionLogger } from '../session-logger.js';
 
 const SLASH_COMPLETIONS = [
-  '/help', '/clear', '/exit', '/resume', '/compact', '/tokens', '/cost',
+  '/help', '/clear', '/exit', '/resume', '/rewind', '/compact', '/tokens', '/cost',
   '/model', '/models', '/domain', '/continue',
   '/review', '/inspect', '/purify',
   '/spec', '/spec:brainstorm', '/spec:write-plan', '/spec:execute-plan',
@@ -32,7 +32,7 @@ const SLASH_COMPLETIONS = [
   '/mcp', '/log', '/logs',
   '/context', '/status', '/copy', '/export',
   '/branch', '/rename', '/add-dir',
-  '/terminal-setup', '/bug', '/output-style',
+  '/terminal-setup', '/bug', '/doctor', '/output-style',
   '/skills', '/plugin', '/logout',
   '/metrics', '/plugins',
 ];
@@ -83,6 +83,8 @@ export function App({
   // Keep ref in sync with state
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  // Scroll offset for virtualized message list (0=latest, higher=older)
+  const [msgScrollOffset, setMsgScrollOffset] = useState(0);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
@@ -197,6 +199,8 @@ export function App({
       }
       return [...prev, { role, content: text, timestamp: new Date().toISOString() }];
     });
+    // Auto-scroll to bottom when new message arrives
+    setMsgScrollOffset(0);
   }, []);
 
   const appendAssistant = useCallback((text: string) => appendMessage('assistant', text), [appendMessage]);
@@ -401,25 +405,55 @@ export function App({
     }
 
     // ── /tokens /context ────────────────────────────────────────────────────
-    // (readline parity: agent-handlers.ts handleContext uses "Context Window Stats" title
-    //  and "Messages in ctx" field; handleCompactOrTokens uses "Context Usage" / "Turns in history")
     if (cmd === '/context') {
       const { shouldCompact } = await import('../../core/context/context-compressor.js');
       const history = agent.getHistory();
       const decision = shouldCompact(history);
-      const pct = ((decision.estimatedTokens / decision.contextLength) * 100).toFixed(1);
-      setInfoOverlay([
-        'Context Window Stats:',
-        `  Estimated tokens : ${decision.estimatedTokens.toLocaleString()}`,
-        `  Context limit    : ${decision.contextLength.toLocaleString()}`,
-        `  Usage            : ${pct}%`,
-        `  Messages in ctx  : ${history.length}`,
-        `  Compact needed   : ${decision.shouldCompact ? 'Yes' : 'No'}`,
+      const used = decision.estimatedTokens;
+      const total = decision.contextLength;
+      const pct = total > 0 ? Math.round((used / total) * 100) : 0;
+      const pctCapped = Math.min(pct, 100);
+
+      // ASCII progress bar — 40 chars wide
+      const BAR_WIDTH = 40;
+      const filled = Math.round((pctCapped / 100) * BAR_WIDTH);
+      const bar = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+      const barColor = pctCapped >= 85 ? '!' : pctCapped >= 60 ? '~' : ' ';
+
+      // Per-role token breakdown (rough: char / 4)
+      const roleBuckets: Record<string, number> = { system: 0, user: 0, assistant: 0, tool: 0 };
+      for (const m of history) {
+        const role = m.role === 'tool' ? 'tool' : (m.role as string) in roleBuckets ? m.role as string : 'user';
+        const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        roleBuckets[role] = (roleBuckets[role] ?? 0) + Math.ceil(text.length / 4);
+      }
+      const bucketTotal = Object.values(roleBuckets).reduce((a, b) => a + b, 0) || 1;
+      const fmtN = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+
+      const mkRoleBar = (n: number, color: string) => {
+        const w = Math.max(1, Math.round((n / bucketTotal) * 20));
+        return color.repeat(w);
+      };
+
+      const lines = [
+        'Context Window',
         '',
-        '  Tip: /compact — compress context; /clear — start fresh',
+        `  [${bar}] ${barColor} ${pctCapped}%  (${fmtN(used)} / ${fmtN(total)})`,
+        '',
+        '  Breakdown by role:',
+        `  ${'system'.padEnd(10)} ${'▓'.repeat(Math.max(1, Math.round((roleBuckets.system / bucketTotal) * 24))).padEnd(24)}  ${fmtN(roleBuckets.system).padStart(6)}  (${Math.round((roleBuckets.system / bucketTotal) * 100)}%)`,
+        `  ${'user'.padEnd(10)} ${'▓'.repeat(Math.max(1, Math.round((roleBuckets.user / bucketTotal) * 24))).padEnd(24)}  ${fmtN(roleBuckets.user).padStart(6)}  (${Math.round((roleBuckets.user / bucketTotal) * 100)}%)`,
+        `  ${'assistant'.padEnd(10)} ${'▓'.repeat(Math.max(1, Math.round((roleBuckets.assistant / bucketTotal) * 24))).padEnd(24)}  ${fmtN(roleBuckets.assistant).padStart(6)}  (${Math.round((roleBuckets.assistant / bucketTotal) * 100)}%)`,
+        `  ${'tool'.padEnd(10)} ${'▓'.repeat(Math.max(1, Math.round((roleBuckets.tool / bucketTotal) * 24))).padEnd(24)}  ${fmtN(roleBuckets.tool).padStart(6)}  (${Math.round((roleBuckets.tool / bucketTotal) * 100)}%)`,
+        '',
+        `  Messages in ctx  : ${history.length}`,
+        `  Compact needed   : ${decision.shouldCompact ? 'Yes — run /compact' : 'No'}`,
+        '',
+        '  Tip: /compact — compress context;  /clear — start fresh',
         '',
         '  [any key to close]',
-      ].join('\n'));
+      ];
+      setInfoOverlay(lines.join('\n'));
       return;
     }
     if (cmd === '/tokens') {
@@ -494,104 +528,98 @@ export function App({
       return;
     }
 
+    // ── /rewind — interactive snapshot picker ────────────────────────────────
+    if (cmd === '/rewind') {
+      const { listAllSnapshots, loadSnapshot } = await import('../../core/memory/session-snapshot.js');
+      const { getContentText } = await import('../../models/types.js');
+      const snaps = listAllSnapshots(12);
+      if (!snaps.length) {
+        appendSystem('No saved snapshots found. Use /branch to save a snapshot.');
+        return;
+      }
+      const fmtAge = (ts: number) => {
+        const d = Date.now() - ts;
+        if (d < 60000) return `${Math.round(d / 1000)}s ago`;
+        if (d < 3600000) return `${Math.round(d / 60000)}m ago`;
+        if (d < 86400000) return `${Math.round(d / 3600000)}h ago`;
+        return `${Math.round(d / 86400000)}d ago`;
+      };
+      setGenericPicker({
+        title: 'Rewind to snapshot  (↑↓ navigate · Enter restore · Esc cancel)',
+        items: snaps.map((s) => ({
+          id: s.sessionId,
+          label: s.sessionId.slice(0, 28),
+          detail: `${fmtAge(s.savedAt)}  ${s.messageCount} msgs`,
+        })),
+        onSelect: (item) => {
+          const snap = loadSnapshot(item.id);
+          if (snap && snap.messages.length >= 2) {
+            agent.setHistory(snap.messages as never);
+            const restored = snap.messages
+              .filter((m) => m.role === 'user' || m.role === 'assistant')
+              .map((m) => ({
+                role: m.role as 'user' | 'assistant',
+                content: getContentText(m.content),
+                timestamp: new Date().toISOString(),
+              }));
+            setMessages(restored);
+            appendSystem(`Rewound to "${item.id}" (${snap.messages.length} messages)`);
+          } else {
+            appendSystem(`Failed to load snapshot "${item.id}".`);
+          }
+        },
+      });
+      setGenericPickerIdx(0);
+      return;
+    }
+
     // ── /resume [session-id] ─────────────────────────────────────────────────
     if (cmd.startsWith('/resume')) {
-      const { loadSnapshot, loadLastSnapshot } = await import('../../core/memory/session-snapshot.js');
-      const formatAge = (ts: number) => {
-        const diff = Date.now() - ts;
-        if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
-        if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
-        return `${Math.round(diff / 3600000)}h ago`;
+      const { loadSnapshot, listAllSnapshots } = await import('../../core/memory/session-snapshot.js');
+      const { getContentText } = await import('../../models/types.js');
+      const fmtAge = (ts: number) => {
+        const d = Date.now() - ts;
+        if (d < 60000) return `${Math.round(d / 1000)}s ago`;
+        if (d < 3600000) return `${Math.round(d / 60000)}m ago`;
+        if (d < 86400000) return `${Math.round(d / 3600000)}h ago`;
+        return `${Math.round(d / 86400000)}d ago`;
+      };
+      const doRestore = (snapId: string) => {
+        const snap = loadSnapshot(snapId);
+        if (snap && snap.messages.length >= 2) {
+          agent.setHistory(snap.messages as never);
+          const restored: ChatMessage[] = snap.messages
+            .filter((m) => m.role === 'user' || m.role === 'assistant')
+            .map((m) => ({
+              role: m.role as 'user' | 'assistant',
+              content: getContentText(m.content),
+              timestamp: new Date().toISOString(),
+            }));
+          setMessages(restored);
+          appendSystem(`Restored session "${snapId}" (${snap.messages.length} messages)`);
+        } else {
+          appendSystem(`Session "${snapId}" not found or empty.`);
+        }
       };
       if (sub) {
-        const snap = loadSnapshot(sub);
-        if (snap && snap.messages.length >= 2) {
-          agent.setHistory(snap.messages as never);
-          // Restore messages in UI
-          const { getContentText } = await import('../../models/types.js');
-          const restored: ChatMessage[] = snap.messages
-            .filter((m) => m.role === 'user' || m.role === 'assistant')
-            .map((m) => ({
-              role: m.role as 'user' | 'assistant',
-              content: getContentText(m.content),
-              timestamp: new Date().toISOString(),
-            }));
-          setMessages(restored);
-          appendSystem(`Restored session "${sub}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`);
-        } else {
-          // Session not found: list available sessions (readline parity)
-          try {
-            const { readdirSync, statSync: ss, existsSync: es } = await import('fs');
-            const { resolve: r2, join: j2 } = await import('path');
-            const sessDir = r2(process.env.HOME ?? '~', '.uagent', 'sessions');
-            if (es(sessDir)) {
-              const files = readdirSync(sessDir)
-                .filter((f) => f.endsWith('.json'))
-                .sort((a, b) => ss(j2(sessDir, b)).mtimeMs - ss(j2(sessDir, a)).mtimeMs)
-                .slice(0, 10);
-              if (files.length > 0) {
-                const lines = [`Session "${sub}" not found. Available sessions:`, ''];
-                files.forEach((f, i) => {
-                  const id = f.replace('.json', '');
-                  const mtime = ss(j2(sessDir, f)).mtimeMs;
-                  lines.push(`  ${String(i + 1).padStart(2)}.  ${id}  (${formatAge(mtime)})`);
-                });
-                lines.push('', '  Use: /resume <session-id>');
-                setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
-              } else {
-                appendSystem(`Session "${sub}" not found. No saved sessions available.`);
-              }
-            } else {
-              appendSystem(`Session "${sub}" not found.`);
-            }
-          } catch {
-            appendSystem(`Session "${sub}" not found.`);
-          }
-        }
+        doRestore(sub);
       } else {
-        const snap = loadLastSnapshot();
-        if (snap && snap.messages.length >= 2) {
-          agent.setHistory(snap.messages as never);
-          const { getContentText } = await import('../../models/types.js');
-          const restored: ChatMessage[] = snap.messages
-            .filter((m) => m.role === 'user' || m.role === 'assistant')
-            .map((m) => ({
-              role: m.role as 'user' | 'assistant',
-              content: getContentText(m.content),
-              timestamp: new Date().toISOString(),
-            }));
-          setMessages(restored);
-          appendSystem(`Restored last session from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`);
-        } else {
-          // No last snapshot: list available sessions
-          try {
-            const { readdirSync, statSync: ss2, existsSync: es2 } = await import('fs');
-            const { resolve: r3, join: j3 } = await import('path');
-            const sessDir2 = r3(process.env.HOME ?? '~', '.uagent', 'sessions');
-            if (es2(sessDir2)) {
-              const files2 = readdirSync(sessDir2)
-                .filter((f) => f.endsWith('.json'))
-                .sort((a, b) => ss2(j3(sessDir2, b)).mtimeMs - ss2(j3(sessDir2, a)).mtimeMs)
-                .slice(0, 10);
-              if (files2.length > 0) {
-                const lines2 = ['No last session. Available sessions:', ''];
-                files2.forEach((f, i) => {
-                  const id = f.replace('.json', '');
-                  const mtime = ss2(j3(sessDir2, f)).mtimeMs;
-                  lines2.push(`  ${String(i + 1).padStart(2)}.  ${id}  (${formatAge(mtime)})`);
-                });
-                lines2.push('', '  Use: /resume <session-id>');
-                appendSystem(lines2.join('\n'));
-              } else {
-                appendSystem('No saved sessions found.');
-              }
-            } else {
-              appendSystem('No saved sessions found.');
-            }
-          } catch {
-            appendSystem('No saved session found.');
-          }
+        // No arg: show interactive picker
+        const snaps = listAllSnapshots(12);
+        if (!snaps.length) {
+          appendSystem('No saved sessions found. Use /branch to save one.');
+          return;
         }
+        setGenericPicker({
+          title: 'Resume session  (↑↓ navigate · Enter select · Esc cancel)',
+          items: snaps.map((s) => ({
+            id: s.sessionId,
+            label: s.sessionId.slice(0, 28),
+            detail: `${fmtAge(s.savedAt)}  ${s.messageCount} msgs`,
+          })),
+          onSelect: (item) => doRestore(item.id),
+        });
+        setGenericPickerIdx(0);
       }
       return;
     }
@@ -962,6 +990,74 @@ export function App({
         '',
         '  Tip: /export — save full conversation to a file',
       ].join('\n'));
+      return;
+    }
+
+    // ── /doctor — environment diagnostics ────────────────────────────────────
+    if (cmd === '/doctor') {
+      const lines: string[] = ['Doctor — Environment Diagnostics', ''];
+      // Node / runtime
+      lines.push(`  Runtime      : Node ${process.version}  (${process.platform}/${process.arch})`);
+      lines.push(`  Working dir  : ${process.cwd()}`);
+      lines.push(`  Session      : ${sessionId}`);
+      lines.push(`  Session log  : ${sessionLogger.current.path}`);
+      lines.push('');
+      // Model info
+      try {
+        const m = modelManager.getCurrentModel('main');
+        lines.push(`  Model (main) : ${m}`);
+        const mTask = modelManager.getCurrentModel('task');
+        const mCompact = modelManager.getCurrentModel('compact');
+        if (mTask !== m) lines.push(`  Model (task) : ${mTask}`);
+        if (mCompact !== m) lines.push(`  Model (cmpct): ${mCompact}`);
+      } catch { lines.push('  Model        : (unavailable)'); }
+      lines.push('');
+      // API keys
+      const keyChecks: Array<[string, string]> = [
+        ['OPENAI_API_KEY', 'OpenAI'],
+        ['ANTHROPIC_API_KEY', 'Anthropic'],
+        ['GOOGLE_API_KEY', 'Google'],
+        ['DEEPSEEK_API_KEY', 'DeepSeek'],
+        ['MOONSHOT_API_KEY', 'Moonshot'],
+      ];
+      lines.push('  API keys:');
+      for (const [env, name] of keyChecks) {
+        const val = process.env[env];
+        const status = val ? `set (${val.slice(0, 6)}...)` : 'not set';
+        lines.push(`    ${name.padEnd(12)}: ${status}`);
+      }
+      lines.push('');
+      // MCP servers
+      try {
+        const { MCPManager } = await import('../../core/mcp-manager.js');
+        const mcpMgr = new MCPManager(process.cwd());
+        const servers = mcpMgr.listServers();
+        if (servers.length) {
+          lines.push(`  MCP servers  : ${servers.length} configured`);
+          for (const s of servers.slice(0, 5)) {
+            lines.push(`    ${String(s.name ?? '').padEnd(20)} ${s.enabled ? 'enabled' : 'disabled'} (${s.type})`);
+          }
+        } else {
+          lines.push('  MCP servers  : none configured');
+        }
+      } catch { lines.push('  MCP servers  : (unavailable)'); }
+      lines.push('');
+      // Memory
+      try {
+        const { getMemoryStore } = await import('../../core/memory/memory-store.js');
+        const store = getMemoryStore();
+        const stats = store.stats();
+        lines.push(`  Memory       : ${stats.total} items (pinned:${stats.pinned} insight:${stats.insight} fact:${stats.fact})`);
+      } catch { lines.push('  Memory       : (unavailable)'); }
+      // Snapshots
+      try {
+        const { listAllSnapshots } = await import('../../core/memory/session-snapshot.js');
+        const snaps = listAllSnapshots(3);
+        lines.push(`  Snapshots    : ${snaps.length > 0 ? snaps.length + ' recent (latest: ' + snaps[0]?.sessionId.slice(0, 16) + ')' : 'none'}`);
+      } catch { /* */ }
+      lines.push('');
+      lines.push('  [any key to close]');
+      setInfoOverlay(lines.join('\n'));
       return;
     }
 
@@ -1472,12 +1568,14 @@ export function App({
         '    /log             show session log path',
         '    /logs            list recent sessions',
         '    /status          show session info',
-        '    /resume [id]     restore last (or specific) session',
+        '    /resume [id]     interactive session picker (or restore by id)',
+        '    /rewind          interactive snapshot picker — restore any saved snapshot',
         '    /branch          save a branch of current session',
         '    /rename <name>   save session with a name',
         '    /export [dir]    export conversation to markdown',
         '    /copy            copy last AI reply to clipboard',
         '    /bug [desc]      show bug report info',
+        '    /doctor          environment diagnostics (model, API keys, MCP, memory)',
         '    /clear           clear history and screen',
         '    /exit  /quit     exit',
         '',
@@ -1981,6 +2079,16 @@ export function App({
       return;
     }
 
+    // ── Message list scroll: PageUp / PageDown ─────────────────────────────
+    if (key.pageUp) {
+      setMsgScrollOffset((n) => n + 1);
+      return;
+    }
+    if (key.pageDown) {
+      setMsgScrollOffset((n) => Math.max(0, n - 1));
+      return;
+    }
+
     // ── Generic picker (domain / output-style / spec / agents): ↑↓ Enter Esc ─
     if (genericPicker) {
       if (key.upArrow) {
@@ -2300,7 +2408,7 @@ export function App({
             </Text>
           </Box>
         )}
-        <MessageList messages={messages} />
+        <MessageList messages={messages} scrollOffset={msgScrollOffset} />
       </Box>
 
       {/* Active tool calls */}
