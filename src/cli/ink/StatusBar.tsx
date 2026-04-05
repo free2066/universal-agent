@@ -57,7 +57,7 @@ export function StatusBar({
   const thinking = thinkingInfo(isThinking);
 
   return (
-    <Box borderStyle="single" borderColor="gray" paddingLeft={1} paddingRight={1} flexDirection="row" justifyContent="space-between">
+    <Box borderStyle="single" borderColor="gray" paddingLeft={1} paddingRight={1} flexDirection="row">
       <Box flexDirection="row" gap={1}>
         <Text color="cyan" bold>{domain}</Text>
         <Text color="gray">·</Text>
@@ -65,6 +65,7 @@ export function StatusBar({
         {modeStr ? <Text color="yellow">{modeStr}</Text> : null}
         {thinking ? <Text color={thinking.color} dimColor>{thinking.label}</Text> : null}
       </Box>
+      <Box flexGrow={1} />
       <Box flexDirection="row" gap={1}>
         {hasTokens ? (
           <>
