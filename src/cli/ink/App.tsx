@@ -480,7 +480,7 @@ export function App({
       const history = agent.getHistory();
       const branchId = `branch-${Date.now()}`;
       saveSnapshot(branchId, history);
-      appendSystem(`Branched session saved as: ${branchId}\nUse /resume ${branchId} to restore later.`);
+      appendSystem(`Branched session saved as: ${branchId}\nUse /resume to restore this session later.\nCurrent session continues unchanged.`);
       return;
     }
 
@@ -1083,7 +1083,10 @@ export function App({
         const report = await runInsights({ days, projectRoot: process.cwd() });
         const lines = report.markdown.split('\n');
         const condensed = lines.slice(0, 60).join('\n');
-        appendSystem(condensed + (lines.length > 60 ? `\n... (${lines.length - 60} more lines)` : ''));
+        const truncated = lines.length > 60
+          ? `\n... (${lines.length - 60} more lines — full report saved to ~/.uagent/)`
+          : '';
+        appendSystem(condensed + truncated);
       } catch (err) {
         appendSystem(`Insights failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -1125,7 +1128,7 @@ export function App({
         '  Add: "\\e[13;2u": "\\n"',
         '  Then run: bind -f ~/.inputrc',
         '',
-        'Already supported in uagent: \\ + Enter (universal)',
+        'Already supported in uagent: \\ + Enter (universal), Option+Enter (macOS)',
       ].join('\n'));
       return;
     }
@@ -1777,6 +1780,8 @@ export function App({
         const { join } = await import('path');
         const tmpPath = join('/tmp', `uagent-clip-${Date.now()}.png`);
         let handled = false;
+
+        // ── macOS: pngpaste ──────────────────────────────────────────────
         try {
           execSync('which pngpaste 2>/dev/null', { stdio: 'pipe' });
           try {
@@ -1787,11 +1792,35 @@ export function App({
               (agent as typeof agent & { _pendingImage?: { data: string; mimeType: string } })._pendingImage = { data: base64, mimeType: 'image/png' };
               appendSystem('Image from clipboard attached. Now type your question.');
               handled = true;
+            } else {
+              appendSystem('No image in clipboard. (Tip: copy an image first)');
+              handled = true;
             }
-          } catch { /* pngpaste failed */ }
+          } catch { /* pngpaste ran but failed — no image */ }
         } catch { /* pngpaste not installed */ }
+
+        // ── Linux: xclip (readline parity: repl.ts tries xclip as fallback) ─
         if (!handled) {
-          appendSystem('No image in clipboard. (macOS: brew install pngpaste)');
+          try {
+            execSync('which xclip 2>/dev/null', { stdio: 'pipe' });
+            try {
+              execSync(`xclip -selection clipboard -t image/png -o > "${tmpPath}"`, { shell: '/bin/sh' });
+              if (existsSync(tmpPath)) {
+                const base64 = readFileSync(tmpPath).toString('base64');
+                try { unlinkSync(tmpPath); } catch { /* */ }
+                (agent as typeof agent & { _pendingImage?: { data: string; mimeType: string } })._pendingImage = { data: base64, mimeType: 'image/png' };
+                appendSystem('Image from clipboard attached. Now type your question.');
+                handled = true;
+              } else {
+                appendSystem('No image in clipboard.');
+                handled = true;
+              }
+            } catch { /* xclip failed — no image in clipboard */ }
+          } catch { /* xclip not installed */ }
+        }
+
+        if (!handled) {
+          appendSystem('No image in clipboard.\n  macOS: brew install pngpaste\n  Linux: sudo apt install xclip');
         }
       })();
       return;
