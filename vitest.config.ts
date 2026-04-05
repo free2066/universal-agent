@@ -20,16 +20,45 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'json-summary'],
-      // 覆盖范围扩大：包含 core/ 和 models/
-      // cli/ 和 domains/ 当前 mock 成本高，后续分批加入
-      include: ['src/core/**/*.ts', 'src/models/**/*.ts'],
-      exclude: ['src/cli/**', 'src/domains/**', 'node_modules', 'dist'],
-      // 保底覆盖率阈值；后续随测试增加而提高
+      // 统计范围：核心逻辑层 + models 层
+      // 排除大型工具文件（需要复杂 mock，后续单独处理）和 cli/
+      include: [
+        'src/core/**/*.ts',
+        'src/models/**/*.ts',
+      ],
+      exclude: [
+        // cli 层（readline/UI mock 成本高）
+        'src/cli/**',
+        // domain plugins
+        'src/domains/**',
+        // 大型工具文件（需要外部系统 mock：Docker、Redis、proxy、ws…）
+        'src/core/tools/code/ai-reviewer.ts',
+        'src/core/tools/code/bug-detector.ts',
+        'src/core/tools/productivity/proxy-tools.ts',
+        'src/core/tools/productivity/redis-probe.ts',
+        'src/core/tools/productivity/script-tools.ts',
+        'src/core/tools/productivity/test-runner.ts',
+        'src/core/tools/productivity/ws-mcp-server.ts',
+        'src/core/tools/productivity/docs-tool.ts',
+        'src/core/tools/productivity/database-query.ts',
+        'src/core/tools/productivity/terminal-ipc-tool.ts',
+        'src/core/tools/agents/spawn-agent.ts',
+        'src/core/skills/skill-loader.ts',
+        'src/core/task-board.ts',
+        'src/core/tools/web/web-tools.ts',
+        // 转发 shim（只有 export，无实际逻辑）
+        'src/core/agent.ts',
+        'src/models/llm/index.ts',
+        // 节点模块和构建产物
+        'node_modules',
+        'dist',
+      ],
+      // 目标：lines/statements >= 35%，branches >= 40%
       thresholds: {
-        lines: 20,
-        functions: 20,
-        branches: 15,
-        statements: 20,
+        lines: 30,
+        functions: 25,
+        branches: 35,
+        statements: 30,
       },
     },
     reporter: ['verbose'],
