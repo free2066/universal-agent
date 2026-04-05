@@ -78,6 +78,11 @@ export function App({
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Ref to messages for accessing latest value inside async callbacks
+  const messagesRef = useRef<ChatMessage[]>([]);
+  // Keep ref in sync with state
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputHistory, setInputHistory] = useState<string[]>([]);
@@ -89,6 +94,7 @@ export function App({
   const [statusInfo, setStatusInfo] = useState<Omit<StatusBarProps, 'model' | 'domain' | 'sessionId'>>({
     isThinking: 'none',
     estimatedTokens: 0,
+    sessionTokens: 0,
     contextLength,
   });
 
@@ -1899,7 +1905,12 @@ export function App({
           import('../../core/context/context-compressor.js').then(
             ({ estimateHistoryTokens, shouldCompact, autoCompact }) => {
               const est = estimateHistoryTokens(h);
-              setStatusInfo((s) => ({ ...s, estimatedTokens: est }));
+              // sessionTokens: raw session size from UI messages (pre-compact representation)
+              // Use messages ref to get the actual displayed messages token count
+              const rawEst = messagesRef.current.reduce((acc, m) => {
+                return acc + Math.ceil((m.content?.length ?? 0) / 4);
+              }, 0);
+              setStatusInfo((s) => ({ ...s, estimatedTokens: est, sessionTokens: rawEst > 0 ? rawEst : est }));
 
               // ── Auto compact: delegate threshold logic to shouldCompact() ─
               const decision = shouldCompact(h);

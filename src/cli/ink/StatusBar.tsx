@@ -2,14 +2,14 @@
  * StatusBar — compact bottom info line.
  *
  * Format:
- *   [domain/model | thinking: low] | project | 68k | 68k/1000k (6%) | 5d594633
+ *   [domain/model | thinking: low] | project | sentTokens | sessionTokens/maxCtx (pct%) | sessionId
  *
- * Fields (in order):
- *   1. [domain/model]  — bracket group; | thinking: level appended when active
- *   2. project         — basename(cwd)
- *   3. usedTokens      — e.g. "68k" or "1.71M"
- *   4. used/max (pct%) — e.g. "68k/1000k (6%)"  — color-coded by pct
- *   5. sessionId       — first 8 chars
+ * Fields:
+ *   1. [domain/model]           — bracket group; thinking appended when active
+ *   2. project                  — basename(cwd)
+ *   3. sentTokens               — tokens actually sent to model (post-compact)
+ *   4. sessionTokens/maxCtx(%)  — raw session size / model max context
+ *   5. sessionId                — first 8 chars
  */
 
 import React from 'react';
@@ -20,7 +20,10 @@ export interface StatusBarProps {
   model: string;
   domain: string;
   sessionId: string;
+  /** Tokens sent to model (post-compact, what the LLM actually sees) */
   estimatedTokens?: number;
+  /** Raw session token total (all messages, pre-compact) */
+  sessionTokens?: number;
   contextLength?: number;
   isThinking?: 'none' | 'low' | 'medium' | 'high';
   mode?: string;
@@ -47,19 +50,23 @@ export function StatusBar({
   domain,
   sessionId,
   estimatedTokens = 0,
+  sessionTokens,
   contextLength = 128000,
   isThinking = 'none',
   mode,
 }: StatusBarProps): React.JSX.Element {
-  const pct      = contextLength > 0 ? Math.round((estimatedTokens / contextLength) * 100) : 0;
-  const pctCapped = Math.min(pct, 100);
-  const tknColor = tokenColor(pctCapped);
   const project  = basename(process.cwd());
   const shortId  = sessionId.slice(0, 8);
-  const hasTokens = estimatedTokens > 0;
 
-  const usedStr  = fmtN(estimatedTokens);           // e.g. "68k"
-  const maxStr   = fmtN(contextLength);              // e.g. "1000k"
+  // Sent-to-model tokens (post-compact)
+  const hasSent  = estimatedTokens > 0;
+
+  // Session tokens / context ratio
+  const sessTokens = sessionTokens ?? estimatedTokens;  // fallback to estimatedTokens if not provided
+  const pct        = contextLength > 0 ? Math.round((sessTokens / contextLength) * 100) : 0;
+  const pctCapped  = Math.min(pct, 100);
+  const tknColor   = tokenColor(pctCapped);
+  const hasSession = sessTokens > 0;
 
   return (
     <Box flexDirection="row" paddingLeft={1}>
@@ -82,19 +89,21 @@ export function StatusBar({
       {/* 2. project name */}
       <Text color="gray">{project}</Text>
 
-      {/* 3. already-used tokens  (only when >0) */}
-      {hasTokens ? (
+      {/* 3. sent tokens — what model actually received (post-compact) */}
+      {hasSent ? (
         <>
           {SEP}
-          <Text color={tknColor}>{usedStr}</Text>
+          <Text color="white">{fmtN(estimatedTokens)}</Text>
         </>
       ) : null}
 
-      {/* 4. used/max (pct%)  (only when >0) */}
-      {hasTokens ? (
+      {/* 4. session/max (pct%) — raw session size vs model context limit */}
+      {hasSession ? (
         <>
           {SEP}
-          <Text color={tknColor}>{usedStr}/{maxStr}</Text>
+          <Text color={tknColor}>{fmtN(sessTokens)}</Text>
+          <Text color="gray" dimColor>/</Text>
+          <Text color={tknColor}>{fmtN(contextLength)}</Text>
           <Text color={tknColor} dimColor>{` (${pctCapped}%)`}</Text>
         </>
       ) : null}
