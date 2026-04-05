@@ -54,10 +54,19 @@ const PLUGIN_REGISTRY: Map<string, PluginMeta> = new Map([
   ['service', { plugin: serviceDomain, source: 'builtin', loadedAt: Date.now() }],
 ]);
 
+// ── Plugin extension registries ───────────────────────────────────────────────
+
+/** Slash commands contributed by plugins: command → handler */
+const PLUGIN_SLASH_COMMANDS: Map<string, import('../models/types.js').PluginSlashCommand> = new Map();
+
+/** Hooks contributed by plugins */
+const PLUGIN_HOOKS: Array<import('../models/types.js').PluginHookDefinition & { pluginName: string }> = [];
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
  * Register an external DomainPlugin programmatically.
+ * Also registers any slashCommands and hooks the plugin contributes.
  * Overwrites any existing plugin with the same name (allows hot-reload).
  * Returns true if new, false if overwriting an existing registration.
  */
@@ -65,7 +74,44 @@ export function registerDomainPlugin(plugin: DomainPlugin, source = 'runtime'): 
   const isNew = !DOMAINS[plugin.name];
   DOMAINS[plugin.name] = plugin;
   PLUGIN_REGISTRY.set(plugin.name, { plugin, source, loadedAt: Date.now() });
+
+  // Register slash commands contributed by this plugin
+  if (plugin.slashCommands) {
+    for (const cmd of plugin.slashCommands) {
+      if (cmd.command.startsWith('/') && typeof cmd.handler === 'function') {
+        PLUGIN_SLASH_COMMANDS.set(cmd.command, cmd);
+      }
+    }
+  }
+
+  // Register hooks contributed by this plugin
+  if (plugin.hooks) {
+    // Remove any previously registered hooks from same plugin (hot-reload)
+    const idx = PLUGIN_HOOKS.findIndex((h) => h.pluginName === plugin.name);
+    if (idx !== -1) PLUGIN_HOOKS.splice(idx, PLUGIN_HOOKS.filter(h => h.pluginName === plugin.name).length);
+
+    for (const hook of plugin.hooks) {
+      PLUGIN_HOOKS.push({ ...hook, pluginName: plugin.name });
+    }
+  }
+
   return isNew;
+}
+
+/**
+ * Get all plugin-contributed slash commands.
+ * Used by handlers/index.ts to dispatch unknown slash commands to plugins.
+ */
+export function getPluginSlashCommands(): ReadonlyMap<string, import('../models/types.js').PluginSlashCommand> {
+  return PLUGIN_SLASH_COMMANDS;
+}
+
+/**
+ * Get all plugin-contributed hooks for a given event.
+ * Used by agent-loop.ts to fire plugin hooks at lifecycle points.
+ */
+export function getPluginHooks(event: import('../models/types.js').PluginHookDefinition['event']) {
+  return PLUGIN_HOOKS.filter((h) => h.event === event && h.enabled !== false);
 }
 
 /**

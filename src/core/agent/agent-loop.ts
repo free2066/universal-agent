@@ -366,6 +366,20 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         model: modelManager.getCurrentModel('main'),
       }));
 
+      // Fire plugin pre_prompt hooks — allow plugins to augment system prompt
+      try {
+        const { getPluginHooks } = await import('../domain-router.js');
+        const prePromptHooks = getPluginHooks('pre_prompt');
+        for (const hook of prePromptHooks) {
+          if (hook.handler) {
+            const result = await hook.handler({ systemPrompt, iteration }).catch(() => undefined);
+            if (typeof result === 'string' && result.length > 0) {
+              systemPrompt = systemPrompt + '\n\n' + result;
+            }
+          }
+        }
+      } catch { /* plugin hooks are non-fatal */ }
+
       const currentTools = registry.getToolDefinitions();
       const _lastUserRaw = [...history].reverse().find((m) => m.role === 'user')?.content ?? prompt;
       const lastUserMsg: string = typeof _lastUserRaw === 'string'
@@ -482,6 +496,16 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           const callId = `${call.name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           const toolStartMs = Date.now();
           await triggerHook(createHookEvent('tool', 'before', { callId, toolName: call.name, args: call.arguments }));
+
+          // Fire plugin on_tool_call hooks (non-blocking, errors are silent)
+          try {
+            const { getPluginHooks } = await import('../domain-router.js');
+            const toolHooks = getPluginHooks('on_tool_call').filter((h) => !h.tool || h.tool === call.name);
+            for (const hook of toolHooks) {
+              if (hook.handler) await hook.handler({ toolName: call.name, args: call.arguments }).catch(() => {});
+            }
+          } catch { /* ignore */ }
+
           try {
             const result = await withToolRetry(
               () => registry.execute(call.name, call.arguments),

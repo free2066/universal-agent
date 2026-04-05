@@ -420,8 +420,9 @@ export async function handleMetrics(ctx: SlashContext): Promise<true> {
   return done(rl);
 }
 
-export async function handleDomainPlugins(ctx: SlashContext): Promise<true> {  const { rl } = ctx;
-  const { listRegisteredPlugins } = await import('../../../core/domain-router.js');
+export async function handleDomainPlugins(ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  const { listRegisteredPlugins, getPluginSlashCommands, getPluginHooks } = await import('../../../core/domain-router.js');
   const plugins = listRegisteredPlugins();
 
   console.log(chalk.yellow('\n  Domain Plugins:\n'));
@@ -434,7 +435,32 @@ export async function handleDomainPlugins(ctx: SlashContext): Promise<true> {  c
       : chalk.cyan('external');
     const desc = p.plugin.description.slice(0, 40) + (p.plugin.description.length > 40 ? '...' : '');
     const toolCount = chalk.gray(`(${p.plugin.tools.length} tools)`);
-    console.log(`  ${chalk.white(p.name.padEnd(14))} ${srcLabel.padEnd(10)}  ${desc} ${toolCount}`);
+    const slashCount = p.plugin.slashCommands?.length ? chalk.cyan(` +${p.plugin.slashCommands.length} slash`) : '';
+    const hookCount = p.plugin.hooks?.length ? chalk.magenta(` +${p.plugin.hooks.length} hooks`) : '';
+    console.log(`  ${chalk.white(p.name.padEnd(14))} ${srcLabel.padEnd(10)}  ${desc} ${toolCount}${slashCount}${hookCount}`);
+  }
+
+  // Show plugin-contributed slash commands
+  const pluginCmds = getPluginSlashCommands();
+  if (pluginCmds.size > 0) {
+    console.log(chalk.yellow('\n  Plugin Slash Commands:\n'));
+    for (const [cmd, def] of pluginCmds) {
+      console.log(`  ${chalk.cyan(cmd.padEnd(20))} ${def.description}`);
+    }
+  }
+
+  // Show plugin-contributed hooks
+  const allHookEvents = ['pre_prompt', 'post_response', 'on_tool_call', 'on_session_end'] as const;
+  const hookLines: string[] = [];
+  for (const ev of allHookEvents) {
+    const hooks = getPluginHooks(ev);
+    for (const h of hooks) {
+      hookLines.push(`  ${chalk.magenta(ev.padEnd(20))} ${(h as unknown as Record<string,string>).pluginName} — ${h.description ?? '(no description)'}`);
+    }
+  }
+  if (hookLines.length > 0) {
+    console.log(chalk.yellow('\n  Plugin Hooks:\n'));
+    hookLines.forEach((l) => console.log(l));
   }
 
   const external = plugins.filter(p => p.source !== 'builtin');
@@ -442,10 +468,12 @@ export async function handleDomainPlugins(ctx: SlashContext): Promise<true> {  c
     console.log(chalk.gray('\n  No external plugins loaded.'));
   }
 
-  console.log(chalk.gray('\n  To add a plugin:'));
-  console.log(chalk.gray('    1. Create .uagent/plugins/<name>.js'));
-  console.log(chalk.gray('    2. Export a default DomainPlugin object:'));
-  console.log(chalk.gray('       export default { name, description, keywords, systemPrompt, tools }'));
-  console.log(chalk.gray('    3. Restart uagent — plugins load at startup\n'));
+  console.log(chalk.gray('\n  To add a plugin with slash commands:'));
+  console.log(chalk.gray('    export default {'));
+  console.log(chalk.gray('      name: "my-plugin", description: "...", keywords: [], systemPrompt: "", tools: [],'));
+  console.log(chalk.gray('      slashCommands: [{ command: "/standup", description: "...", handler: async (args, ctx) => { ctx.onChunk("..."); } }],'));
+  console.log(chalk.gray('      hooks: [{ event: "pre_prompt", description: "...", handler: async (payload) => { return undefined; } }],'));
+  console.log(chalk.gray('    };'));
+  console.log(chalk.gray('    // Save to .uagent/plugins/<name>.js and restart uagent\n'));
   return done(rl);
 }

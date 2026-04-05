@@ -116,12 +116,88 @@ export interface LLMClient {
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
+// ── Plugin Slash Command ──────────────────────────────────────────────────────
+
+/**
+ * A slash command contributed by a DomainPlugin.
+ *
+ * @example
+ * ```js
+ * // .uagent/plugins/my-plugin.js
+ * export default {
+ *   name: 'my-plugin',
+ *   // ...
+ *   slashCommands: [
+ *     {
+ *       command: '/standup',
+ *       description: 'Print daily standup template',
+ *       handler: async (args, ctx) => {
+ *         ctx.onChunk('## Standup\n- Yesterday:\n- Today:\n- Blockers:\n');
+ *       },
+ *     },
+ *   ],
+ * };
+ * ```
+ */
+export interface PluginSlashCommand {
+  /** The /command string (must start with '/') */
+  command: string;
+  /** Short description shown in /help */
+  description: string;
+  /**
+   * Handler called when user types the command.
+   * @param args  Everything after the command (may be empty string)
+   * @param ctx   Minimal context: onChunk (stream text to user), agentHistory
+   */
+  handler: (args: string, ctx: PluginSlashContext) => Promise<void>;
+}
+
+/** Minimal context passed to plugin slash command handlers */
+export interface PluginSlashContext {
+  /** Stream text output to the user */
+  onChunk: (chunk: string) => void;
+  /** Current conversation history (read-only) */
+  agentHistory: readonly unknown[];
+  /** Current working directory */
+  cwd: string;
+}
+
+// ── Plugin Hook ───────────────────────────────────────────────────────────────
+
+/**
+ * A hook contributed by a DomainPlugin.
+ * Uses the same HookEvent/HookType system as .uagent/hooks.json.
+ */
+export interface PluginHookDefinition {
+  /** Which lifecycle event to intercept */
+  event: 'pre_prompt' | 'post_response' | 'on_tool_call' | 'on_session_end';
+  /** Description shown in /hooks list */
+  description?: string;
+  /** Whether the hook is active (default: true) */
+  enabled?: boolean;
+  /**
+   * Inline handler (takes precedence over shell command_line).
+   * Return a string to replace/augment the input; return undefined to pass through.
+   */
+  handler?: (payload: Record<string, unknown>) => Promise<string | undefined>;
+  /** Shell command line fallback (used when handler is not provided) */
+  command_line?: string;
+  /** For on_tool_call: only fire for this tool name */
+  tool?: string;
+}
+
+// ── DomainPlugin ──────────────────────────────────────────────────────────────
+
 export interface DomainPlugin {
   name: string;
   description: string;
   keywords: string[];
   systemPrompt: string;
   tools: ToolRegistration[];
+  /** Optional: slash commands contributed by this plugin */
+  slashCommands?: PluginSlashCommand[];
+  /** Optional: hooks contributed by this plugin */
+  hooks?: PluginHookDefinition[];
 }
 
 export interface ToolRegistration {

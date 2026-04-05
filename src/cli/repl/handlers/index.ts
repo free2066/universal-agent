@@ -106,6 +106,35 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
   if (input === '/metrics') return handleMetrics(ctx);
   if (input === '/plugins') return handleDomainPlugins(ctx);
 
+  // ── Plugin-contributed slash commands ─────────────────────────────────────
+  if (input.startsWith('/')) {
+    const { getPluginSlashCommands } = await import('../../../core/domain-router.js');
+    const pluginCmds = getPluginSlashCommands();
+    // Match exact command or command with args (e.g. /standup or /standup daily)
+    const cmdName = input.split(/\s+/)[0]!; // e.g. '/standup'
+    const cmdArgs = input.slice(cmdName.length).trim();
+    const pluginCmd = pluginCmds.get(cmdName);
+    if (pluginCmd) {
+      const chunks: string[] = [];
+      const onChunk = (c: string) => { process.stdout.write(c); chunks.push(c); };
+      rl.pause();
+      process.stdout.write('\n');
+      try {
+        await pluginCmd.handler(cmdArgs, {
+          onChunk,
+          agentHistory: (agent as unknown as Record<string, unknown>).history as readonly unknown[] ?? [],
+          cwd: process.cwd(),
+        });
+        process.stdout.write('\n');
+      } catch (err) {
+        console.error(chalk.red('\n✗ Plugin slash command error: ') + (err instanceof Error ? err.message : String(err)));
+      }
+      rl.resume();
+      rl.prompt(); printStatusBar();
+      return true;
+    }
+  }
+
   // ── /help ─────────────────────────────────────────────────────────────────
   if (input === '/help' || input === '/help ') {
     const { printHelp } = await import('../../ui-enhanced.js');
