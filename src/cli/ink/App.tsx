@@ -799,16 +799,297 @@ export function App({
       return;
     }
 
+    // ── /image <path> ───────────────────────────────────────────────────────
+    if (cmd.startsWith('/image')) {
+      const imagePath = cmd.replace('/image', '').trim();
+      if (!imagePath) {
+        appendSystem('Usage: /image <path>\n  Attaches an image file to the next message (multimodal).');
+        return;
+      }
+      const { resolve } = await import('path');
+      const { readFileSync, existsSync } = await import('fs');
+      const absPath = resolve(imagePath);
+      if (!existsSync(absPath)) {
+        appendSystem(`Image file not found: ${absPath}`);
+        return;
+      }
+      try {
+        const buf = readFileSync(absPath);
+        const base64 = buf.toString('base64');
+        const ext = absPath.split('.').pop()?.toLowerCase() ?? 'png';
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+          gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+        };
+        const mimeType = mimeMap[ext] ?? 'image/png';
+        // Store as data URL on agent for next message
+        (agent as typeof agent & { _pendingImage?: { data: string; mimeType: string } })._pendingImage = {
+          data: base64, mimeType,
+        };
+        appendSystem(`Image loaded: ${absPath} (${(buf.length / 1024).toFixed(1)}KB)\nType your question about it and press Enter.`);
+      } catch (err) {
+        appendSystem(`Failed to read image: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    // ── /logout ───────────────────────────────────────────────────────────────
+    if (cmd === '/logout') {
+      const keyEnvVars = [
+        'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY',
+        'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'WQ_API_KEY',
+      ];
+      const lines = ['API Key Configuration', ''];
+      let anyFound = false;
+      for (const envVar of keyEnvVars) {
+        const val = process.env[envVar];
+        if (val) {
+          anyFound = true;
+          const masked = val.length > 8
+            ? val.slice(0, 4) + '*'.repeat(val.length - 8) + val.slice(-4)
+            : '****';
+          lines.push(`  ${envVar.padEnd(24)} [set]  ${masked}`);
+        } else {
+          lines.push(`  ${envVar.padEnd(24)} [not set]`);
+        }
+      }
+      lines.push('');
+      if (anyFound) {
+        lines.push('To remove a key (logout):');
+        lines.push('  unset OPENAI_API_KEY            # current shell only');
+        lines.push('  # or remove from ~/.zshrc / ~/.bashrc / .env file');
+        lines.push('');
+        lines.push('To switch models/providers:');
+        lines.push('  /model                           # interactive picker');
+      } else {
+        lines.push('No API keys found. uagent requires at least one API key.');
+        lines.push('  Set one: export OPENAI_API_KEY=sk-...');
+      }
+      lines.push('');
+      lines.push('Note: uagent uses API keys (not login sessions).');
+      lines.push('      Keys are read from environment variables or .env file.');
+      appendSystem(lines.join('\n'));
+      return;
+    }
+
+    // ── /plugin ───────────────────────────────────────────────────────────────
+    if (cmd.startsWith('/plugin')) {
+      const sub = cmd.replace('/plugin', '').trim();
+      const { readdirSync: _rds2, existsSync: _es2, statSync: _ss2 } = await import('fs');
+      const { join: _jn2 } = await import('path');
+      const baseDir = _jn2(process.cwd(), '.uagent');
+      const globalDir = _jn2(process.env.HOME ?? '~', '.uagent');
+      const scanPluginDir = (dir: string, sub2: string) => {
+        const full = _jn2(dir, sub2);
+        if (!_es2(full)) return [] as Array<{ name: string; mtime: number; scope: string }>;
+        try { return _rds2(full).map((f) => ({ name: f, mtime: _ss2(_jn2(full, f)).mtimeMs, scope: '' })); }
+        catch { return [] as Array<{ name: string; mtime: number; scope: string }>; }
+      };
+      if (!sub || sub === 'list') {
+        const lines = ['Local Extensions (Plugins):', ''];
+        const sections = [
+          { label: 'Custom Commands (skills)', type: 'commands' },
+          { label: 'Subagents', type: 'agents' },
+          { label: 'Hooks', type: 'hooks' },
+        ];
+        let found = false;
+        for (const { label, type } of sections) {
+          const items = [
+            ...scanPluginDir(baseDir, type).map((f) => ({ ...f, scope: 'project' })),
+            ...scanPluginDir(globalDir, type).map((f) => ({ ...f, scope: 'global' })),
+          ];
+          if (items.length === 0) continue;
+          found = true;
+          lines.push(`  ${label}:`);
+          for (const item of items.slice(0, 10)) {
+            const ago = Math.floor((Date.now() - item.mtime) / (1000 * 60 * 60 * 24));
+            lines.push(`    ${item.name.padEnd(30)} (${item.scope}) ${ago === 0 ? 'today' : `${ago}d ago`}`);
+          }
+          if (items.length > 10) lines.push(`    ... and ${items.length - 10} more`);
+          lines.push('');
+        }
+        if (!found) {
+          lines.push('  No local extensions installed.');
+          lines.push('');
+        }
+        lines.push('  Plugin types:');
+        lines.push('    .uagent/commands/*.md — custom slash commands (skills)');
+        lines.push('    .uagent/agents/*.md   — custom subagents');
+        lines.push('    .uagent/hooks/*.json  — lifecycle hooks');
+        appendSystem(lines.join('\n'));
+      } else {
+        appendSystem(`Unknown plugin subcommand: ${sub}\nUsage: /plugin [list]`);
+      }
+      return;
+    }
+
+    // ── /add-dir <path> ───────────────────────────────────────────────────────
+    if (cmd.startsWith('/add-dir')) {
+      const dirPath = cmd.replace('/add-dir', '').trim();
+      const { readdirSync: _rds3, statSync: _ss3, existsSync: _es3 } = await import('fs');
+      const { join: _jn3, relative: _rel } = await import('path');
+      if (!dirPath || !_es3(dirPath)) {
+        appendSystem(`Directory not found: ${dirPath || '(no path given)'}\nUsage: /add-dir <path>`);
+        return;
+      }
+      const files: string[] = [];
+      const scanAddDir = (d: string, depth = 0): void => {
+        if (depth > 2 || files.length > 100) return;
+        try {
+          for (const f of _rds3(d)) {
+            if (['node_modules', '.git', 'dist'].includes(f)) continue;
+            const full = _jn3(d, f);
+            try {
+              if (_ss3(full).isDirectory()) scanAddDir(full, depth + 1);
+              else files.push(_rel(process.cwd(), full));
+            } catch { /* */ }
+          }
+        } catch { /* */ }
+      };
+      scanAddDir(dirPath);
+      agent.injectContext(`[Added directory to context: ${dirPath}]\nFiles in this directory:\n${files.slice(0, 80).join('\n')}`);
+      appendSystem(`Added ${dirPath} to context (${files.length} files indexed)`);
+      return;
+    }
+
+    // ── /insights [days] ──────────────────────────────────────────────────────
+    if (cmd.startsWith('/insights')) {
+      const parts = cmd.split(/\s+/);
+      const days = parseInt(parts.find((p) => /^\d+$/.test(p)) ?? '30', 10);
+      appendSystem(`Analyzing last ${days} days of usage...`);
+      try {
+        const { runInsights } = await import('../insights.js');
+        const report = await runInsights({ days, projectRoot: process.cwd() });
+        const lines = report.markdown.split('\n');
+        const condensed = lines.slice(0, 60).join('\n');
+        appendSystem(condensed + (lines.length > 60 ? `\n... (${lines.length - 60} more lines)` : ''));
+      } catch (err) {
+        appendSystem(`Insights failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    // ── /output-style [style] ─────────────────────────────────────────────────
+    if (cmd.startsWith('/output-style')) {
+      const style = cmd.replace('/output-style', '').trim();
+      const validStyles = ['plain', 'markdown', 'compact'];
+      if (!style) {
+        appendSystem(`Output Styles:\n  plain    — plain text, no markdown\n  markdown — full markdown (default)\n  compact  — concise output, minimal headers\n\nUsage: /output-style <style>`);
+        return;
+      }
+      if (!validStyles.includes(style)) {
+        appendSystem(`Unknown style "${style}". Choose: ${validStyles.join(', ')}`);
+        return;
+      }
+      agent.injectContext(`[Output style changed to: ${style}]\nFrom now on, format all responses as ${style}.`);
+      appendSystem(`Output style → ${style}`);
+      return;
+    }
+
+    // ── /terminal-setup ───────────────────────────────────────────────────────
+    if (cmd === '/terminal-setup') {
+      appendSystem([
+        'Terminal Setup — Shift+Enter line break',
+        '',
+        'Option 1: iTerm2',
+        '  Preferences → Profiles → Keys → Key Mappings',
+        '  Add: Shift+Enter → Send Hex Code → 0x0a',
+        '',
+        'Option 2: VS Code integrated terminal',
+        '  Add to keybindings.json:',
+        '  { "key": "shift+enter", "command": "workbench.action.terminal.sendSequence",',
+        '    "args": { "text": "\\n" }, "when": "terminalFocus" }',
+        '',
+        'Option 3: ~/.inputrc (universal readline)',
+        '  Add: "\\e[13;2u": "\\n"',
+        '  Then run: bind -f ~/.inputrc',
+        '',
+        'Already supported in uagent: \\ + Enter (universal)',
+      ].join('\n'));
+      return;
+    }
+
+    // ── /spec:write-plan [topic] ──────────────────────────────────────────────
+    if (cmd.startsWith('/spec:write-plan')) {
+      const topic = cmd.replace('/spec:write-plan', '').trim();
+      const history = agent.getHistory();
+      const recentContext = history.slice(-6).map((m) => {
+        const c = typeof m.content === 'string' ? m.content : '[content]';
+        return `${m.role}: ${c.slice(0, 200)}`;
+      }).join('\n');
+      const planPrompt = topic
+        ? `Generate a detailed implementation plan for: ${topic}`
+        : `Based on our recent conversation:\n\n${recentContext}\n\nGenerate a detailed, step-by-step implementation plan with:\n1. Clear phases and milestones\n2. Specific tasks for each phase\n3. Dependencies between tasks\n4. Estimated complexity\n5. Potential risks and mitigations`;
+      setIsStreaming(true);
+      setStatusInfo((s) => ({ ...s, isThinking: 'low' }));
+      abortRef.current = new AbortController();
+      let planOut = '';
+      try {
+        await agent.runStream(planPrompt, (chunk) => {
+          planOut += chunk;
+          appendAssistant(chunk);
+        }, {}, undefined, abortRef.current.signal);
+      } catch (err) {
+        appendSystem(`Plan generation failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        abortRef.current = null;
+        setIsStreaming(false);
+        setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
+      }
+      return;
+    }
+
+    // ── /spec:execute-plan ────────────────────────────────────────────────────
+    if (cmd === '/spec:execute-plan') {
+      const history = agent.getHistory();
+      const lastPlan = [...history].reverse().find((m) => {
+        const t = typeof m.content === 'string' ? m.content : '';
+        return m.role === 'assistant' && (t.includes('Phase') || t.includes('Step') || t.includes('Task'));
+      });
+      if (!lastPlan) {
+        appendSystem('No plan found in context. Run /spec:write-plan first.');
+        return;
+      }
+      const execPrompt = `Execute the implementation plan step by step. Start with Phase 1 / Step 1.\nFor each step:\n1. Explain what you're doing\n2. Implement it\n3. Verify it works\n4. Move to the next step\n\nBegin execution now.`;
+      setIsStreaming(true);
+      setStatusInfo((s) => ({ ...s, isThinking: 'low' }));
+      abortRef.current = new AbortController();
+      try {
+        await agent.runStream(execPrompt, (chunk) => { appendAssistant(chunk); },
+          {}, undefined, abortRef.current.signal);
+      } catch (err) {
+        appendSystem(`Plan execution failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        abortRef.current = null;
+        setIsStreaming(false);
+        setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
+      }
+      return;
+    }
+
     // ── /cost ────────────────────────────────────────────────────────────────
     if (cmd === '/cost') {
       const { sessionMetrics } = await import('../../core/metrics.js');
       const stats = sessionMetrics.getStats();
-      const lines = ['Cost Estimate:', ''];
+      const lines = ['Cost Estimate (this session):', ''];
       lines.push(`  LLM calls    : ${stats.calls}`);
       lines.push(`  Input tokens : ${stats.totalInputTokens.toLocaleString()}`);
       lines.push(`  Output tokens: ${stats.totalOutputTokens.toLocaleString()}`);
       lines.push(`  Duration     : ${(stats.totalDurationMs / 1000).toFixed(1)}s`);
       lines.push(`  Failed calls : ${stats.failedCalls}`);
+      // Today's cross-session usage
+      try {
+        const { usageTracker } = await import('../../models/usage-tracker.js');
+        const todayUsage = usageTracker.loadTodayUsage();
+        lines.push('');
+        lines.push('Today (all sessions):');
+        lines.push(`  Input:    ${todayUsage.totalInputTokens.toLocaleString()} tokens`);
+        lines.push(`  Output:   ${todayUsage.totalOutputTokens.toLocaleString()} tokens`);
+        lines.push(`  Cost:     $${todayUsage.totalCostUSD.toFixed(4)} USD`);
+        lines.push(`  Sessions: ${todayUsage.sessions}`);
+        const check = usageTracker.checkLimits();
+        if (check.status !== 'ok' && check.message) lines.push('', check.message);
+      } catch { /* usageTracker optional */ }
       appendSystem(lines.join('\n'));
       return;
     }
@@ -836,12 +1117,14 @@ export function App({
         '    /models          list all models',
         '    /domain [name]   show or switch domain',
         '    /agents          list subagents',
+        '    /logout          show API key status',
         '',
         '  Context:',
         '    /tokens          show token usage',
         '    /context         show context window stats',
         '    /compact         compress context to memory',
         '    /history [n]     show recent prompts (default 10)',
+        '    /add-dir <path>  inject directory file list into context',
         '',
         '  Memory:',
         '    /memory          memory stats',
@@ -849,6 +1132,7 @@ export function App({
         '    /memory list     list memories',
         '    /memory forget   clear memories',
         '    /memory ingest   extract insights from session',
+        '    /insights [days] usage analysis report (default 30d)',
         '',
         '  Tools:',
         '    /tasks           task board',
@@ -857,6 +1141,7 @@ export function App({
         '    /inbox           lead inbox',
         '    /skills          custom slash commands',
         '    /plugins         domain plugins',
+        '    /plugin          local extensions (commands/agents/hooks)',
         '    /metrics         LLM call metrics',
         '    /cost            token cost estimate',
         '    /hooks           lifecycle hooks',
@@ -864,14 +1149,30 @@ export function App({
         '    /inspect [path]  code inspection',
         '    /purify          self-heal fixes',
         '    /spec [desc]     spec generation',
+        '    /spec:brainstorm <topic>  brainstorm ideas',
+        '    /spec:write-plan [topic]  generate implementation plan',
+        '    /spec:execute-plan        execute last plan',
         '    /init            create .uagent/AGENTS.md',
         '    /rules           show loaded rules',
         '',
+        '  Output:',
+        '    /output-style [style]  plain|markdown|compact',
+        '    /terminal-setup        Shift+Enter configuration guide',
+        '',
         '  Input:',
         '    @file            attach file to message',
+        '    !cmd             run shell command and inject output',
+        '    /image <path>    attach image to next message',
         '    Esc              abort streaming',
         '    Up/Down          navigate history',
-        '    Tab              autocomplete commands',
+        '    Tab              autocomplete commands/@file',
+        '    Ctrl+R           reverse history search',
+        '    Ctrl+G           open $EDITOR to compose input',
+        '    Ctrl+L           clear screen (double: toggle verbose)',
+        '    Ctrl+T           cycle thinking level',
+        '    Ctrl+V           paste image from clipboard',
+        '    Shift+Tab        cycle agent mode',
+        '    Esc×2            rollback last turn',
       ].join('\n'));
       return;
     }
@@ -1083,7 +1384,7 @@ export function App({
         // Flush buffered output to log
         sessionLogger.current.flushOutput();
 
-        // Update token estimate
+        // Update token estimate + auto-compact check
         try {
           const h = agent.getHistory();
           const est = h.reduce((acc, m) => {
@@ -1091,6 +1392,19 @@ export function App({
             return acc + (typeof c === 'string' ? Math.ceil(c.length / 4) : 0);
           }, 0);
           setStatusInfo((s) => ({ ...s, estimatedTokens: est }));
+
+          // ── Auto compact: trigger when >75% context window used ──────────
+          const threshold = Math.floor(contextLength * 0.75);
+          if (est > threshold && h.length >= 4) {
+            appendSystem(`Context at ${Math.round(est / contextLength * 100)}% — auto-compacting...`);
+            import('../../core/context/context-compressor.js').then(({ autoCompact }) => {
+              autoCompact(h, (msg) => appendSystem(msg)).then((compacted) => {
+                if (compacted > 0) {
+                  appendSystem(`Auto-compact complete: ${compacted} turns compressed.`);
+                }
+              }).catch(() => { /* non-fatal */ });
+            }).catch(() => { /* fallback: manual compact */ });
+          }
         } catch { /* non-fatal */ }
       }
     } finally {
