@@ -241,7 +241,13 @@ export function App({
       if (sub === 'switch' && parts[2]) {
         agent.setModel(parts[2]);
         modelManager.setPointer('main', parts[2]);
-        appendSystem(`Model switched to: ${parts[2]}`);
+        // Update StatusBar (readline parity: agent-handlers.ts updateStatusBar)
+        const newProfile2 = modelManager.listProfiles().find((p) => p.name === parts[2]);
+        const displayName2 = newProfile2?.name ?? parts[2];
+        const newCtx2 = newProfile2?.contextLength ?? 128000;
+        setStatusInfo((s) => ({ ...s, contextLength: newCtx2 }));
+        setCurrentModelDisplay(displayName2);
+        appendSystem(`Model → ${displayName2}`);
       } else {
         const profiles = modelManager.listProfiles();
         const pointers = modelManager.getPointers();
@@ -1392,7 +1398,13 @@ export function App({
       for (const skillPath of skillDirs) {
         if (existsSync(skillPath)) {
           const content = readFileSync(skillPath, 'utf-8').replace(/^---[\s\S]*?---\n/, '');
-          const prompt = content.replace(/\$ARGUMENTS/g, skillArgs);
+          // Replace $ARGUMENTS and positional $1/$2/... params
+          // (readline parity: handlers/index.ts replaces $1, $2, $3... via argParts.forEach)
+          const argParts = skillArgs.split(/\s+/).filter(Boolean);
+          let prompt = content.replace(/\$ARGUMENTS/g, skillArgs);
+          argParts.forEach((arg, idx) => {
+            prompt = prompt.replace(new RegExp(`\\$${idx + 1}`, 'g'), arg);
+          });
           appendSystem(`Running skill: /${cmdName}`);
           let out = '';
           await agent.runStream(prompt, (c) => { out += c; }).catch((e) => {
