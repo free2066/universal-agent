@@ -56,3 +56,8 @@ jobs:
           path: coverage/
           retention-days: 7
         continue-on-error: true
+
+      - name: Generate API Docs
+        if: matrix.node-version == '22.x'
+        run: npm run docs
+        continue-on-error: true   # docs 生成失败不阻断 CI

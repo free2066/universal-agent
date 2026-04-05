@@ -394,8 +394,7 @@ export async function handleOutputStyle(input: string, ctx: SlashContext): Promi
   return done(rl);
 }
 
-export async function handleCost(ctx: SlashContext): Promise<true> {
-  const { rl } = ctx;
+export async function handleCost(ctx: SlashContext): Promise<true> {  const { rl } = ctx;
   const { usageTracker } = await import('../../../models/usage-tracker.js');
   console.log('\n' + modelManager.getCostSummary());
   const todayUsage = usageTracker.loadTodayUsage();
@@ -410,5 +409,43 @@ export async function handleCost(ctx: SlashContext): Promise<true> {
   }
   console.log(chalk.gray('\n  Tip: uagent usage --days 7  — full history'));
   console.log(chalk.gray('       uagent limits            — view/set limits\n'));
+  return done(rl);
+}
+
+export async function handleMetrics(ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  const { sessionMetrics } = await import('../../../core/metrics.js');
+  console.log(chalk.yellow('\n  LLM Call Metrics (this session):\n'));
+  process.stdout.write(sessionMetrics.getSummary());
+  return done(rl);
+}
+
+export async function handleDomainPlugins(ctx: SlashContext): Promise<true> {  const { rl } = ctx;
+  const { listRegisteredPlugins } = await import('../../../core/domain-router.js');
+  const plugins = listRegisteredPlugins();
+
+  console.log(chalk.yellow('\n  Domain Plugins:\n'));
+  console.log(chalk.gray(`  ${'NAME'.padEnd(14)} ${'SOURCE'.padEnd(10)} DESCRIPTION`));
+  console.log(chalk.gray('  ' + '-'.repeat(60)));
+
+  for (const p of plugins) {
+    const srcLabel = p.source === 'builtin'
+      ? chalk.gray('builtin')
+      : chalk.cyan('external');
+    const desc = p.plugin.description.slice(0, 40) + (p.plugin.description.length > 40 ? '...' : '');
+    const toolCount = chalk.gray(`(${p.plugin.tools.length} tools)`);
+    console.log(`  ${chalk.white(p.name.padEnd(14))} ${srcLabel.padEnd(10)}  ${desc} ${toolCount}`);
+  }
+
+  const external = plugins.filter(p => p.source !== 'builtin');
+  if (external.length === 0) {
+    console.log(chalk.gray('\n  No external plugins loaded.'));
+  }
+
+  console.log(chalk.gray('\n  To add a plugin:'));
+  console.log(chalk.gray('    1. Create .uagent/plugins/<name>.js'));
+  console.log(chalk.gray('    2. Export a default DomainPlugin object:'));
+  console.log(chalk.gray('       export default { name, description, keywords, systemPrompt, tools }'));
+  console.log(chalk.gray('    3. Restart uagent — plugins load at startup\n'));
   return done(rl);
 }

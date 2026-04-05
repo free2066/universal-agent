@@ -1,0 +1,18 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/core/agent/index.ts",
+    "src/models/llm/index.ts",
+    "src/core/memory/memory-store.ts",
+    "src/core/metrics.ts",
+    "src/core/domain-router.ts"
+  ],
+  "out": "docs/api",
+  "name": "Universal Agent API",
+  "includeVersion": true,
+  "readme": "README.md",
+  "excludeInternal": true,
+  "excludePrivate": true,
+  "skipErrorChecking": true,
+  "logLevel": "Warn"
+}

@@ -38,6 +38,7 @@ import { selectTools } from '../tool-selector.js';
 import { backgroundManager } from '../background-manager.js';
 import { todoManager } from '../tools/productivity/todo-tool.js';
 import { getTeammateManager } from '../teammate-manager.js';
+import { sessionMetrics } from '../metrics.js';
 
 const log = createLogger('agent-loop');
 
@@ -375,6 +376,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
       const tools = await selectTools(currentTools, lastUserMsg, history);
 
       let response;
+      const _llmCallStart = Date.now();
       try {
         const chatOpts = {
           systemPrompt,
@@ -395,6 +397,15 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         lastLLMCallAt = Date.now();
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
+        // Record failed call
+        sessionMetrics.record({
+          model: modelManager.getCurrentModel('main'),
+          durationMs: Date.now() - _llmCallStart,
+          inputTokens: 0,
+          outputTokens: 0,
+          success: false,
+          error: errMsg.slice(0, 120),
+        });
         const isContextOverflow = /413|context.{0,30}(overflow|limit|length|window)|too.{0,10}(long|large|many.{0,10}token)|maximum.{0,20}(context|length)/i.test(errMsg);
         if (isContextOverflow) {
           onChunk(`\n⚠️  Context overflow detected (${errMsg.slice(0, 80)}) — attempting reactive compact…\n`);
@@ -408,15 +419,22 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         break;
       }
 
-      // Track token usage
-      if ((response as unknown as Record<string, unknown>).usage) {
-        const usage = (response as unknown as Record<string, unknown>).usage as {
+      // Track token usage + metrics
+      {
+        const usage = ((response as unknown as Record<string, unknown>).usage ?? {}) as {
           input_tokens?: number; output_tokens?: number;
           prompt_tokens?: number; completion_tokens?: number;
         };
         const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
         const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
         modelManager.recordUsage(inputTokens, outputTokens, modelManager.getCurrentModel('main'));
+        sessionMetrics.record({
+          model: modelManager.getCurrentModel('main'),
+          durationMs: Date.now() - _llmCallStart,
+          inputTokens,
+          outputTokens,
+          success: true,
+        });
       }
 
       if (response.type === 'text') {

@@ -38,6 +38,7 @@ import { registerSchemaCommands } from './commands/cmd-schema.js';
 import { registerSpecCommands } from './commands/cmd-spec.js';
 import { registerMiscCommands } from './commands/cmd-misc.js';
 import { runREPL } from './repl/repl.js';
+import { loadLocalPlugins } from '../core/domain-router.js';
 
 // ── Program metadata ─────────────────────────────────────────────────────────
 const pkg = JSON.parse(
@@ -85,6 +86,10 @@ program
   }) => {
     if (options.cwd) process.chdir(options.cwd);
     validateDomain(options.domain);
+
+    // ── Load external domain plugins (project + global) ──────────────────────
+    // Done before AgentCore init so plugins are available when domain is resolved
+    await loadLocalPlugins(process.cwd()).catch(() => {}); // errors are non-fatal
 
     // ── Read config defaults (CLI flags take precedence over config file) ──
     const cfg = loadConfig();
