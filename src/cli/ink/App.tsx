@@ -78,6 +78,8 @@ export function App({
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [domain, setDomain] = useState(initialDomain);
   const [mode, setMode] = useState<'default' | 'plan' | 'brainstorm' | 'auto-edit'>('default');
+  // Tracks model display name after /model <name> switches (readline parity: updateStatusBar after model change)
+  const [currentModelDisplay, setCurrentModelDisplay] = useState<string | undefined>(undefined);
   const [verbose, setVerbose] = useState(initialVerbose ?? false);
   const [statusInfo, setStatusInfo] = useState<Omit<StatusBarProps, 'model' | 'domain' | 'sessionId'>>({
     isThinking: 'none',
@@ -672,7 +674,7 @@ export function App({
     if (cmd === '/mcp') {
       const { servers, tools } = agent.getMcpInfo();
       if (!servers.length) {
-        appendSystem('No MCP servers configured.\n  Run: uagent mcp add -- npx -y <server-package>');
+        appendSystem('No MCP servers configured.\n  Run: uagent mcp add -- npx -y <server-package>\n  Or:  uagent mcp init --templates  # scaffold with example configs');
       } else {
         const lines = ['MCP Servers:', ''];
         for (const s of servers) {
@@ -748,6 +750,7 @@ export function App({
         lines.push('  Create .uagent/commands/<name>.md to add a skill');
       } else {
         lines.push('', `  Total: ${totalCount} skill(s) installed`);
+        lines.push('  Use: /<skill-name> [arguments]  — run a skill directly as a slash command');
       }
       appendSystem(lines.join('\n'));
       return;
@@ -1250,6 +1253,10 @@ export function App({
         const check = usageTracker.checkLimits();
         if (check.status !== 'ok' && check.message) lines.push('', check.message);
       } catch { /* usageTracker optional */ }
+      // Operation hints (readline parity: tool-handlers.ts handleCost appends these)
+      lines.push('');
+      lines.push('  uagent usage --days 7  — view usage history');
+      lines.push('  uagent limits          — view/set daily spending limits');
       appendSystem(lines.join('\n'));
       return;
     }
@@ -2053,7 +2060,7 @@ export function App({
 
       {/* Status bar */}
       <StatusBar
-        model={modelDisplayName || currentModel}
+        model={currentModelDisplay || modelDisplayName || currentModel}
         domain={domain}
         sessionId={sessionId}
         {...statusInfo}
