@@ -35,7 +35,10 @@ function UserMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
 
 function AssistantMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
   // Truncate very long assistant messages in the history view
-  const display = truncate(msg.content, 2000);
+  const MAX_DISPLAY = 8000;
+  const display = msg.content.length > MAX_DISPLAY
+    ? msg.content.slice(0, MAX_DISPLAY) + `\n... (${msg.content.length - MAX_DISPLAY} chars hidden — full content in session log)`
+    : msg.content;
   return (
     <Box flexDirection="column" paddingTop={1} paddingBottom={1}>
       <Box gap={1}>

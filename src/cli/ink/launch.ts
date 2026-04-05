@@ -97,6 +97,17 @@ export async function runInkREPL(
     } catch { /* non-fatal */ }
   }
 
+  // ── Startup: append custom slash commands from hookRunner ─────────────
+  try {
+    const { HookRunner } = await import('../../core/hooks.js');
+    const hookRunner = new HookRunner(process.cwd());
+    const customCmds = hookRunner.listSlashCommands();
+    if (customCmds.length > 0) {
+      const cmdStr = `Custom commands: ${customCmds.map((c: { command: string }) => c.command).join('  ')}`;
+      startupHint = startupHint ? `${startupHint}\n${cmdStr}` : cmdStr;
+    }
+  } catch { /* non-fatal */ }
+
   return new Promise<void>((resolve) => {
     const { unmount } = render(
       React.createElement(App, {
@@ -121,7 +132,11 @@ export async function runInkREPL(
           if (history.length >= 4) {
             import('../../core/memory/memory-store.js').then(({ getMemoryStore }) => {
               const store = getMemoryStore(process.cwd());
-              store.ingest(history).catch(() => {});
+              store.ingest(history).then((result) => {
+                if (result && result.added > 0) {
+                  process.stdout.write(`\n🌙 Dream Mode: +${result.added} insights saved to memory.\n`);
+                }
+              }).catch(() => {});
             }).catch(() => {});
           }
           // Trigger notification
@@ -149,7 +164,11 @@ export async function runInkREPL(
       // Dream mode on Ctrl+C too
       if (history.length >= 4) {
         import('../../core/memory/memory-store.js').then(({ getMemoryStore }) => {
-          getMemoryStore(process.cwd()).ingest(history).catch(() => {});
+          getMemoryStore(process.cwd()).ingest(history).then((result: { added?: number }) => {
+            if (result && (result.added ?? 0) > 0) {
+              process.stdout.write(`\n🌙 Dream Mode: +${result.added ?? 0} insights saved to memory.\n`);
+            }
+          }).catch(() => {});
         }).catch(() => {});
       }
       unmount();

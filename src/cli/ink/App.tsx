@@ -1353,6 +1353,14 @@ export function App({
                     : tc
                 )
               );
+              // Append tool result as a permanent system message (readline parity)
+              const dur = durationMs !== undefined
+                ? durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
+                : '';
+              const resultLine = success
+                ? `↳ ${name} done${dur ? ` (${dur})` : ''}`
+                : `↳ ${name} failed${dur ? ` (${dur})` : ''}`;
+              appendSystem(resultLine);
             },
           },
           undefined,
