@@ -835,8 +835,10 @@ export function App({
         '',
         '  Steps to report:',
         `  1. cat "${logPath}" | pbcopy`,
-        '  2. Open issue tracker',
+        '  2. Open issue tracker or KOncall',
         '  3. Paste log and describe the problem',
+        '',
+        '  Tip: /export — save full conversation to a file',
       ].join('\n'));
       return;
     }
@@ -1097,6 +1099,10 @@ export function App({
         lines.push('    .uagent/commands/*.md — custom slash commands (skills)');
         lines.push('    .uagent/agents/*.md   — custom subagents');
         lines.push('    .uagent/hooks/*.json  — lifecycle hooks');
+        // Operation hints (readline parity: tool-handlers.ts handlePlugin prints these)
+        lines.push('');
+        lines.push('  /plugin list         — show all extensions');
+        lines.push('  /skills              — show only custom commands');
         appendSystem(lines.join('\n'));
       } else {
         appendSystem(`Unknown plugin subcommand: ${sub}\nUsage: /plugin [list]`);
