@@ -596,6 +596,22 @@ export async function autoCompact(
   const decision = shouldCompact(history, undefined, snipTokensFreed);
   if (!decision.shouldCompact) return _noCompact;
 
+  // ── B20: Session Memory Compaction 优先路径（claude-code sessionMemoryCompact.ts parity）──
+  // 在 LLM full compact 之前，先尝试 Session Memory（零 LLM 成本）。
+  // 仅在 error/blocking 状态时尝试（ok/warning 不需要紧急压缩）。
+  // 若成功：跳过 LLM compact，返回 _noCompact（Session Memory 已就地修改 history）。
+  // 若失败：正常进入 LLM compact 路径。
+  if (decision.warningState === 'error' || decision.warningState === 'blocking') {
+    try {
+      const { trySessionMemoryCompaction } = await import('../memory/session-memory.js');
+      const sessionCompacted = trySessionMemoryCompaction(history, onProgress);
+      if (sessionCompacted) {
+        onProgress?.('\n📋 B20: Session Memory Compaction applied — skipping LLM compact.\n');
+        return _noCompact; // Session Memory already modified history in-place
+      }
+    } catch { /* session memory compact failure is non-fatal — fall through to LLM compact */ }
+  }
+
   const targetSplit = history.length - KEEP_LAST_TURNS;
   if (targetSplit <= 0) return _noCompact;
 

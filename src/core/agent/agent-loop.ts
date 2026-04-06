@@ -33,6 +33,7 @@ import { getMemoryStore, triggerIncrementalIngest } from '../memory/memory-store
 import { createLogger } from '../logger.js';
 import { triggerHook, createHookEvent } from '../hooks.js';
 import { withToolRetry, withApiRateLimitRetry } from '../tool-retry.js';
+import { withApiRetry } from '../with-api-retry.js';
 import { editContextIfNeeded } from '../context/context-editor.js';
 import { selectTools } from '../tool-selector.js';
 import { backgroundManager } from '../background-manager.js';
@@ -529,6 +530,24 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   let _maxOutputTokensOverride: number | undefined; // Phase-0 设置为 ESCALATED_MAX_TOKENS
   let _motRecoveryCount = 0;                         // Phase-1~3 恢复次数计数器
 
+  // D20: hasAttemptedReactiveCompact — 防 413 reactive compact 无限循环
+  // Mirrors claude-code State.hasAttemptedReactiveCompact in query.ts L1070
+  // Once set true, a second 413 will not trigger another compact (prevents infinite loop).
+  // Reset to false after a successful non-error LLM turn.
+  let _reactiveCompactAttempted = false;
+
+  // F20: stopHookActive — cross-iteration State carry for stop hook防死循环
+  // Mirrors claude-code State.stopHookActive in query.ts L1300 + stopHooks.ts L184.
+  // When true (stop hook fired blocking errors last iteration), skip stop hook this iteration.
+  let _stopHookActive = false;
+
+  // A20: PTL withheld mechanism — store PTL error for deferred reactive compact recovery
+  // Mirrors claude-code query.ts "withheld" isWithheld413 pattern.
+  // When set: next iteration triggers reactiveCompact instead of a fresh LLM call.
+  let _withheldPtlError: Error | null = null;
+  // A20: skip stop hooks after PTL terminal (prevents stop hook triggering new tool calls → new PTL)
+  let _skipStopHooks = false;
+
   // ── Token Budget Tracker (Round 5: claude-code tokenBudget.ts parity) ────────
   // Tracks per-turn token usage to detect diminishing returns and enforce budget.
   // Sub-agents (spawned via SpawnAgent/CoordinatorTool) bypass budget entirely.
@@ -576,6 +595,41 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
         _earlyExit = true;
         break;
       }
+
+      // ── A20: withheld PTL recovery — reactive compact before next LLM call ──────
+      // Mirrors claude-code query.ts "withheld" isWithheld413 pattern (L1065-1095).
+      // When a PTL error was withheld in the previous iteration, attempt reactiveCompact
+      // BEFORE making a new LLM call. This avoids immediately surfacing the error to user.
+      //
+      // If reactiveCompact succeeds: clear withheld error, continue with compacted history.
+      // If reactiveCompact fails (or already attempted): surface the error, terminal.
+      if (_withheldPtlError) {
+        if (!_reactiveCompactAttempted) {
+          _reactiveCompactAttempted = true;
+          onChunk(`\n  PTL recovery: attempting reactive compact before retry…\n`);
+          try {
+            const recovered = await reactiveCompact(history, onChunk);
+            if (recovered) {
+              _withheldPtlError = null;
+              _lastTransition = { reason: 'reactive_compact_retry' };
+              onChunk('  Reactive compact succeeded — retrying with compacted context…\n');
+              continue; // retry LLM with compacted history
+            }
+          } catch { /* reactiveCompact failure → fall through to terminal */ }
+        }
+        // A20: reactive compact failed or already attempted — surface withheld error
+        // A20: skip stop hooks to prevent stop hook → new tool calls → new PTL (dead loop)
+        _skipStopHooks = true;
+        onChunk(`\n  PTL recovery failed: ${_withheldPtlError?.message ?? 'unknown error'}\n`);
+        _withheldPtlError = null;
+        _terminalReason = 'prompt_too_long';
+        _earlyExit = true;
+        break;
+      }
+
+      // ── D20: Reset reactiveCompact防循环标志 after a successful (non-error) LLM turn ──
+      // Only reset once per normal-completion iteration to avoid marking compact as "used" prematurely.
+      // The flag is set in the 413/PTL error handler below.
 
       // ── H19: formatInterruptReason — structured reason for aborted tool operations ──
       // Mirrors claude-code interruptSignalReason() in query.ts.
@@ -703,13 +757,13 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           signal: _abortSignal,
         };
         response = fallbackChain
-          ? await withApiRateLimitRetry(
+          ? await withApiRetry(
               () => fallbackChain!.callStream(getLLM(), chatOpts, onChunk),
-              (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
+              (msg) => onChunk(msg),
             )
-          : await withApiRateLimitRetry(
+          : await withApiRetry(
               () => getLLM().streamChat(chatOpts, onChunk),
-              (elapsed) => onChunk(`\n⏳ Rate-limited — waiting 30s… (${Math.round(elapsed / 60000)}min elapsed)\n`),
+              (msg) => onChunk(msg),
             );
         lastLLMCallAt = Date.now();
       } catch (err) {
@@ -753,9 +807,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               continue;
             }
           }
-          // A13: 恢复失败 — 释放 withheld 错误消息
-          onChunk(`\n  Prompt too long and max PTL retries (${MAX_PTL_RETRIES}) reached.\n`);
+          // A13: 恢复失败 — A20: withheld 模式：扣押 PTL 错误供下轮 reactive compact 处理
+          // Mirrors claude-code query.ts "isWithheld413" pattern (L1065-1095).
+          // Instead of immediately surfacing the error, store it and attempt reactiveCompact next iteration.
+          events?.onWithheld?.('prompt_too_long');
           history.push(createTombstone(history.length) as unknown as Message);
+          if (!_reactiveCompactAttempted) {
+            _withheldPtlError = err instanceof Error ? err : new Error(String(err));
+            onChunk(`\n  Prompt too long — withheld, will attempt reactive compact on next iteration…\n`);
+            _lastTransition = { reason: 'ptl_retry', attempt: MAX_PTL_RETRIES + 1 };
+            continue; // A20: triggers withheld PTL recovery path at top of next iteration
+          }
+          onChunk(`\n  Prompt too long and max PTL retries (${MAX_PTL_RETRIES}) reached.\n`);
           _terminalReason = 'prompt_too_long';
           break;
         }
@@ -766,14 +829,20 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           onChunk(`\n  Context overflow detected — attempting reactive compact…\n`);
           // ── Tombstone: clear partial streaming messages before retry ────────
           history.push(createTombstone(history.length) as unknown as Message);
-          const recovered = await reactiveCompact(history, onChunk);
-          if (recovered) {
-            // A13: 恢复成功 — 不向用户显示错误，继续正常流
-            events?.onRecovered?.('context_overflow');
-            onChunk('  Retrying with compacted context…\n');
-            // B14: 记录 continue 原因
-            _lastTransition = { reason: 'context_overflow_retry' };
-            continue;
+          // D20: hasAttemptedReactiveCompact — 防 413 无限循环（对标 claude-code query.ts L1070）
+          if (_reactiveCompactAttempted) {
+            onChunk('  Already attempted reactive compact this session — surfacing error.\n');
+          } else {
+            _reactiveCompactAttempted = true;
+            const recovered = await reactiveCompact(history, onChunk);
+            if (recovered) {
+              // A13: 恢复成功 — 不向用户显示错误，继续正常流
+              events?.onRecovered?.('context_overflow');
+              onChunk('  Retrying with compacted context…\n');
+              // B14: 记录 continue 原因
+              _lastTransition = { reason: 'context_overflow_retry' };
+              continue;
+            }
           }
         }
         // ── Tombstone on any LLM error (not just context overflow) ──────────
@@ -868,6 +937,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
         // 返回正常内容 — 重置所有 maxOutputTokens 计数器
         _maxOutputTokensOverride = undefined;
         _motRecoveryCount = 0;
+        // D20: 成功 LLM 调用后重置 reactive compact 防循环标志
+        // Allows future 413 recovery after a normal completion (not infinite prevention).
+        _reactiveCompactAttempted = false;
 
         // Confidence mechanism (kstack article #15310)
         const uncertainPattern = /\[UNCERTAIN\]|⚠️\s*\[UNCERTAIN\]/gi;
@@ -925,12 +997,19 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
         // Fires after each successful AI text reply, before breaking the loop.
         // 如果 Stop Hook 返回 blockingErrors → 注入 history，继续 LLM 调用。
         // 如果 Stop Hook 返回 preventContinuation=true → 终止循环（hook_stopped）。
-        // stopHookActive 字段防止 Stop Hook 触发新一轮 stop hook 形成无限循环。
-        if (!_isSubAgent) {
+        // F20: _stopHookActive 字段防止 Stop Hook 触发新一轮 stop hook 形成无限循环
+        // (claude-code State.stopHookActive + stopHooks.ts L184 parity)
+        // A20: _skipStopHooks — PTL terminal 后跳过 stop hooks（防 hook 触发新工具调用 → 新 PTL）
+        if (!_isSubAgent && !_skipStopHooks) {
           try {
             const { getHookRunner: _getStopHookRunner } = await import('../hooks.js');
             const _stopRunner = _getStopHookRunner(process.cwd());
             if (_stopRunner.hasHooksFor('agent_stop')) {
+              // F20: 若上轮已触发过 stop hook blocking，本轮跳过（防死循环）
+              if (_stopHookActive) {
+                _stopHookActive = false; // 重置，让下轮正常触发
+                break; // 跳过 stop hook，正常完成
+              }
               const _lastMsg = history[history.length - 1];
               const _lastContent = _lastMsg?.role === 'assistant'
                 ? (typeof _lastMsg.content === 'string' ? _lastMsg.content : '')
@@ -956,6 +1035,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               if (_blockingErrors.length > 0) {
                 // C15: 将 blocking errors 注入 history，继续 LLM 调用
                 history.push(..._blockingErrors);
+                // F20: 设置 _stopHookActive = true，防止下一轮 stop hook 再次触发造成死循环
+                _stopHookActive = true;
                 _lastTransition = { reason: 'stop_hook_blocking' };
                 continue; // 重新进入主循环
               }
@@ -1049,9 +1130,12 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           // ── PreToolUse hook: block/modify tool input (inspired by claude-code) ──
           // Hooks may: (1) block the tool by outputting JSON with proceed=false or exit 2
           //            (2) modify tool arguments via updatedInput in JSON stdout
+          //            (3) E20: provide permissionBehavior='allow' to skip 'ask' UI (but NOT deny rules)
           // This runs via the user-configurable HookRunner (on_tool_call event),
           // separate from the internal triggerHook() above.
           let effectiveArgs = call.arguments;
+          let _hookAllowedPermission = false; // E20: hook granted allow (from hook result)
+          let _hookProvidedupdatedInput = false; // E20: hook modified input (interactionSatisfied)
           try {
             const { getHookRunner } = await import('../hooks.js');
             const runner = getHookRunner(process.cwd());
@@ -1076,9 +1160,30 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               // Apply updatedInput if hook modified the tool arguments
               if (hookResult.updatedInput) {
                 effectiveArgs = hookResult.updatedInput;
+                _hookProvidedupdatedInput = true;
+              }
+              // E20: resolveHookPermissionDecision — hook allow vs deny rules
+              // Mirrors claude-code toolHooks.ts resolveHookPermissionDecision():
+              //   hook allow skips 'ask' UI confirmation, but deny rules STILL apply.
+              //   If permMgr.decide() returns 'deny', the deny rule wins over hook allow.
+              const _hookBehavior = (hookResult as unknown as Record<string, unknown>)['permissionBehavior'] as string | undefined;
+              if (_hookBehavior === 'allow') {
+                _hookAllowedPermission = true;
+                // E20: Re-check deny rules even when hook says 'allow'
+                const _denyCheck = permMgr.decide(call.name, _observableArgs, approvalMode);
+                if (_denyCheck === 'deny') {
+                  await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: 'Denied by permission rule (hook allow cannot override deny)', success: false }));
+                  events?.onToolEnd?.(call.name, false, Date.now() - toolStartMs);
+                  return { role: 'tool' as const, toolCallId: call.id, content: `[Permission denied] Tool "${call.name}" is blocked by an alwaysDeny rule (hook allow cannot override deny rules).` };
+                }
               }
             }
           } catch { /* Hook check failure is non-fatal — proceed with original args */ }
+
+          // E20: interactionSatisfied — if hook provided updatedInput, skip 'ask' confirmation
+          // Mirrors claude-code toolHooks.ts interactionSatisfied pattern.
+          // This handles automation scenarios: hook programmatically modifies input, no user confirm needed.
+          const _interactionSatisfied = _hookProvidedupdatedInput || _hookAllowedPermission;
 
           // Fire plugin on_tool_call hooks (non-blocking, errors are silent)
           try {
