@@ -37,6 +37,7 @@ const SLASH_COMPLETIONS = [
   '/skills', '/plugin', '/logout', '/permissions',
   '/metrics', '/plugins',
   '/thinkback',
+  '/commit', '/security-review',  // Round 7: auto-commit + security audit
 ];
 
 export interface AppProps {
@@ -1578,6 +1579,83 @@ export function App({
       } catch (e) { lines.push(`  ✗  config error: ${e instanceof Error ? e.message : String(e)}`); }
 
       setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
+      return;
+    }
+
+    // ── /commit — auto-generate commit message (Round 7: claude-code parity) ──
+    if (cmd.startsWith('/commit')) {
+      // In Ink mode, delegate to the readline handler via runStream
+      setIsStreaming(true);
+      try {
+        const { execSync: _inkExec } = await import('child_process');
+        // Get diff
+        let diff = '';
+        try {
+          diff = _inkExec('git diff --staged', { cwd: process.cwd(), encoding: 'utf-8', timeout: 10_000 }) as string;
+          if (!diff.trim()) diff = _inkExec('git diff HEAD', { cwd: process.cwd(), encoding: 'utf-8', timeout: 10_000 }) as string;
+        } catch (e) {
+          appendSystem(`/commit: git error — ${e instanceof Error ? e.message : String(e)}`);
+          setIsStreaming(false);
+          return;
+        }
+        if (!diff.trim()) {
+          appendSystem('/commit: No changes to commit (git diff is empty).');
+          setIsStreaming(false);
+          return;
+        }
+        // Generate commit message
+        const MAX_DIFF = 12_000;
+        const diffToSend = diff.length > MAX_DIFF ? diff.slice(0, MAX_DIFF) + '\n... [diff truncated]' : diff;
+        const commitPrompt = [
+          'Generate a concise git commit message following Conventional Commits format.',
+          'Format: <type>(<scope>): <description>',
+          'Types: feat, fix, docs, style, refactor, perf, test, chore, ci, build',
+          'Output ONLY the commit message, nothing else.',
+          '',
+          `Diff:\n${diffToSend}`,
+        ].join('\n');
+        const parts: string[] = [];
+        await agent.runStream(commitPrompt, (c) => parts.push(c));
+        const commitMsg = parts.join('').trim();
+        if (commitMsg) {
+          // Show message — user can copy and run git commit manually
+          appendSystem(`Generated commit message:\n\n  ${commitMsg}\n\nRun: git commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
+        } else {
+          appendSystem('/commit: Could not generate commit message.');
+        }
+      } catch (e) {
+        appendSystem(`/commit error: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setIsStreaming(false);
+      }
+      return;
+    }
+
+    // ── /security-review — security audit (Round 7: claude-code parity) ──
+    if (cmd.startsWith('/security-review')) {
+      const scope = cmd.replace('/security-review', '').trim() || 'src/ (or entire project)';
+      setIsStreaming(true);
+      const secPrompt = `You are a security researcher. Perform a thorough security audit of the codebase.
+Scope: ${scope}
+
+Check for: SQL Injection, XSS, RCE, Path Traversal, SSRF, hardcoded secrets, unsafe deserialization, IDOR, XXE.
+
+Only report vulnerabilities with confidence ≥ 0.7.
+
+For each finding:
+### [SEVERITY] Title
+**File:** path:line | **Category:** ... | **Confidence:** X.X
+**Exploit:** How an attacker would exploit this
+**Fix:** Specific code fix
+
+Begin with a scope summary then list findings. If none found, say so.`;
+      try {
+        await agent.runStream(secPrompt, (c) => process.stdout.write(c));
+      } catch (e) {
+        appendSystem(`/security-review error: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setIsStreaming(false);
+      }
       return;
     }
 

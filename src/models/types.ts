@@ -86,10 +86,11 @@ export interface ParameterSchema {
 /** Claude extended-thinking budget levels */
 export type ThinkingLevel =
   | 'low' | 'medium' | 'high'    // all providers
-  | 'max' | 'xhigh' | 'maxOrXhigh'; // extended (Claude / advanced)
+  | 'max' | 'xhigh' | 'maxOrXhigh' // extended (Claude / advanced)
+  | 'adaptive';  // Round 7: auto-select budget based on model name
 
 /** Budget tokens per level (aligns with Anthropic docs) */
-export const THINKING_BUDGETS: Record<ThinkingLevel, number> = {
+export const THINKING_BUDGETS: Record<Exclude<ThinkingLevel, 'adaptive'>, number> = {
   low:          1_024,
   medium:       8_000,
   high:        16_000,
@@ -97,6 +98,24 @@ export const THINKING_BUDGETS: Record<ThinkingLevel, number> = {
   xhigh:       32_000,
   maxOrXhigh:  32_000,   // prefer xhigh; fall back to max on unsupported models
 };
+
+/**
+ * Resolve 'adaptive' thinking level to a concrete level based on model name.
+ * (Round 7: claude-code adaptive thinking parity)
+ *   - claude-opus-* / claude-3-opus-*  → 'high' (16k tokens)
+ *   - claude-sonnet-* / claude-3-*     → 'medium' (8k tokens)
+ *   - other models                     → undefined (disable thinking)
+ */
+export function resolveAdaptiveThinking(
+  thinkingLevel: ThinkingLevel | undefined,
+  modelName: string,
+): Exclude<ThinkingLevel, 'adaptive'> | undefined {
+  if (thinkingLevel !== 'adaptive') return thinkingLevel as Exclude<ThinkingLevel, 'adaptive'> | undefined;
+  const lower = modelName.toLowerCase();
+  if (lower.includes('opus')) return 'high';       // opus → 16k budget
+  if (lower.includes('sonnet')) return 'medium';   // sonnet → 8k budget
+  return undefined;                                 // others → disable
+}
 
 export interface ChatOptions {
   systemPrompt: string;

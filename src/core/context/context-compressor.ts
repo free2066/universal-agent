@@ -248,6 +248,59 @@ function findSafeSplitPoint(history: Message[], targetIdx: number): number {
  *   DISABLE_AUTO_COMPACT=1          — skip entirely
  *   AGENT_COMPACT_PCT_OVERRIDE=0.x  — override threshold fraction
  */
+// ── Round 7: Time-based microcompact ─────────────────────────────────────────
+//
+// When the session is idle for more than TIME_BASED_COMPACT_THRESHOLD_MINUTES,
+// the server's prompt cache has likely expired. Proactively microcompact stale
+// tool results to minimize the cache miss cost on the next LLM call.
+//
+// This mirrors claude-code's time-based microcompact trigger.
+// Override threshold: UAGENT_TIME_COMPACT_MINUTES env var (default: 30)
+
+const TIME_BASED_COMPACT_THRESHOLD_MS = (() => {
+  const v = parseInt(process.env.UAGENT_TIME_COMPACT_MINUTES ?? '30', 10);
+  return (isNaN(v) || v <= 0 ? 30 : v) * 60_000;
+})();
+
+/** Track the last time a microcompact was triggered (session-level) */
+let _lastTimeBasedMicrocompactAt = 0;
+
+/** Exported for testing only */
+export function _resetTimeBasedMicrocompact(): void { _lastTimeBasedMicrocompactAt = 0; }
+
+/**
+ * Time-based microcompact: called from autoCompact() before full compaction.
+ * If idle for >30 min AND context is below full-compact threshold,
+ * clear stale tool results without an LLM call.
+ *
+ * Returns number of messages cleared (0 if not triggered).
+ */
+async function runTimeBasedMicrocompact(
+  history: Message[],
+  now: number,
+  onProgress?: (msg: string) => void,
+): Promise<number> {
+  // Only trigger if last assistant message has a timestamp and it's old enough
+  const lastAssistant = [...history].reverse().find((m) => m.role === 'assistant');
+  const msgTs = (lastAssistant as { timestamp?: number } | undefined)?.timestamp;
+  if (!msgTs) return 0;                              // no timestamp available
+
+  const gap = now - msgTs;
+  if (gap < TIME_BASED_COMPACT_THRESHOLD_MS) return 0; // not idle long enough
+
+  // Avoid triggering multiple times per idle window
+  if (_lastTimeBasedMicrocompactAt > 0 && now - _lastTimeBasedMicrocompactAt < TIME_BASED_COMPACT_THRESHOLD_MS) return 0;
+
+  const { microcompact } = await import('./context-editor.js');
+  const cleared = microcompact(history);
+  if (cleared > 0) {
+    const gapMin = Math.round(gap / 60_000);
+    _lastTimeBasedMicrocompactAt = now;
+    onProgress?.(`\n[context] time-based microcompact triggered (gap=${gapMin}min, cleared=${cleared} stale results)\n`);
+  }
+  return cleared;
+}
+
 export async function autoCompact(
   history: Message[],
   onProgress?: (msg: string) => void,
@@ -258,6 +311,12 @@ export async function autoCompact(
   // Circuit breaker — stop after MAX_CONSECUTIVE_FAILURES failures
   if (circuitOpen) return 0;
 
+  // ── Round 7: Time-based microcompact (Layer 3 enhancement) ────────────────
+  // Before checking full-compact threshold, try time-based microcompact.
+  // This clears stale tool results when the session has been idle, reducing
+  // cache miss costs. Runs even if full compact is not triggered.
+  const _now = Date.now();
+  await runTimeBasedMicrocompact(history, _now, onProgress);
   // Anti-recursion guard
   if (isCompacting) return 0;
 

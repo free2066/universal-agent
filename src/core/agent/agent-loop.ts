@@ -370,6 +370,16 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
 
   const expandedPrompt = expandMentions(prompt);
 
+  // ── Round 7: ultrathink keyword → max thinking budget ─────────────────────
+  // If user includes "ultrathink" in the prompt, auto-escalate to maximum
+  // thinking budget (32k tokens) for this turn only.
+  // Reference: claude-code thinking.ts ultrathink trigger
+  let _ultrathinkActive = false;
+  if (/\bultrathink\b/i.test(expandedPrompt) && thinkingLevel !== undefined) {
+    _ultrathinkActive = true;
+    onChunk('\n🧠 ultrathink mode activated — maximum thinking budget (32k tokens)\n\n');
+  }
+
   const baseSystemPrompt = router.getSystemPrompt(domain);
   let systemPrompt = systemPromptOverride ?? buildSystemPromptWithContext(baseSystemPrompt);
   if (appendSystemPrompt) systemPrompt += `\n\n${appendSystemPrompt}`;
@@ -538,7 +548,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           messages: history,
           tools,
           stream: true,
-          thinkingLevel,
+          // Round 7: ultrathink keyword overrides thinkingLevel to max budget
+          thinkingLevel: _ultrathinkActive ? 'max' as const : thinkingLevel,
           onToolCallDelta,
         };
         response = fallbackChain

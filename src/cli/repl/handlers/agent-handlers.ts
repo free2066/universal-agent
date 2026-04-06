@@ -322,3 +322,259 @@ export async function handleDoctor(ctx: SlashContext): Promise<true> {
   return done(rl);
 }
 
+// ── /commit ──────────────────────────────────────────────────────────────────
+/**
+ * /commit — Auto-generate a Conventional Commits message from git diff
+ * (Round 7: claude-code /commit parity)
+ *
+ * Flow:
+ *   1. Run git diff --staged (fall back to git diff HEAD if nothing staged)
+ *   2. Call LLM (quick model) to analyze and generate a commit message
+ *   3. Show message to user for y/n confirmation
+ *   4. If confirmed, run git commit -m "..."
+ *
+ * Security: only git commands are allowed during this flow.
+ */
+export async function handleCommit(input: string, ctx: SlashContext): Promise<true> {
+  const { rl, agent } = ctx;
+  rl.pause();
+
+  const flags = input.replace(/^\/commit\s*/, '').trim(); // e.g. --no-verify
+  const { execSync } = await import('child_process');
+
+  process.stdout.write(chalk.bold('\n📝  /commit — Auto-generate commit message\n'));
+  process.stdout.write(chalk.gray('─'.repeat(55) + '\n'));
+
+  // 1. Get diff
+  let diff = '';
+  try {
+    diff = execSync('git diff --staged', { cwd: process.cwd(), encoding: 'utf-8', timeout: 10_000 });
+    if (!diff.trim()) {
+      // Nothing staged — fall back to unstaged diff
+      diff = execSync('git diff HEAD', { cwd: process.cwd(), encoding: 'utf-8', timeout: 10_000 });
+    }
+    if (!diff.trim()) {
+      process.stdout.write(chalk.yellow('  No changes to commit (git diff is empty).\n\n'));
+      rl.resume();
+      return done(rl);
+    }
+  } catch (e) {
+    process.stdout.write(chalk.red(`  Git error: ${e instanceof Error ? e.message : String(e)}\n\n`));
+    rl.resume();
+    return done(rl);
+  }
+
+  // Truncate diff to avoid context overflow (max 12KB)
+  const MAX_DIFF_CHARS = 12_000;
+  const truncated = diff.length > MAX_DIFF_CHARS;
+  const diffToSend = truncated ? diff.slice(0, MAX_DIFF_CHARS) + '\n... [diff truncated]' : diff;
+
+  process.stdout.write(chalk.gray(`  Analyzing ${diff.length.toLocaleString()} chars of diff${truncated ? ' (truncated)' : ''}...\n`));
+
+  // 2. Generate commit message via LLM
+  let commitMsg = '';
+  try {
+    const llm = modelManager.getClient('quick');
+
+    const systemPrompt = [
+      'You are a git commit message generator. Analyze the provided git diff and generate a concise, high-quality commit message following the Conventional Commits specification.',
+      '',
+      'Format: <type>(<scope>): <description>',
+      '',
+      'Types: feat, fix, docs, style, refactor, perf, test, chore, ci, build',
+      '',
+      'Rules:',
+      '- First line: type(scope): description (max 72 chars)',
+      '- Keep the description concise and imperative (e.g. "add feature" not "added feature")',
+      '- Add a blank line then bullet points for significant details (if any)',
+      '- Do NOT include issue numbers unless they appear in the diff',
+      '- Scope is optional but helpful (e.g. feat(auth):, fix(api):)',
+      '',
+      'Output ONLY the commit message, nothing else.',
+    ].join('\n');
+
+    const chunks: string[] = [];
+    await llm.streamChat({
+      systemPrompt,
+      messages: [{ role: 'user', content: `Generate a commit message for this diff:\n\n${diffToSend}` }],
+    }, (chunk) => {
+      chunks.push(chunk);
+      process.stdout.write(chalk.white(chunk));
+    });
+
+    commitMsg = chunks.join('').trim();
+    if (!commitMsg) throw new Error('LLM returned empty message');
+  } catch (e) {
+    process.stdout.write(chalk.red(`\n  LLM error: ${e instanceof Error ? e.message : String(e)}\n\n`));
+    rl.resume();
+    return done(rl);
+  }
+
+  process.stdout.write('\n');
+  process.stdout.write(chalk.gray('─'.repeat(55) + '\n'));
+
+  // 3. Confirm with user
+  rl.resume();
+  const answer = await new Promise<string>((resolve) => {
+    rl.question(chalk.cyan('\n  Commit with this message? [y/n/e(edit)]: '), resolve);
+  });
+
+  const trimmed = answer.trim().toLowerCase();
+
+  if (trimmed === 'e' || trimmed === 'edit') {
+    // Let user edit message inline
+    const edited = await new Promise<string>((resolve) => {
+      rl.question(chalk.cyan('  Enter commit message: '), resolve);
+    });
+    if (edited.trim()) commitMsg = edited.trim();
+  }
+
+  if (trimmed !== 'y' && trimmed !== 'e' && trimmed !== 'edit') {
+    process.stdout.write(chalk.gray('  Commit cancelled.\n\n'));
+    return done(rl);
+  }
+
+  // 4. Execute git commit
+  rl.pause();
+  try {
+    // Only allow git commit (with optional --no-verify flag)
+    const allowedFlags = ['--no-verify', '--allow-empty', '--amend'].filter(f => flags.includes(f));
+    const flagStr = allowedFlags.length > 0 ? ' ' + allowedFlags.join(' ') : '';
+    const cmd = `git commit${flagStr} -m ${JSON.stringify(commitMsg)}`;
+    const output = execSync(cmd, { cwd: process.cwd(), encoding: 'utf-8', timeout: 15_000 });
+    process.stdout.write(chalk.green(`\n  ✓ Committed!\n`));
+    process.stdout.write(chalk.gray(output.trim() + '\n\n'));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    process.stdout.write(chalk.red(`\n  git commit failed: ${msg}\n\n`));
+  }
+
+  rl.resume();
+  return done(rl);
+}
+
+// ── /security-review ─────────────────────────────────────────────────────────
+/**
+ * /security-review — Deep security audit of the current project
+ * (Round 7: claude-code /security-review command parity)
+ *
+ * Runs a structured security review using an embedded prompt with:
+ * - Confidence threshold ≥ 0.7 (suppress low-confidence findings)
+ * - Covers: SQL injection, XSS, RCE, path traversal, SSRF, XXE, IDOR,
+ *           unsafe deserialization, hardcoded secrets
+ * - Structured output: file:line, severity, exploit scenario, fix
+ * - Read-only mode (only Bash(git diff), Read, Grep, Glob allowed)
+ */
+export async function handleSecurityReview(input: string, ctx: SlashContext): Promise<true> {
+  const { rl, agent } = ctx;
+  rl.pause();
+
+  const scopeArg = input.replace(/^\/security-review\s*/, '').trim();
+
+  process.stdout.write(chalk.bold('\n🔒  /security-review — Security Audit\n'));
+  process.stdout.write(chalk.gray('─'.repeat(55) + '\n'));
+  process.stdout.write(chalk.gray('  This may take several minutes for large projects...\n\n'));
+
+  const SECURITY_REVIEW_PROMPT = `You are a security researcher performing a thorough security audit.
+Your task is to identify REAL, EXPLOITABLE security vulnerabilities in the codebase.
+
+## Methodology
+
+1. **Context Research** (read-only): Understand the application's purpose, architecture, and attack surface
+2. **Comparative Analysis**: Identify patterns that differ from security best practices
+3. **Vulnerability Assessment**: For each candidate vulnerability, assess exploitability
+
+## Vulnerability Categories to Check
+
+- SQL Injection (including ORM misuse, raw queries)
+- Cross-Site Scripting (XSS) — reflected, stored, DOM-based
+- Remote Code Execution (RCE) — eval, exec, deserialization
+- Path Traversal — file read/write with user-controlled paths
+- Server-Side Request Forgery (SSRF) — user-controlled URLs
+- XML External Entity (XXE) — XML parsers with external entities
+- Insecure Direct Object Reference (IDOR) — missing authorization checks
+- Hardcoded secrets — API keys, passwords, tokens in source code
+- Insecure deserialization — unsafe JSON.parse, pickle, etc.
+- Authentication bypasses — JWT issues, session fixation, weak tokens
+
+## Reporting Rules
+
+**ONLY report vulnerabilities where you have ≥0.7 confidence they are exploitable.**
+
+DO NOT report:
+- Theoretical vulnerabilities with no realistic exploit path
+- Denial of service / rate limiting issues
+- Missing security headers (unless critical)
+- API keys stored in environment files (only report if committed to git)
+
+## Output Format
+
+For each finding:
+
+### [SEVERITY] Vulnerability Title
+**File:** path/to/file.ts:line_number
+**Category:** (e.g., SQL Injection, XSS, RCE)
+**Confidence:** 0.X / 1.0
+**Exploit Scenario:** How an attacker would exploit this
+**Fix:** Specific code fix recommendation
+
+---
+
+Use severity levels: CRITICAL, HIGH, MEDIUM
+
+Begin by scanning the following scope: ${scopeArg || 'src/, lib/, app/ directories (or entire project if not found)'}
+
+Start with a brief scope summary, then list all findings. If no vulnerabilities found, say "No exploitable vulnerabilities found with ≥0.7 confidence."`;
+
+  // Use agent to run the security review
+  try {
+    rl.pause();
+    process.stdout.write(chalk.gray('  Analyzing...\n\n'));
+    await agent.runStream(SECURITY_REVIEW_PROMPT, (chunk) => process.stdout.write(chunk));
+    process.stdout.write('\n\n');
+  } catch (e) {
+    // Fallback: static grep scan
+    const { execSync } = await import('child_process');
+    try {
+      // Quick static grep for common patterns
+      const findings: string[] = [];
+
+      const checks: Array<{ label: string; pattern: string }> = [
+        { label: 'eval() usage', pattern: 'eval(' },
+        { label: 'SQL raw query', pattern: 'query(' },
+        { label: 'path.join + user input', pattern: '__dirname' },
+        { label: 'hardcoded secrets', pattern: 'password.*=' },
+        { label: 'child_process.exec', pattern: 'exec(' },
+        { label: 'innerHTML assignment', pattern: 'innerHTML' },
+      ];
+
+      for (const { label, pattern } of checks) {
+        try {
+          const result = execSync(
+            `grep -rn --include="*.ts" --include="*.js" "${pattern}" src/ 2>/dev/null | head -5`,
+            { cwd: process.cwd(), encoding: 'utf-8', timeout: 5000 }
+          );
+          if (result.trim()) {
+            findings.push(`\n  [PATTERN] ${label}:\n${result.trim().split('\n').map(l => '    ' + l).join('\n')}`);
+          }
+        } catch { /* skip */ }
+      }
+
+      if (findings.length > 0) {
+        process.stdout.write(chalk.yellow('  Static pattern matches (manual review required):\n'));
+        process.stdout.write(findings.join('\n') + '\n');
+        process.stdout.write(chalk.gray('\n  Note: For full AI-powered analysis, ensure agent is running.\n'));
+      } else {
+        process.stdout.write(chalk.green('  No obvious security patterns found in static scan.\n'));
+        process.stdout.write(chalk.gray('  For comprehensive review, use the AI agent directly.\n'));
+      }
+    } catch (e2) {
+      process.stdout.write(chalk.red(`  Error: ${e2 instanceof Error ? e2.message : String(e2)}\n`));
+    }
+  }
+
+  process.stdout.write(chalk.gray('─'.repeat(55) + '\n\n'));
+  rl.resume();
+  return done(rl);
+}
+

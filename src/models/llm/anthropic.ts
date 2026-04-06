@@ -7,6 +7,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { LLMClient, ChatOptions, ChatResponse, Message } from '../types.js';
+import { resolveAdaptiveThinking } from '../types.js';
 import { withInferenceTimeout, safeParseJSON, toAnthropicContent, msgText } from './shared.js';
 
 export class AnthropicClient implements LLMClient {
@@ -22,7 +23,8 @@ export class AnthropicClient implements LLMClient {
     const messages = this.convertMessages(options.messages);
     const hasTools = (options.tools?.length ?? 0) > 0;
     const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
-    const thinking = options.thinkingLevel;
+    // Round 7: adaptive thinking level resolves based on model name
+    const thinking = resolveAdaptiveThinking(options.thinkingLevel, this.model);
     const budgets: Record<string, number> = {
       low: 1024, medium: 8000, high: 16000,
       max: 32000, xhigh: 32000, maxOrXhigh: 32000,
@@ -71,7 +73,8 @@ export class AnthropicClient implements LLMClient {
       const messages = this.convertMessages(options.messages);
       const hasTools = (options.tools?.length ?? 0) > 0;
       const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
-      const thinking = options.thinkingLevel;
+      // Round 7: adaptive thinking level resolves based on model name
+      const thinking = resolveAdaptiveThinking(options.thinkingLevel, this.model);
       const budgets: Record<string, number> = {
         low: 1024, medium: 8000, high: 16000,
         max: 32000, xhigh: 32000, maxOrXhigh: 32000,

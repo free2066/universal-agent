@@ -30,6 +30,7 @@ import {
 import {
   handleModel, handleModels, handleDomain, handleAgents,
   handleContext, handleCompactOrTokens, handleDoctor,
+  handleCommit, handleSecurityReview,
 } from './agent-handlers.js';
 
 // Memory handlers
@@ -76,6 +77,8 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
   if (input === '/context') return handleContext(ctx);
   if (input === '/compact' || input === '/tokens') return handleCompactOrTokens(input, ctx);
   if (input === '/doctor') return handleDoctor(ctx);
+  if (input.startsWith('/commit')) return handleCommit(input, ctx);
+  if (input.startsWith('/security-review')) return handleSecurityReview(input, ctx);
 
   // ── Memory / knowledge commands ────────────────────────────────────────────
   if (input.startsWith('/memory')) return handleMemory(input, ctx);

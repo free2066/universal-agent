@@ -457,13 +457,18 @@ export const editFileTool: ToolRegistration = {
     name: 'Edit',
     description:
       'Replace an exact string in a file. Uses 9-strategy fuzzy matching (whitespace, indentation, ' +
-      'escape sequences, block anchors) so minor LLM transcription differences are handled gracefully.',
+      'escape sequences, block anchors) so minor LLM transcription differences are handled gracefully. ' +
+      'Set replace_all=true to replace ALL occurrences of old_string (Round 7: claude-code replace_all parity).',
     parameters: {
       type: 'object',
       properties: {
         file_path: { type: 'string', description: 'File to edit' },
         old_string: { type: 'string', description: 'Exact text to find and replace' },
         new_string: { type: 'string', description: 'Text to replace it with' },
+        replace_all: {
+          type: 'boolean',
+          description: 'Replace ALL occurrences of old_string (default false). When false and multiple matches exist, returns an error.',
+        },
       },
       required: ['file_path', 'old_string', 'new_string'],
     },
@@ -484,6 +489,41 @@ export const editFileTool: ToolRegistration = {
       const content = readFileSync(filePath, 'utf-8');
       const oldStr = args.old_string as string;
       const newStr = args.new_string as string;
+      const replaceAll = !!(args.replace_all as boolean | undefined);
+
+      // ── replace_all mode (Round 7: claude-code replace_all parity) ──────────
+      // When replace_all=true, replace all literal occurrences of old_string.
+      // This uses a plain string replacement (not fuzzy) to ensure determinism.
+      if (replaceAll) {
+        const normalized = content.replace(/\r\n/g, '\n');
+        const normOld = oldStr.replace(/\r\n/g, '\n');
+        const occurrences = normalized.split(normOld).length - 1;
+        if (occurrences === 0) {
+          return (
+            `Error: old_string not found in file (replace_all=true).\n` +
+            `Make sure the text exists in the file. Use Read tool to confirm exact content.`
+          );
+        }
+        const replaced = normalized.split(normOld).join(newStr);
+        writeFileSync(filePath, replaced, 'utf-8');
+        return `✓ Edit applied to ${filePath} (replaced ${occurrences} occurrence${occurrences !== 1 ? 's' : ''})`;
+      }
+
+      // ── single-occurrence mode (default) ─────────────────────────────────────
+      // Check if there are multiple matches before fuzzy replace.
+      // If yes (and replace_all=false), return error to avoid ambiguous edits.
+      const normalized = content.replace(/\r\n/g, '\n');
+      const normOld = oldStr.replace(/\r\n/g, '\n');
+      if (normOld.length > 0) {
+        const occurrences = normalized.split(normOld).length - 1;
+        if (occurrences > 1) {
+          return (
+            `Error: Found ${occurrences} occurrences of old_string in the file, but replace_all is false.\n` +
+            `To replace all occurrences, set replace_all=true.\n` +
+            `To replace a specific occurrence, include more surrounding context in old_string to make it unique.`
+          );
+        }
+      }
 
       const result = fuzzyReplace(content, oldStr, newStr);
       if (result !== null) {
