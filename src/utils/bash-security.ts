@@ -235,6 +235,233 @@ function checkBackslashEscapedOperators(cmd: string): BashSecurityViolation | nu
   return null;
 }
 
+// ── Round 16: 10 additional security checks (claude-code full parity) ────────
+
+/**
+ * CHECK_1: INCOMPLETE_COMMANDS — 不完整命令（悬空操作符）
+ * 风险：`cat /etc/passwd |` 分两次调用绕过检查，后半段绕过权限验证。
+ */
+function checkIncompleteCommands(cmd: string): BashSecurityViolation | null {
+  const trimmed = cmd.trimEnd();
+  // 以管道、逻辑运算符、分号结尾（允许行末 # 注释后无代码）
+  if (/[|&;]\s*(?:#[^\n]*)?\s*$/.test(trimmed)) {
+    return {
+      id: 1,
+      message: 'Command ends with incomplete operator (dangling pipe/&&/||/;) — command may be split across calls to bypass validation',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_3: JQ_FILE_ARGUMENTS — jq --rawfile/--slurpfile/-f 危险参数
+ * 风险：`jq -f /etc/passwd` 可将任意文件内容作为 jq 过滤器执行，读取敏感数据。
+ */
+function checkJqFileArguments(cmd: string): BashSecurityViolation | null {
+  // -f <file>, --rawfile <var> <file>, --slurpfile <var> <file>, --fromfile <file>
+  if (/\bjq\b[^|;&#\n]*(?:--rawfile|--slurpfile|--fromfile|-f)\s+(?!\s*-|\s*'[^']*'|\s*"[^"]*")/.test(cmd)) {
+    return {
+      id: 3,
+      message: 'jq file argument (--rawfile/--slurpfile/-f) may read arbitrary files as filter programs',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_5: SHELL_METACHARACTERS — 引号内嵌的 shell 元字符
+ * 风险：`"arg;rm -rf /"` 在某些插值场景中 shell 不会将引号识别为保护。
+ */
+function checkShellMetacharacters(cmd: string): BashSecurityViolation | null {
+  // 在双引号字符串内检测未转义的 ; & | （非 $(...) 内部的）
+  const doubleQuotedPattern = /"[^"\\]*(?:\\.[^"\\]*)*"/g;
+  let m: RegExpExecArray | null;
+  while ((m = doubleQuotedPattern.exec(cmd)) !== null) {
+    const content = m[0].slice(1, -1); // 去掉外层引号
+    // 双引号内的 ; 或 & 或未转义的 | 是可疑的
+    if (/(?<!\\)[;&|]/.test(content) && !/^\$\(/.test(content)) {
+      return {
+        id: 5,
+        message: 'Shell metacharacters (;/&/|) found inside double-quoted string — potential injection in interpolated contexts',
+        isHard: false,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * CHECK_7: NEWLINES — 命令内换行注入
+ * 风险：`echo "foo\nrm -rf /"` 中嵌入 \n 会使 shell 在换行处开始新命令。
+ */
+function checkNewlineInjection(cmd: string): BashSecurityViolation | null {
+  // 字面换行（\n 字符）嵌入命令主体（非行尾注释后的正常换行）
+  // 检测在引号外的字面换行
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (ch === '\\') { i++; continue; }
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (ch === '\n' && !inSingle && !inDouble) {
+      // 换行出现在引号外 — 合法的多行命令，但检查换行后是否有实质内容
+      const rest = cmd.slice(i + 1).trimStart();
+      if (rest.length > 0 && !/^#/.test(rest)) {
+        return {
+          id: 7,
+          message: 'Command contains embedded newline outside quotes — may execute additional commands on the new line',
+          isHard: false,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * CHECK_9: DANGEROUS_PATTERNS_INPUT_REDIRECTION — 危险输入重定向
+ * 风险：`cmd < /etc/passwd`、`cmd <<< "$(evil)"` 等读取敏感文件或注入 here-string。
+ */
+function checkDangerousInputRedirection(cmd: string): BashSecurityViolation | null {
+  // < /sensitive-path or <<< $(...) or <<EOF with command substitution
+  if (/(?:^|[\s;|&])<\s*(?:\/etc\/|\/proc\/|\/sys\/|~\/\.ssh\/)/.test(cmd)) {
+    return {
+      id: 9,
+      message: 'Dangerous input redirection from sensitive path (/etc/, /proc/, /sys/, ~/.ssh/)',
+      isHard: true,
+    };
+  }
+  if (/<<<\s*\$\(/.test(cmd)) {
+    return {
+      id: 9,
+      message: 'Here-string with command substitution (<<<$(...)) may inject dangerous input',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_10: DANGEROUS_PATTERNS_OUTPUT_REDIRECTION — 危险输出重定向
+ * 风险：`cmd >> ~/.bashrc`、`cmd > /etc/crontab` 等向系统文件追加内容。
+ */
+function checkDangerousOutputRedirection(cmd: string): BashSecurityViolation | null {
+  // >> or > to sensitive paths (profile files, cron, sudoers, etc.)
+  const SENSITIVE_WRITE_TARGETS = [
+    /~\/\.(?:bash|zsh|fish|profile|bashrc|bash_profile|bash_login|zshrc|zprofile|zlogin|config\/fish)/i,
+    /\/etc\/(?:crontab|sudoers|passwd|shadow|hosts|ssh\/|profile|environment|rc\.|cron)/i,
+    /\/var\/spool\/cron/i,
+    /\/root\/\./i,
+  ];
+  for (const pattern of SENSITIVE_WRITE_TARGETS) {
+    if (/(?:>>?|>\|)\s*/.test(cmd) && pattern.test(cmd)) {
+      return {
+        id: 10,
+        message: `Dangerous output redirection to sensitive path detected (${pattern.source.split('/')[1]})`,
+        isHard: true,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * CHECK_12: GIT_COMMIT_SUBSTITUTION — git commit -m 中的命令替换
+ * 风险：`git commit -m "$(evil_command)"` — commit message 中的 $() 会被执行。
+ * 正常 git commit 不需要 command substitution in the message。
+ */
+function checkGitCommitSubstitution(cmd: string): BashSecurityViolation | null {
+  // git commit ... -m "..." 或 -m '...' 中含有 $(...) 或 `...`
+  if (/\bgit\s+commit\b/.test(cmd)) {
+    const msgMatch = cmd.match(/-m\s*(?:"([^"]+)"|'([^']+)')/);
+    if (msgMatch) {
+      const msg = msgMatch[1] ?? msgMatch[2] ?? '';
+      if (/\$\(/.test(msg) || /`[^`]+`/.test(msg)) {
+        return {
+          id: 12,
+          message: 'git commit -m message contains command substitution ($(...) or backticks) which will be executed',
+          isHard: false,
+        };
+      }
+    }
+    // 未引号保护的 -m 后跟命令替换
+    if (/-m\s+\$\(/.test(cmd) || /-m\s+`/.test(cmd)) {
+      return {
+        id: 12,
+        message: 'git commit -m followed by unquoted command substitution',
+        isHard: false,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * CHECK_14: MALFORMED_TOKEN_INJECTION — 畸形 token 注入（shell-quote vs bash 解析差异）
+ * 风险：`$'\x2d\x2d\x75\x70\x6c\x6f\x61\x64\x2dpack'` 等十六进制转义绕过。
+ * 此检查与 CHECK_4 互补：CHECK_4 检测引号包裹的 $'...'，CHECK_14 检测十六进制/八进制字符。
+ */
+function checkMalformedTokenInjection(cmd: string): BashSecurityViolation | null {
+  // $'\xNN' 十六进制转义（在 ANSI-C 引号外）
+  if (/\$'\\.{0,3}\\x[0-9a-fA-F]{2}/.test(cmd)) {
+    return {
+      id: 14,
+      message: "ANSI-C hex escape ($'\\xNN') detected — can encode arbitrary characters to bypass flag blacklists",
+      isHard: false,
+    };
+  }
+  // $'\NNN' 八进制转义
+  if (/\$'\\[0-7]{3}/.test(cmd)) {
+    return {
+      id: 14,
+      message: "ANSI-C octal escape ($'\\NNN') detected — can encode arbitrary characters",
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_17: CONTROL_CHARACTERS — 不可见控制字符注入
+ * 风险：ASCII 控制字符（\x01-\x08, \x0b-\x0c, \x0e-\x1f）嵌入命令，
+ * 终端可能将其解释为特殊序列（如 \x08=backspace 可删除前面的字符）。
+ */
+function checkControlCharacters(cmd: string): BashSecurityViolation | null {
+  // 排除 \t（\x09）、\n（\x0a）、\r（\x0d）— 这些是合法空白
+  // eslint-disable-next-line no-control-regex
+  if (/[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(cmd)) {
+    return {
+      id: 17,
+      message: 'Command contains non-printable control characters (\\x01-\\x1F) that may be interpreted as terminal control sequences',
+      isHard: true,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_23: QUOTED_NEWLINE — 引号内换行
+ * 风险：`"foo
+ * bar"` — 某些 shell/环境中引号内换行会导致多行命令继续，
+ * 可能在 heredoc 或 eval 场景中执行注入内容。
+ */
+function checkQuotedNewline(cmd: string): BashSecurityViolation | null {
+  // 在双引号内检测字面换行字符（不是 \n 转义序列，而是真正的 \n）
+  const doubleQuoteNewline = /"[^"]*\n[^"]*"/;
+  const singleQuoteNewline = /'[^']*\n[^']*'/;
+  if (doubleQuoteNewline.test(cmd) || singleQuoteNewline.test(cmd)) {
+    return {
+      id: 23,
+      message: 'Literal newline inside quoted string — may enable multi-line injection in eval/heredoc contexts',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
 // CHECK_22: Comment-quote desync
 //
 // A shell comment (#) after a quote that was never closed can cause the shell
@@ -424,19 +651,29 @@ function checkMidWordHash(cmd: string): BashSecurityViolation | null {
 export function checkExtendedBashSecurity(command: string): BashSecurityViolation[] {
   const violations: BashSecurityViolation[] = [];
   const checks = [
+    checkIncompleteCommands,          // CHECK_1  (Round 16: new)
     checkJqSystemFunction,
-    checkObfuscatedFlags,         // CHECK_4  (Round 8: new)
+    checkJqFileArguments,             // CHECK_3  (Round 16: new)
+    checkObfuscatedFlags,             // CHECK_4  (Round 8)
+    checkShellMetacharacters,         // CHECK_5  (Round 16: new)
     checkDangerousVariables,
+    checkNewlineInjection,            // CHECK_7  (Round 16: new)
     checkCommandSubstitutionNesting,
+    checkDangerousInputRedirection,   // CHECK_9  (Round 16: new)
+    checkDangerousOutputRedirection,  // CHECK_10 (Round 16: new)
     checkIfsInjection,
+    checkGitCommitSubstitution,       // CHECK_12 (Round 16: new)
     checkProcEnviron,
-    checkBackslashEscapedWhitespace, // CHECK_15 (Round 8: new)
-    checkBraceExpansion,          // CHECK_16 (Round 8: new)
-    checkUnicodeWhitespace,       // CHECK_18 (Round 8: new)
-    checkMidWordHash,             // CHECK_19 (Round 8: new)
+    checkMalformedTokenInjection,     // CHECK_14 (Round 16: new)
+    checkBackslashEscapedWhitespace,  // CHECK_15 (Round 8)
+    checkBraceExpansion,              // CHECK_16 (Round 8)
+    checkControlCharacters,           // CHECK_17 (Round 16: new)
+    checkUnicodeWhitespace,           // CHECK_18 (Round 8)
+    checkMidWordHash,                 // CHECK_19 (Round 8)
     checkZshDangerousCommands,
     checkBackslashEscapedOperators,
     checkCommentQuoteDesync,
+    checkQuotedNewline,               // CHECK_23 (Round 16: new)
   ];
 
   for (const check of checks) {
@@ -456,4 +693,115 @@ export function formatBashSecurityViolations(violations: BashSecurityViolation[]
   return violations
     .map((v) => `[Security check #${v.id}${v.isHard ? ' (hard block)' : ''}] ${v.message}`)
     .join('\n');
+}
+
+// ── B16: Environment variable stripping + wrapper stripping ─────────────────
+//
+// 对标 claude-code/src/tools/BashTool/bashPermissions.ts
+// stripAllLeadingEnvVars + BINARY_HIJACK_VARS + stripSafeWrappers
+//
+// 风险场景: `LD_PRELOAD=/malicious.so denied_cmd` — 前缀 env var 绕过 deny 规则
+// wrapper 场景: `timeout 30 denied_cmd` — wrapper 包裹后 deny 规则无法匹配
+
+/**
+ * B16: BINARY_HIJACK_VARS — 可劫持二进制执行路径的环境变量前缀
+ * LD_XXX/DYLD_XXX: 动态链接器注入（Linux/macOS）
+ * PATH=: 劫持命令查找路径
+ * PYTHONPATH/NODE_PATH/PERL5LIB: 语言运行时劫持
+ */
+export const BINARY_HIJACK_VARS = /^(LD_|DYLD_|PATH=|PYTHONPATH=|NODE_PATH=|PERL5LIB=|RUBY_LIB=|RUBYLIB=|GOPATH=)/;
+
+/**
+ * B16: stripAllLeadingEnvVars — 剥离命令开头的所有环境变量赋值
+ *
+ * 例：`FOO=bar BAZ=qux cmd arg` → `cmd arg`
+ *     `export FOO=bar cmd arg` → `cmd arg`
+ *     `LD_PRELOAD=/x.so rm -rf /` → `rm -rf /`
+ *
+ * @param command  原始命令字符串
+ * @param onBinaryHijack  可选回调，当检测到二进制劫持变量时触发
+ */
+export function stripAllLeadingEnvVars(
+  command: string,
+  onBinaryHijack?: (varName: string) => void,
+): string {
+  let remaining = command.trim();
+
+  // 剥离 `export VAR=value` 前缀
+  while (/^export\s+\w/.test(remaining)) {
+    const m = remaining.match(/^export\s+(\w+=\S*)\s*/);
+    if (!m) break;
+    const varAssign = m[1]!;
+    if (onBinaryHijack && BINARY_HIJACK_VARS.test(varAssign)) {
+      onBinaryHijack(varAssign.split('=')[0]!);
+    }
+    remaining = remaining.slice(m[0]!.length);
+  }
+
+  // 剥离 `VAR=value` 前缀（可能多个）
+  let matched = true;
+  while (matched) {
+    matched = false;
+    const m = remaining.match(/^(\w+=(?:[^\s"'\\]|"[^"]*"|'[^']*'|\\.)*)\s+/);
+    if (m) {
+      const varAssign = m[1]!;
+      if (onBinaryHijack && BINARY_HIJACK_VARS.test(varAssign)) {
+        onBinaryHijack(varAssign.split('=')[0]!);
+      }
+      remaining = remaining.slice(m[0]!.length);
+      matched = true;
+    }
+  }
+
+  return remaining;
+}
+
+/**
+ * B16: SAFE_WRAPPERS — 安全的命令包装器列表
+ * 这些包装器不改变命令语义，应被剥离以匹配 deny 规则。
+ */
+const SAFE_WRAPPER_PATTERN = /^(?:timeout\s+\d+(?:\.\d+)?[smhd]?\s+|nice\s+(?:-n\s+[-\d]+\s+)?|nohup\s+|stdbuf\s+(?:-[oei][LU\d]+\s+)*|setsid\s+|ionice\s+(?:-c\s+\d+\s+)?(?:-n\s+\d+\s+)?|taskset\s+(?:\S+\s+)?|env\s+(?:-\w+\s+)*(?:\w+=\S+\s+)*)(.+)/s;
+
+/**
+ * B16: stripSafeWrappers — 剥离 timeout/nice/nohup/stdbuf 等安全包装器
+ *
+ * 例：`timeout 30 denied_cmd` → `denied_cmd`
+ *     `nice -n 10 nohup denied_cmd` → `denied_cmd`（多层剥离）
+ */
+export function stripSafeWrappers(command: string): string {
+  let remaining = command.trim();
+  let stripped = true;
+  let iterations = 0;
+  const MAX_ITERATIONS = 5; // 防止无限循环
+
+  while (stripped && iterations < MAX_ITERATIONS) {
+    stripped = false;
+    const m = remaining.match(SAFE_WRAPPER_PATTERN);
+    if (m && m[1] && m[1] !== remaining) {
+      remaining = m[1].trim();
+      stripped = true;
+    }
+    iterations++;
+  }
+
+  return remaining;
+}
+
+/**
+ * B16: normalizeCommandForPermissionCheck — 权限规则匹配前的命令规范化
+ *
+ * 对标 claude-code bashPermissions.ts 中在规则匹配前调用的规范化流程：
+ *   1. 剥离前置 env vars（含二进制劫持检测）
+ *   2. 剥离安全包装器（timeout/nice/nohup 等）
+ *
+ * @param command  原始 bash 命令
+ * @param onBinaryHijack  检测到二进制劫持变量时的回调
+ * @returns  规范化后用于规则匹配的命令
+ */
+export function normalizeCommandForPermissionCheck(
+  command: string,
+  onBinaryHijack?: (varName: string) => void,
+): string {
+  const stripped = stripAllLeadingEnvVars(command, onBinaryHijack);
+  return stripSafeWrappers(stripped);
 }

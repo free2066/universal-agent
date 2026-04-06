@@ -437,6 +437,14 @@ async function spawnAndRun(
   process.env.UAGENT_SPAWN_DEPTH = String(depth + 1);
 
   const timeoutMs = opts.timeoutMs ?? 5 * 60 * 1000; // 5 min default
+
+  // G16: Background Agent 自动切换（对标 claude-code getAutoBackgroundMs()）
+  // 若子 agent 运行超过 AUTO_BACKGROUND_MS（默认 120s），自动切换到后台并通知用户
+  const AUTO_BACKGROUND_MS = parseInt(
+    process.env.AGENT_AUTO_BACKGROUND_MS ?? '120000',
+    10,
+  );
+
   const runPromise = agent.run(fullTask).finally(() => {
     // Restore parent's depth after child completes
     if (prevDepth === undefined) {
@@ -445,6 +453,17 @@ async function spawnAndRun(
       process.env.UAGENT_SPAWN_DEPTH = prevDepth;
     }
   });
+
+  // G16: 120s 后若仍在运行，打印后台切换提示（不中断执行，仅提示）
+  let _backgroundTimer: ReturnType<typeof setTimeout> | undefined;
+  if (AUTO_BACKGROUND_MS > 0 && AUTO_BACKGROUND_MS < timeoutMs) {
+    _backgroundTimer = setTimeout(() => {
+      process.stderr.write(
+        `[SpawnAgent:${taskId}] Agent has been running for ${AUTO_BACKGROUND_MS / 1000}s — ` +
+        `continuing in background (main thread remains available)\n`,
+      );
+    }, AUTO_BACKGROUND_MS);
+  }
 
   // Use an explicit timer handle so we can clearTimeout() regardless of which
   // promise wins the race — avoids a timer leak when runPromise finishes first.
@@ -480,6 +499,7 @@ async function spawnAndRun(
     throw err;
   } finally {
     clearTimeout(_timeoutHandle);
+    clearTimeout(_backgroundTimer); // G16: 任务完成时清理 background 通知 timer
   }
   writeContextFile(root, taskId, result);
   return result;

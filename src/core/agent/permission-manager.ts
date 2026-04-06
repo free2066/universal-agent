@@ -33,6 +33,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile } from 'fs';
 import { resolve, join } from 'path';
+import { normalizeCommandForPermissionCheck } from '../../utils/bash-security.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -348,19 +349,33 @@ export class PermissionManager {
   ): PermissionDecision {
     const args = toolArgs ?? {};
 
+    // B16: 对 Bash 工具执行命令规范化（剖离前置 env var + wrapper）
+    // 防止 `LD_PRELOAD=/x.so denied_cmd` 或 `timeout 30 denied_cmd` 绕过 deny 规则
+    let normalizedArgs = args;
+    if (toolName === 'Bash' && typeof args['command'] === 'string') {
+      let binaryHijackDetected = false;
+      const normalized = normalizeCommandForPermissionCheck(
+        args['command'] as string,
+        () => { binaryHijackDetected = true; },
+      );
+      if (binaryHijackDetected || normalized !== args['command']) {
+        normalizedArgs = { ...args, command: normalized, _originalCommand: args['command'] };
+      }
+    }
+
     // 1. Check deny rules (highest priority — any deny wins)
     for (const pattern of this.allAlwaysDeny) {
-      if (matchesPattern(pattern, toolName, args)) return 'deny';
+      if (matchesPattern(pattern, toolName, normalizedArgs)) return 'deny';
     }
 
     // 2. Check ask[] rules (force confirmation even in yolo mode)
     for (const pattern of this.allAsk) {
-      if (matchesPattern(pattern, toolName, args)) return 'ask';
+      if (matchesPattern(pattern, toolName, normalizedArgs)) return 'ask';
     }
 
     // 3. Check allow rules
     for (const pattern of this.allAlwaysAllow) {
-      if (matchesPattern(pattern, toolName, args)) return 'allow';
+      if (matchesPattern(pattern, toolName, normalizedArgs)) return 'allow';
     }
 
     // 4. ApprovalMode fallback
@@ -581,6 +596,46 @@ export class PermissionManager {
     lines.push('Patterns: "ToolName", "ToolName(*)", "ToolName(glob)", "*"');
     return lines.join('\n');
   }
+
+  /**
+   * E16: clearClassifierApprovals — 清理 yolo classifier 的审批记录缓存
+   * 对标 claude-code clearClassifierApprovals()，在 postCompactCleanup 中被调用。
+   * 压缩后需要重置审批缓存，避免旧的 allow 判断影响新对话。
+   */
+  clearClassifierApprovals(): void {
+    // yolo-classifier 的判断缓存存储在 yolo-classifier.ts 模块内部
+    // 这里调用 module-level 的 clearClassifierApprovals 进行清理
+    clearYoloClassifierCache();
+  }
+}
+
+// ── E16: Module-level classifier cache clear ──────────────────────────────────
+
+/**
+ * E16: clearSpeculativeChecks — 模块级 speculative check 缓存清理
+ * 导出供 post-compact-cleanup.ts 的 tryCall 调用
+ */
+export function clearSpeculativeChecks(): void {
+  // PermissionManager 不持有 speculative 状态，此函数为兼容性导出
+  // 实际的 speculative 状态在 streaming-tool-executor.ts 中（无持久缓存）
+}
+
+/**
+ * E16: clearClassifierApprovals — 模块级 classifier 审批缓存清理
+ * 导出供 post-compact-cleanup.ts 的 tryCall 调用
+ */
+export function clearClassifierApprovals(): void {
+  clearYoloClassifierCache();
+}
+
+/** 调用 yolo-classifier 的缓存清理（懒加载，避免循环依赖） */
+function clearYoloClassifierCache(): void {
+  // 通过动态 import 调用 yolo-classifier 的清理函数（避免循环依赖）
+  // 使用异步但 fire-and-forget 模式（清理失败不阻塞主流程）
+  import('./yolo-classifier.js').then((mod) => {
+    const fn = (mod as Record<string, unknown>)['clearClassifierCache'];
+    if (typeof fn === 'function') (fn as () => void)();
+  }).catch(() => { /* yolo-classifier 未加载时忽略 */ });
 }
 
 // ── Read-only tool set (for autoEdit mode) ────────────────────────────────────

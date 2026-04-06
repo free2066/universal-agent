@@ -48,6 +48,14 @@ export interface MCPServer {
     clientSecret?: string;
     scopes?: string[];
   };
+  /**
+   * D16: headersHelper — shell 命令字符串，运行时动态获取 HTTP headers
+   * 类似 git credential-helper 风格，输出 `KEY: value` 格式的 header
+   * 只适用于 SSE/HTTP 类型的 MCP Server（stdio 类型运行时不需要 HTTP header）
+   */
+  headersHelper?: string;
+  /** D16: 静态 headers（会被 headersHelper 的动态 headers 覆盖） */
+  headers?: Record<string, string>;
 }
 
 export interface MCPConfig {
@@ -205,7 +213,12 @@ class StdioMCPClient {
     // Step 1: initialize handshake
     await this.request('initialize', {
       protocolVersion: '2024-11-05',
-      capabilities: { tools: {}, resources: {} },  // D15: 声明 resources 能力
+      capabilities: {
+        tools: {},
+        resources: {},  // D15: 说明 resources 能力
+        roots: {},       // C16: 说明 roots 能力（MCP Server 可查询工作区根目录）
+        elicitation: {}, // C14: Elicitation 协议
+      },
       clientInfo: { name: 'universal-agent', version: '1.0.0' },
     });
 
@@ -356,8 +369,12 @@ class StdioMCPClient {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        const msg = JSON.parse(trimmed) as JsonRpcResponse & { method?: string };
-        if (typeof msg.id === 'number') {
+        const msg = JSON.parse(trimmed) as JsonRpcResponse & { method?: string; params?: unknown };
+        if (typeof msg.id === 'number' && msg.method) {
+          // C16: Inbound request (has both id + method) — MCP Server 请求我们响应
+          this._handleInboundRequest(msg.id, msg.method, msg.params);
+        } else if (typeof msg.id === 'number') {
+          // Response to our pending request
           const pending = this.pending.get(msg.id);
           if (pending) {
             clearTimeout(pending.timer);
@@ -365,10 +382,44 @@ class StdioMCPClient {
             pending.resolve(msg);
           }
         } else if (msg.method) {
-          // G15: 处理 MCP 服务器推送的通知消息
+          // G15: 处理 MCP 服务器推送的通知消息（无 id）
           this._handleNotification(msg.method);
         }
       } catch { /* ignore non-JSON lines (e.g. server startup messages) */ }
+    }
+  }
+
+  /**
+   * C16: 处理 MCP Server 发来的 inbound requests（Server → Client 方向）
+   * 目前实现 roots/list — Server 询问客户端的工作区根目录。
+   */
+  private _handleInboundRequest(id: number, method: string, _params: unknown): void {
+    if (method === 'roots/list') {
+      // 返回当前工作区根目录（对标 claude-code client.ts:985-1018）
+      const response = {
+        jsonrpc: '2.0' as const,
+        id,
+        result: {
+          roots: [{ uri: `file://${process.cwd()}`, name: 'workspace' }],
+        },
+      };
+      this.proc?.stdin?.write(JSON.stringify(response) + '\n');
+    } else if (method === 'sampling/createMessage') {
+      // 暂不支持 sampling 协议 — 返回 method not found 错误
+      const errorResponse = {
+        jsonrpc: '2.0' as const,
+        id,
+        error: { code: -32601, message: 'Method not found: sampling/createMessage is not supported' },
+      };
+      this.proc?.stdin?.write(JSON.stringify(errorResponse) + '\n');
+    } else {
+      // 未知 inbound request — 返回通用错误
+      const errorResponse = {
+        jsonrpc: '2.0' as const,
+        id,
+        error: { code: -32601, message: `Method not found: ${method}` },
+      };
+      this.proc?.stdin?.write(JSON.stringify(errorResponse) + '\n');
     }
   }
 
@@ -522,7 +573,13 @@ export class MCPManager {
     const timeout = parseInt(process.env.MCP_CONNECTION_TIMEOUT_MS || '5000');
 
     // Build auth headers — OAuth Bearer token if configured (Batch 3)
-    const authHeaders: Record<string, string> = { Accept: 'application/json' };
+    // D16: 合并静态 headers + headersHelper 动态 headers + OAuth token
+    const { getMcpServerHeaders } = await import('./mcp-headers-helper.js').catch(() => ({ getMcpServerHeaders: async () => ({}) }));
+    const serverHeaders = await getMcpServerHeaders(server.name, {
+      headersHelper: server.headersHelper,
+      headers: server.headers,
+    });
+    const authHeaders: Record<string, string> = { Accept: 'application/json', ...serverHeaders };
     if (server.oauth) {
       try {
         const { getMcpAuth } = await import('./mcp-auth.js');

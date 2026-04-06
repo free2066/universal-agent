@@ -301,3 +301,11 @@ export async function checkAutoEditApproval(
   if (decision === 'deny') return 'deny';
   return 'ask';
 }
+
+/**
+ * E16: clearClassifierCache — 清理所有 classifier 状态缓存
+ * 对标 claude-code clearClassifierApprovals()，在 postCompactCleanup 中被调用。
+ */
+export function clearClassifierCache(): void {
+  _trackerCache.clear();
+}
