@@ -354,6 +354,26 @@ export interface RunStreamOptions {
   fallbackChain: ModelFallbackChain | null;
   /** Permission mode: 'default' | 'autoEdit' | 'yolo' (Round 4, claude-code parity) */
   approvalMode?: import('./permission-manager.js').ApprovalMode;
+  /**
+   * C21: maxTurns — 外部注入最大迭代轮数（claude-code RunOptions.maxTurns parity）
+   * 优先级高于环境变量 AGENT_MAX_ITERATIONS。
+   */
+  maxTurns?: number;
+  /**
+   * E22: taskBudget — 跨 compact 边界的任务 token 预算（claude-code QueryParams.taskBudget parity）
+   * 在每次 compact 后递减 preCompact token 消耗，透传给 API task_budget 字段。
+   */
+  taskBudget?: { total: number };
+  /**
+   * F22: userContext — 动态键值对注入（claude-code QueryParams.userContext parity）
+   * 内容包装在 <system-reminder> 标签中作为首条 user 消息注入，使 LLM 可见。
+   */
+  userContext?: Record<string, string>;
+  /**
+   * F22: systemContext — 系统 prompt 末尾追加上下文（claude-code QueryParams.systemContext parity）
+   * 键值对以 "key: value" 格式追加到 systemPrompt 末尾。
+   */
+  systemContext?: Record<string, string>;
 }
 
 export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopResult> {
@@ -364,6 +384,14 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     currentDomain, verbose, registry, router, getLLM, fallbackChain,
     approvalMode = 'default',
   } = opts;
+
+  // E22: taskBudget cross-compact tracking (claude-code query.ts L291, L508-514, L699-706 parity)
+  const _taskBudget = opts.taskBudget;
+  let _taskBudgetRemaining: number | undefined;
+
+  // F22: userContext/systemContext 分离注入（claude-code query.ts L184-185 + api.ts L437-474 parity）
+  const _userContext = opts.userContext ?? {};
+  const _systemContext = opts.systemContext ?? {};
 
   // ── Pending confirmation check ─────────────────────────────────────────────
   if (pendingConfirmationRef.value) {
@@ -397,6 +425,15 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   let systemPrompt = systemPromptOverride ?? buildSystemPromptWithContext(baseSystemPrompt);
   if (appendSystemPrompt) systemPrompt += `\n\n${appendSystemPrompt}`;
 
+  // F22: appendSystemContext — 将 systemContext 键值对追加到 systemPrompt 末尾
+  // Mirrors claude-code api.ts appendSystemContext() L437-447.
+  if (Object.keys(_systemContext).length > 0) {
+    const appended = Object.entries(_systemContext)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join('\n');
+    systemPrompt = `${systemPrompt}\n\n${appended}`;
+  }
+
   // ── Memory recall ──────────────────────────────────────────────────────────
   systemPrompt = await appendMemoriesToPrompt(expandedPrompt, systemPrompt);
 
@@ -404,6 +441,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     role: 'user',
     content: filePath ? `${expandedPrompt}\n\n[File context: ${filePath}]` : expandedPrompt,
   };
+
+  // F22: prependUserContext — 将 userContext 键值对包装在 <system-reminder> 中，作为首条 user 消息注入
+  // Mirrors claude-code api.ts prependUserContext() L449-474.
+  // 跳过测试环境注入（与 claude-code 保持一致）。
+  if (Object.keys(_userContext).length > 0 && process.env.NODE_ENV !== 'test') {
+    const userCtxContent = [
+      '<system-reminder>',
+      Object.entries(_userContext).map(([k, v]) => `# ${k}\n${v}`).join('\n'),
+      '</system-reminder>',
+    ].join('\n');
+    history.unshift({ role: 'user', content: userCtxContent });
+  }
 
   // C17: user_prompt_submit hook — fire before adding message to history
   // Allows hooks to inject additionalContext into the user message
@@ -506,6 +555,15 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     await triggerHook(createHookEvent('agent', 'compact', { compacted: compacted.compactedTurns }));
     if (compacted.isRecompactionInChain) {
       onChunk(`  Warning: rapid re-compaction detected (chain compaction).\n`);
+    }
+    // E22: taskBudget cross-compact tracking (claude-code query.ts L508-514 parity)
+    // 在每次 compact 后更新 _taskBudgetRemaining（累减 preCompact token 消耗）
+    // 防止 compact 后 taskBudget 仍然计算压缩前的 token 消耗。
+    if (_taskBudget && compacted.preTokens !== undefined) {
+      _taskBudgetRemaining = Math.max(
+        0,
+        (_taskBudgetRemaining ?? _taskBudget.total) - compacted.preTokens,
+      );
     }
   }
 
@@ -758,6 +816,16 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           // A19: Propagate AbortSignal to LLM call (claude-code toolUseContext.abortController.signal parity)
           // Allows HTTP fetch to be cancelled when user interrupts with Ctrl+C
           signal: _abortSignal,
+          // E22: taskBudget — 透传 API task_budget（claude-code query.ts L699-706 parity）
+          // 携带 total + remaining（compact 后递减），服务端用于精确预算控制。
+          ...(_taskBudget
+            ? {
+                taskBudget: {
+                  total: _taskBudget.total,
+                  ...(_taskBudgetRemaining !== undefined ? { remaining: _taskBudgetRemaining } : {}),
+                },
+              }
+            : {}),
         };
         response = fallbackChain
           ? await withApiRetry(
@@ -1261,6 +1329,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
                 if (_preventCont === true || _postResult.stopReason) {
                   _postUsePreventContinuation = true;
                   onChunk(`\n🛑 PostToolUse hook requested stop (hook_stopped_continuation)\n`);
+                }
+                // B22: hook_additional_context — PostToolUse hook 返回的额外上下文注入 LLM
+                // Mirrors claude-code toolHooks.ts L133-143 hook_additional_context branch.
+                // 允许 hook 向 LLM 的下一轮传递审计日志/安全检查结果等附加信息。
+                const _addCtx = (_postResult as unknown as Record<string, unknown>)['additionalContext'];
+                if (_addCtx && typeof _addCtx === 'string') {
+                  // 注入为额外的 tool 消息，LLM 在下一轮可以看到
+                  toolResults.push({
+                    role: 'tool' as const,
+                    toolCallId: `__additional_context_${call.id}`,
+                    content: `[PostToolUse Hook Context] ${_addCtx}`,
+                  });
                 }
               }
             } catch { /* non-fatal */ }

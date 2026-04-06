@@ -461,6 +461,17 @@ export class HookRunner {
       if (ctx.event === 'on_tool_call' && hook.tool && hook.tool !== '*') {
         return ctx.toolName === hook.tool;
       }
+      // C22: notification hook notificationType 精细过滤（claude-code hooks.ts L1634-1635 parity）
+      // 当 event=notification 且 hook.if 非空时，以 notificationType 作为 matchQuery 进行值过滤。
+      // 允许用户配置: { "event": "notification", "if": "elicitation_complete", ... }
+      // 这样 hook 只在特定 notificationType 时触发，而非全量触发。
+      if (ctx.event === 'notification' && hook.if) {
+        const _notifType = (ctx as unknown as Record<string, unknown>)['notificationType'] as string | undefined;
+        if (_notifType && hook.if !== '*') {
+          // 精确匹配或通配符 '*' 匹配所有
+          if (_notifType !== hook.if) return false;
+        }
+      }
       // G12-3: `if` condition glob filter (claude-code parity)
       // Applies to any event where toolName or filePath is available
       if (hook.if) {

@@ -588,6 +588,12 @@ export class MCPManager {
         authHeaders['Authorization'] = `Bearer ${token.access_token}`;
       } catch (err) {
         process.stderr.write(`[MCP OAuth] ${server.name}: auth failed — ${err instanceof Error ? err.message : String(err)}\n`);
+        // A22: McpAuthTool — 认证失败时注入伪工具，让 LLM 主动触发 OAuth 流程
+        // Mirrors claude-code McpAuthTool.ts: dynamic pseudo-tool for unauthenticated servers.
+        const { createMcpAuthTool } = await import('./tools/mcp/mcp-auth-tool.js');
+        const { getMcpAuth: getAuthForTool } = await import('./mcp-auth.js');
+        const _auth = getAuthForTool(server.name);
+        return [createMcpAuthTool(server.name, () => _auth.getToken(server.oauth!).then(() => undefined as void))];
       }
     }
 
@@ -644,6 +650,11 @@ export class MCPManager {
         authToken = token.access_token;
       } catch (err) {
         process.stderr.write(`[MCP OAuth] ${server.name}: auth failed — ${err instanceof Error ? err.message : String(err)}\n`);
+        // A22: McpAuthTool — WS server 认证失败时注入伪工具
+        const { createMcpAuthTool } = await import('./tools/mcp/mcp-auth-tool.js');
+        const { getMcpAuth: getAuthForTool } = await import('./mcp-auth.js');
+        const _auth = getAuthForTool(server.name);
+        return [createMcpAuthTool(server.name, () => _auth.getToken(server.oauth!).then(() => undefined as void))];
       }
     }
 

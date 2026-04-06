@@ -57,6 +57,7 @@ import { sleepTool } from '../tools/utils/sleep-tool.js';
 import { ListMcpResourcesRegistration, ReadMcpResourceRegistration } from '../tools/mcp/mcp-resource-tools.js';
 import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
 import { askUserQuestionTool } from '../tools/productivity/ask-user-question-tool.js';
+import { configGetTool, configSetTool } from '../tools/config/config-tool.js';
 import {
   spawnTeammateTool,
   listTeammatesTool,
@@ -251,6 +252,10 @@ export function registerAllTools(
 
   // s13 — structured / synthetic output
   reg(syntheticOutputTool);
+
+  // D22: ConfigTool — LLM 读写 Agent 配置（claude-code ConfigTool parity）
+  reg(configGetTool);
+  reg(configSetTool);
 
   // Domain-specific tools
   router.registerTools(registry, domain);
