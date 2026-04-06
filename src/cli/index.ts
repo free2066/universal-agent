@@ -28,7 +28,7 @@ import { resolve } from 'path';
 import { AgentCore } from '../core/agent.js';
 import { modelManager } from '../models/model-manager.js';
 import { printBanner } from './ui-enhanced.js';
-import { loadConfig } from './config-store.js';
+import { loadConfig, setFlagSettings, parseFlagSettings } from './config-store.js';
 
 import { validateDomain, validateModel, inferProviderEnvKey } from './commands/shared.js';
 import { registerModelsCommands } from './commands/cmd-models.js';
@@ -78,6 +78,7 @@ program
   .option('--mcp-config <jsonOrFile>', 'One-shot MCP server config (JSON string or path to .json file). Not persisted.')
   .option('--browser', 'Enable browser integration (requires Playwright MCP server)')
   .option('--ui <mode>', 'UI mode: ink (default, React/Ink terminal UI) | readline (classic readline REPL)', 'ink')
+  .option('--settings <kv...>', 'D25: Temporary config override: key=value or path/to/file.json (highest priority, not persisted). Example: --settings model=claude-opus-4-5 --settings autoCompact=false')
   .action(async (promptArg: string | undefined, options: {
     domain: string; model?: string; planModel?: string; smallModel?: string; visionModel?: string;
     quiet?: boolean; continue?: boolean; resume?: string; forkSession?: boolean;
@@ -85,9 +86,18 @@ program
     appendSystemPrompt?: string; outputStyle?: string; thinking?: string; outputFormat?: string;
     language?: string; cwd?: string; approvalMode?: string; tools?: string;
     mcpConfig?: string; browser?: boolean; ui?: string;
+    settings?: string[];
   }) => {
     if (options.cwd) process.chdir(options.cwd);
     validateDomain(options.domain);
+
+    // ── D25: Apply --settings flagSettings (highest priority, process-scoped) ─
+    // Must be applied before loadConfig() so they take effect immediately.
+    // Mirrors claude-code flagSettings loading at CLI startup.
+    if (options.settings && options.settings.length > 0) {
+      const flagCfg = parseFlagSettings(options.settings);
+      setFlagSettings(flagCfg);
+    }
 
     // ── Load external domain plugins (project + global) ──────────────────────
     // Done before AgentCore init so plugins are available when domain is resolved

@@ -316,6 +316,20 @@ export async function handleDoctor(ctx: SlashContext): Promise<true> {
     process.stdout.write(`    ${warnMark}  memory store: ${e instanceof Error ? e.message : String(e)}\n`);
   }
 
+  // C25: Context quality warnings (4-class checks)
+  process.stdout.write(chalk.gray('\n  Context Quality\n'));
+  try {
+    const { checkContextWarnings, formatContextWarnings } = await import('../../../core/doctor-context-warnings.js');
+    const warnings = await checkContextWarnings(process.cwd());
+    if (warnings.length === 0) {
+      process.stdout.write(`    ${okMark}  no context quality issues detected\n`);
+    } else {
+      process.stdout.write(formatContextWarnings(warnings));
+    }
+  } catch (e) {
+    process.stdout.write(`    ${warnMark}  context check error: ${e instanceof Error ? e.message : String(e)}\n`);
+  }
+
   process.stdout.write(chalk.gray('\n' + '─'.repeat(55) + '\n'));
   process.stdout.write(chalk.gray('  Tip: run `uagent doctor` from CLI for full diagnostics\n\n'));
 

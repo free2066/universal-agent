@@ -136,10 +136,17 @@ export async function withApiRateLimitRetry<T>(
   const unattended = process.env.AGENT_UNATTENDED_RETRY === '1';
   const startTime = Date.now();
 
-  // C18: Background tasks should fail immediately on 529 — no retries
+  // C18/E25: Background tasks should fail immediately on 529 — no retries
   // Mirrors claude-code FOREGROUND_529_RETRY_SOURCES Set (withRetry.ts L62-88)
+  // E25: Expanded to match full QuerySource enumeration
   const FOREGROUND_SOURCES = new Set<import('./agent/types.js').QuerySource>([
-    'agent_main', 'compact', 'hook_agent', 'side_question',
+    'repl_main_thread',           // Primary interactive source
+    'repl_main_thread:compact',   // Main thread compaction
+    'agent_main',                 // Backward compat alias
+    'compact',                    // Compaction (foreground-ish)
+    'agent:coordinator',          // Coordinator agent is user-facing
+    'hook_agent',                 // Hook agents are user-initiated
+    'side_question',              // Side questions are user-facing
   ]);
   const isBackground = querySource !== undefined && !FOREGROUND_SOURCES.has(querySource);
 

@@ -148,6 +148,14 @@ export interface ChatOptions {
    * cancelled immediately without waiting for the response to complete.
    */
   signal?: AbortSignal;
+  /**
+   * A25: skipCacheWrite -- prompt cache fork mode (claude-code parity).
+   * When true, the cache_control marker is placed on the 2nd-to-last message
+   * instead of the last. This prevents fork/fire-and-forget requests (e.g.
+   * tool_summary, auto_dream) from polluting the main thread's cache key.
+   * Mirrors claude-code api/claude.ts L689-L691 skipCacheWrite logic.
+   */
+  skipCacheWrite?: boolean;
 }
 
 /**
@@ -159,10 +167,12 @@ export interface ChatOptions {
  *
  * This prevents accidentally reading toolCalls on a text-only response and
  * makes every LLMClient implementation's return types self-documenting.
+ *
+ * A25: usage field added for cache stats (cache_creation_input_tokens / cache_read_input_tokens).
  */
 export type ChatResponse =
-  | { type: 'text';       content: string; toolCalls?: never }
-  | { type: 'tool_calls'; content: string; toolCalls: ToolCall[] };
+  | { type: 'text';       content: string; toolCalls?: never; usage?: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } }
+  | { type: 'tool_calls'; content: string; toolCalls: ToolCall[]; usage?: { input_tokens: number; output_tokens: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } };
 
 export interface LLMClient {
   chat(options: ChatOptions): Promise<ChatResponse>;

@@ -490,7 +490,7 @@ export async function handleDomainPlugins(ctx: SlashContext): Promise<true> {
   return done(rl);
 }
 
-// ── /search [query] (Batch 3) ─────────────────────────────────────────────────
+// ── /search [query] (Batch 3 + B25 upgrade) ───────────────────────────────────
 
 export async function handleSearch(input: string, ctx: SlashContext): Promise<true> {
   const { rl } = ctx;
@@ -498,19 +498,39 @@ export async function handleSearch(input: string, ctx: SlashContext): Promise<tr
   if (!query) {
     console.log(chalk.yellow('\n🔍 Session History Search\n'));
     console.log(chalk.gray('  Usage: /search <query>'));
-    console.log(chalk.gray('  Searches all saved session snapshots for matching messages.\n'));
+    console.log(chalk.gray('  Searches all saved session snapshots for matching messages.'));
+    console.log(chalk.gray('  Uses LLM semantic ranking for better results.\n'));
     return done(rl);
   }
-  const { searchSnapshots, formatAge } = await import('../../../core/memory/session-snapshot.js');
-  const results = searchSnapshots(query, 10);
+
+  console.log(chalk.gray(`\n  Searching sessions for "${query}"...\n`));
+
+  // B25: agenticSessionSearch — LLM-powered semantic session search
+  // Falls back to keyword search if LLM unavailable or fails
+  const { agenticSessionSearch } = await import('../../../core/session-search.js');
+  const results = await agenticSessionSearch(query, 10);
+
   if (!results.length) {
-    console.log(chalk.gray(`\n  No sessions found matching "${query}"\n`));
+    console.log(chalk.gray(`  No sessions found matching "${query}"\n`));
     return done(rl);
   }
-  console.log(chalk.yellow(`\n🔍 Search results for "${query}" (${results.length} found):\n`));
+
+  const { formatAge } = await import('../../../core/memory/session-snapshot.js');
+  console.log(chalk.yellow(`🔍 Search results for "${query}" (${results.length} sessions found):\n`));
   for (const r of results) {
-    console.log(`  ${chalk.gray('[' + r.role + ']')}  ${r.snippet.slice(0, 90)}${r.snippet.length > 90 ? '…' : ''}`);
+    const title = r.displayTitle ?? r.firstPrompt ?? '(untitled)';
+    const score = r.relevanceScore !== undefined
+      ? chalk.gray(` [score: ${(r.relevanceScore * 100).toFixed(0)}%]`)
+      : '';
+    console.log(`  ${chalk.white(title.slice(0, 70))}${title.length > 70 ? '…' : ''}${score}`);
     console.log(`  ${chalk.gray('Session:')} ${r.sessionId}  ${chalk.gray('(' + formatAge(r.savedAt) + ')')}`);
+
+    // Show snippets if available
+    if (r.snippets && r.snippets.length > 0) {
+      for (const snip of r.snippets.slice(0, 2)) {
+        console.log(`  ${chalk.gray('[' + snip.role + ']')}  ${snip.snippet.slice(0, 80)}${snip.snippet.length > 80 ? '…' : ''}`);
+      }
+    }
     console.log();
   }
   console.log(chalk.gray('  Tip: /resume <sessionId> to restore a session\n'));

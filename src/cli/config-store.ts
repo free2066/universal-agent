@@ -158,17 +158,93 @@ function deleteNestedKey(obj: Record<string, unknown>, key: string): void {
   if (cur != null) delete cur[parts[parts.length - 1]];
 }
 
+// ── D25: flagSettings -- process-scoped highest priority config override ──────
+//
+// flagSettings mirrors claude-code src/utils/settings/constants.ts SETTING_SOURCES[3]
+// 'flagSettings'. Applied via --settings CLI flag; highest priority, not persisted.
+//
+// Usage:
+//   setFlagSettings({ model: 'claude-opus-4-5', autoCompact: false })
+//   loadConfig() automatically includes flagSettings at highest priority
+
+let _flagSettings: Partial<UAgentConfig> = {};
+
+/**
+ * D25: setFlagSettings -- set process-scoped config overrides (flagSettings layer).
+ * Called at CLI startup from --settings flag parsing.
+ * Mirrors claude-code flagSettings (SETTING_SOURCES[3]).
+ */
+export function setFlagSettings(settings: Partial<UAgentConfig>): void {
+  _flagSettings = { ..._flagSettings, ...settings };
+}
+
+/**
+ * D25: getFlagSettings -- get current flagSettings (read-only view).
+ */
+export function getFlagSettings(): Readonly<Partial<UAgentConfig>> {
+  return _flagSettings;
+}
+
+/**
+ * D25: parseFlagSettings -- parse --settings CLI argument(s) into UAgentConfig.
+ *
+ * Supports two formats:
+ *   --settings key=value          (single KV pair, auto-parsed: bool/number/string)
+ *   --settings path/to/file.json  (JSON file with settings object)
+ *
+ * Multiple --settings flags are merged left-to-right.
+ * Mirrors claude-code CLI flagSettings loading logic.
+ */
+export function parseFlagSettings(rawArgs: string[]): Partial<UAgentConfig> {
+  const result: Record<string, unknown> = {};
+
+  for (const arg of rawArgs) {
+    // JSON file path?
+    if (arg.endsWith('.json') && !arg.includes('=')) {
+      try {
+        const parsed = JSON.parse(readFileSync(arg, 'utf-8')) as Record<string, unknown>;
+        Object.assign(result, parsed);
+      } catch {
+        // silently skip unreadable/malformed JSON files
+      }
+      continue;
+    }
+
+    // key=value pair?
+    const eqIdx = arg.indexOf('=');
+    if (eqIdx > 0) {
+      const key = arg.slice(0, eqIdx).trim();
+      const rawVal = arg.slice(eqIdx + 1);
+      // Auto-parse: boolean, number, then string
+      let val: unknown = rawVal;
+      if (rawVal === 'true') val = true;
+      else if (rawVal === 'false') val = false;
+      else if (rawVal !== '' && !isNaN(Number(rawVal))) val = Number(rawVal);
+      setNestedKey(result, key, val);
+    }
+  }
+
+  return result as Partial<UAgentConfig>;
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
  * Load and merge all config layers.
- * Result priority: project local > project > global.
+ * Result priority (highest → lowest):
+ *   D25: flagSettings > project local > project > global
+ *
+ * flagSettings mirrors claude-code's SETTING_SOURCES[3] (process-scoped, not persisted).
  */
 export function loadConfig(cwd = process.cwd()): UAgentConfig {
   const globalCfg  = readJsonSafe(globalConfigPath());
   const projectCfg = readJsonSafe(projectConfigPath(cwd));
   const localCfg   = readJsonSafe(projectLocalConfigPath(cwd));
-  return mergeConfig(mergeConfig(globalCfg, projectCfg), localCfg);
+  const merged = mergeConfig(mergeConfig(globalCfg, projectCfg), localCfg);
+  // D25: flagSettings has highest priority (process-scoped CLI overrides)
+  return Object.keys(_flagSettings).length > 0
+    ? mergeConfig(merged, _flagSettings as UAgentConfig)
+    : merged;
 }
 
 /**

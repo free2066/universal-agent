@@ -1,14 +1,142 @@
 /**
- * models/llm/anthropic.ts — Anthropic Claude 实现
+ * models/llm/anthropic.ts -- Anthropic Claude implementation
  *
- * 支持：claude-3-5-sonnet, claude-3-7-sonnet, claude-4, claude-opus…
- * 特性：extended thinking, streaming tool_calls, interleaved-thinking beta
+ * Supports: claude-3-5-sonnet, claude-3-7-sonnet, claude-4, claude-opus...
+ * Features: extended thinking, streaming tool_calls, interleaved-thinking beta
+ *
+ * A25: PromptCaching -- insert cache_control markers on system prompt and messages
+ *   Mirrors claude-code src/services/api/claude.ts L602-L691 (enablePromptCaching)
+ *   Adds ephemeral cache_control to:
+ *     1. Last block of system prompt (longest-lived, highest cache hit rate)
+ *     2. Last message in the conversation (or 2nd-to-last for skipCacheWrite)
+ *   Disabled by: ANTHROPIC_ENABLE_PROMPT_CACHE=false
  */
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { LLMClient, ChatOptions, ChatResponse, Message } from '../types.js';
 import { resolveAdaptiveThinking } from '../types.js';
 import { withInferenceTimeout, safeParseJSON, toAnthropicContent, msgText } from './shared.js';
+
+// ── A25: PromptCaching helpers ────────────────────────────────────────────────
+
+/**
+ * A25: isPromptCachingEnabled -- check if Anthropic Prompt Cache is active.
+ * Default: true (enabled). Disable with ANTHROPIC_ENABLE_PROMPT_CACHE=false.
+ */
+function isPromptCachingEnabled(): boolean {
+  const env = process.env.ANTHROPIC_ENABLE_PROMPT_CACHE;
+  return env === undefined || env === '' || env === 'true' || env === '1';
+}
+
+/**
+ * A25: insertPromptCacheMarker -- add cache_control to messages.
+ *
+ * Inserts cache_control: { type: 'ephemeral' } on the last content block
+ * of the target message, enabling Anthropic Prompt Cache (5-min TTL).
+ *
+ * @param messages  Converted Anthropic MessageParam array
+ * @param skipCacheWrite  If true (fork/fire-and-forget), mark 2nd-to-last instead.
+ *                        This prevents fork requests from polluting the main cache key.
+ *                        Mirrors claude-code api/claude.ts L689-L691 skipCacheWrite logic.
+ *
+ * Mirrors claude-code api/claude.ts L602-L691 enablePromptCaching logic.
+ */
+function insertPromptCacheMarker(
+  messages: Anthropic.MessageParam[],
+  opts: { skipCacheWrite?: boolean } = {},
+): Anthropic.MessageParam[] {
+  if (messages.length === 0 || !isPromptCachingEnabled()) return messages;
+
+  // skipCacheWrite: mark 2nd-to-last message (fork scenario)
+  const markerIndex = opts.skipCacheWrite
+    ? Math.max(0, messages.length - 2)
+    : messages.length - 1;
+
+  const cloned = [...messages];
+  const target = cloned[markerIndex];
+  if (!target) return cloned;
+
+  const targetClone = { ...target };
+
+  if (typeof targetClone.content === 'string') {
+    // String content -> wrap in a text block with cache_control
+    targetClone.content = [
+      {
+        type: 'text' as const,
+        text: targetClone.content,
+        cache_control: { type: 'ephemeral' },
+      } as unknown as Anthropic.TextBlockParam,
+    ];
+  } else if (Array.isArray(targetClone.content) && targetClone.content.length > 0) {
+    // Array content -> add cache_control to the last block
+    const contentArr = [...targetClone.content];
+    const lastBlock = { ...contentArr[contentArr.length - 1] } as Record<string, unknown>;
+    lastBlock['cache_control'] = { type: 'ephemeral' };
+    contentArr[contentArr.length - 1] = lastBlock as unknown as Anthropic.ContentBlockParam;
+    targetClone.content = contentArr;
+  }
+
+  cloned[markerIndex] = targetClone as Anthropic.MessageParam;
+  return cloned;
+}
+
+/**
+ * A25: addSystemCacheControl -- add cache_control to system prompt.
+ *
+ * The system prompt changes infrequently, so caching it achieves the highest
+ * token savings (cache hit rate ~95%+ in long sessions).
+ *
+ * Mirrors claude-code api/claude.ts L591 system prompt cache handling.
+ */
+function addSystemCacheControl(
+  systemPrompt: string | Anthropic.TextBlockParam[] | undefined,
+): string | Anthropic.TextBlockParam[] | undefined {
+  if (!isPromptCachingEnabled() || !systemPrompt) return systemPrompt;
+
+  if (typeof systemPrompt === 'string') {
+    // Wrap string system prompt in a text block with cache_control
+    return [
+      {
+        type: 'text' as const,
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' },
+      } as Anthropic.TextBlockParam,
+    ];
+  }
+
+  if (Array.isArray(systemPrompt) && systemPrompt.length > 0) {
+    // Add cache_control to last block
+    const arr = [...systemPrompt];
+    const last = { ...arr[arr.length - 1] } as Anthropic.TextBlockParam & Record<string, unknown>;
+    last['cache_control'] = { type: 'ephemeral' };
+    arr[arr.length - 1] = last;
+    return arr;
+  }
+
+  return systemPrompt;
+}
+
+// ── A25: Usage extraction helper ──────────────────────────────────────────────
+
+/** A25: _extractUsage -- safely extract token counts including cache stats. */
+function _extractUsage(usage: Anthropic.Usage): {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+} {
+  const u = usage as unknown as Record<string, number>;
+  return {
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    ...(u['cache_creation_input_tokens'] !== undefined
+      ? { cache_creation_input_tokens: u['cache_creation_input_tokens'] }
+      : {}),
+    ...(u['cache_read_input_tokens'] !== undefined
+      ? { cache_read_input_tokens: u['cache_read_input_tokens'] }
+      : {}),
+  };
+}
 
 export class AnthropicClient implements LLMClient {
   private client: Anthropic;
@@ -20,7 +148,15 @@ export class AnthropicClient implements LLMClient {
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    const messages = this.convertMessages(options.messages);
+    const rawMessages = this.convertMessages(options.messages);
+    // A25: insert prompt cache markers on messages and system prompt
+    const messages = insertPromptCacheMarker(rawMessages, {
+      skipCacheWrite: (options as ChatOptions & { skipCacheWrite?: boolean }).skipCacheWrite,
+    });
+    const cachedSystem = addSystemCacheControl(
+      options.systemPrompt as string | Anthropic.TextBlockParam[] | undefined,
+    );
+
     const hasTools = (options.tools?.length ?? 0) > 0;
     const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
     // Round 7: adaptive thinking level resolves based on model name
@@ -32,15 +168,18 @@ export class AnthropicClient implements LLMClient {
     const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
     const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
+    // A25: add prompt-caching beta header when cache_control is used
+    const extraBetas: string[] = isPromptCachingEnabled() ? ['prompt-caching-2024-07-31'] : [];
+
     const msg = await this.client.messages.create({
       model: this.model,
       max_tokens: effectiveMax,
-      system: options.systemPrompt,
+      system: cachedSystem as string,
       messages,
       ...(budgetTokens ? {
         thinking: { type: 'enabled', budget_tokens: budgetTokens },
-        betas: ['interleaved-thinking-2025-05-14'],
-      } : {}),
+        betas: ['interleaved-thinking-2025-05-14', ...extraBetas],
+      } : (extraBetas.length > 0 ? { betas: extraBetas } : {})),
       ...(hasTools ? {
         tools: options.tools!.map((t) => ({
           name: t.name,
@@ -62,15 +201,30 @@ export class AnthropicClient implements LLMClient {
           name: b.name,
           arguments: b.input as Record<string, unknown>,
         })),
+        // A25: expose cache stats from usage field
+        usage: _extractUsage(msg.usage),
       };
     }
 
-    return { type: 'text', content: textBlocks.map((b) => b.text).join('') };
+    return {
+      type: 'text',
+      content: textBlocks.map((b) => b.text).join(''),
+      // A25: expose cache stats from usage field
+      usage: _extractUsage(msg.usage),
+    };
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     return withInferenceTimeout(this.model, async (_signal) => {
-      const messages = this.convertMessages(options.messages);
+      const rawMessages = this.convertMessages(options.messages);
+      // A25: insert prompt cache markers
+      const messages = insertPromptCacheMarker(rawMessages, {
+        skipCacheWrite: (options as ChatOptions & { skipCacheWrite?: boolean }).skipCacheWrite,
+      });
+      const cachedSystem = addSystemCacheControl(
+        options.systemPrompt as string | Anthropic.TextBlockParam[] | undefined,
+      );
+
       const hasTools = (options.tools?.length ?? 0) > 0;
       const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
       // Round 7: adaptive thinking level resolves based on model name
@@ -90,15 +244,18 @@ export class AnthropicClient implements LLMClient {
           : options.signal)
         : _signal;
 
+      // A25: add prompt-caching beta header when cache_control is used
+      const extraBetas: string[] = isPromptCachingEnabled() ? ['prompt-caching-2024-07-31'] : [];
+
       const stream = this.client.messages.stream({
         model: this.model,
         max_tokens: effectiveMax,
-        system: options.systemPrompt,
+        system: cachedSystem as string,
         messages,
         ...(budgetTokens ? {
           thinking: { type: 'enabled', budget_tokens: budgetTokens },
-          betas: ['interleaved-thinking-2025-05-14'],
-        } : {}),
+          betas: ['interleaved-thinking-2025-05-14', ...extraBetas],
+        } : (extraBetas.length > 0 ? { betas: extraBetas } : {})),
         ...(hasTools ? {
           tools: options.tools!.map((t) => ({
             name: t.name,
@@ -111,6 +268,8 @@ export class AnthropicClient implements LLMClient {
       let textContent = '';
       const toolUseBlocks: Array<{ id: string; name: string; inputJson: string }> = [];
       let currentToolUseIdx = -1;
+      // A25: capture usage from stream_end event for cache stats
+      let streamUsage: Record<string, number> | undefined;
 
       for await (const event of stream) {
         if (event.type === 'content_block_start') {
@@ -127,10 +286,7 @@ export class AnthropicClient implements LLMClient {
             const partialJson = (event.delta as { type: string; partial_json?: string }).partial_json ?? '';
             if (currentToolUseIdx >= 0 && toolUseBlocks[currentToolUseIdx]) {
               toolUseBlocks[currentToolUseIdx]!.inputJson += partialJson;
-              // ── StreamingToolExecutor: eager tool call notification ──────
-              // Notify the caller so it can start executing read-only tools
-              // as soon as their argument JSON is complete, without waiting
-              // for the whole LLM stream to finish.
+              // StreamingToolExecutor: eager tool call notification
               if (options.onToolCallDelta) {
                 const tb = toolUseBlocks[currentToolUseIdx]!;
                 options.onToolCallDelta(currentToolUseIdx, tb.name, partialJson, tb.id);
@@ -139,8 +295,18 @@ export class AnthropicClient implements LLMClient {
           }
         } else if (event.type === 'content_block_stop') {
           currentToolUseIdx = -1;
+        } else if (event.type === 'message_delta') {
+          // A25: capture usage stats including cache tokens
+          const ev = event as unknown as { usage?: Record<string, number> };
+          if (ev.usage) streamUsage = ev.usage;
         }
       }
+
+      // Try to get usage from final message
+      try {
+        const finalMsg = await stream.finalMessage();
+        streamUsage = _extractUsage(finalMsg.usage) as Record<string, number>;
+      } catch { /* non-fatal: finalMessage() may not always be available */ }
 
       if (toolUseBlocks.length > 0) {
         return {
@@ -151,10 +317,15 @@ export class AnthropicClient implements LLMClient {
             name: tb.name,
             arguments: safeParseJSON(tb.inputJson, tb.name),
           })),
+          ...(streamUsage ? { usage: streamUsage as ChatResponse['usage'] } : {}),
         };
       }
 
-      return { type: 'text', content: textContent };
+      return {
+        type: 'text',
+        content: textContent,
+        ...(streamUsage ? { usage: streamUsage as ChatResponse['usage'] } : {}),
+      };
     });
   }
 

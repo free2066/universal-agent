@@ -423,11 +423,12 @@ export interface PostCompactContext {
    */
   reFireSessionStartHooks?: boolean;
   /**
-   * F15: querySource — 用于 postCompactCleanup 判断是否是主线程（子代理不重置全局状态）
-   * 'main'：主线程压缩，清理所有缓存
-   * 'subagent'：子代理压缩，仅清理安全的 session 级别缓存
+   * F15/E25: querySource — 用于 postCompactCleanup 判断是否是主线程（子代理不重置全局状态）
+   * 'main'/'repl_main_thread'：主线程压缩，清理所有缓存
+   * 'subagent'/'agent'：子代理压缩，仅清理安全的 session 级别缓存
+   * E25: expanded to accept full QuerySource union
    */
-  querySource?: 'main' | 'subagent';
+  querySource?: import('../agent/types.js').QuerySource | 'main' | 'subagent';
 }
 
 // ── C14: CompactionResult — 结构化压缩返回值（claude-code CompactionResult 对标）─

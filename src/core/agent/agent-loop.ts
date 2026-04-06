@@ -546,7 +546,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     mcpToolsSummary: undefined,      // 由调用 runStreamLoop 的 AgentCore 填充（目前占位）
     agentListingSummary: undefined,
     reFireSessionStartHooks: false,
-    querySource: _isSubAgentCtx ? 'subagent' : 'main',  // F15: 主线程和子代理区分缓存清理范围
+    querySource: _isSubAgentCtx ? 'agent' : 'repl_main_thread',  // E25/F15: 主线程和子代理区分缓存清理范围
   };
 
   // H15: 将 snipTokensFreed 传入 autoCompact，防止在 snip 后立即重复触发

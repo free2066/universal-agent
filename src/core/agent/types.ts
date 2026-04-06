@@ -166,21 +166,39 @@ export interface StreamLoopResult {
 }
 
 /**
- * C18 (claude-code withRetry.ts parity): QuerySource — caller identity for LLM calls.
- * Used to differentiate foreground (agent main loop, compact) from background
- * (title/summary/classifier) tasks when deciding 529 retry behavior.
+ * E25: QuerySource — complete enumeration for LLM call source identification.
  *
- * Rule: background tasks 529 → fail immediately (don't waste retries)
- *       foreground tasks 529 → retry up to 3 times (INTERACTIVE_RATE_LIMIT_MAX_RETRIES)
+ * Used for:
+ *   1. 529/429 retry gating — foreground retries 3x; background fails immediately
+ *   2. A25 prompt cache TTL — main thread gets 1h TTL; background gets ephemeral
+ *   3. Memory trigger precision — only 'repl_main_thread' triggers session_memory extraction
  *
+ * Extends C18 (claude-code withRetry.ts) to match claude-code query.ts L63-80 (17+ values).
  * Mirrors claude-code FOREGROUND_529_RETRY_SOURCES Set in withRetry.ts L62-88.
+ *
+ * Foreground sources (retry on 529): repl_main_thread, compact, hook_agent, side_question,
+ *   agent_coordinator, repl_main_thread_compact
+ * Background sources (fail immediately on 529): all others
  */
 export type QuerySource =
-  | 'agent_main'            // Main agent conversation turn
-  | 'compact'               // Context compaction / microcompact
-  | 'tool_summary'          // maybeGenerateToolSummary (background)
-  | 'session_memory'        // Session memory extraction (background)
-  | 'background_title'      // Background title generation (background)
-  | 'background_classifier' // yolo-classifier approval check (background)
-  | 'hook_agent'            // Hook agent sub-call
-  | 'side_question';        // Side question / ask-expert model
+  // ── Foreground (interactive / user-facing) ──────────────────────────────────
+  | 'repl_main_thread'            // E25: Main REPL conversation turn (primary foreground)
+  | 'repl_main_thread:compact'    // E25: Main thread context compaction
+  | 'agent_main'                  // C18: Alias for repl_main_thread (kept for backward compat)
+  | 'compact'                     // C18: Context compaction / microcompact
+  | 'agent:coordinator'           // E25: Coordinator/orchestrator agent (foreground)
+  | 'hook_agent'                  // C18: Hook agent sub-call (foreground)
+  | 'side_question'               // C18: Side question / ask-expert model
+  // ── Background (fire-and-forget, fail immediately on 529) ────────────────────
+  | 'agent'                       // E25: Generic subagent (background)
+  | 'agent:autopilot'             // E25: Autopilot/autonomous subagent
+  | 'agent:teammate'              // E25: Teammate/swarm member
+  | 'tool_summary'                // C18: maybeGenerateToolSummary (background)
+  | 'session_memory'              // C18/E25: Session memory extraction (background)
+  | 'verification_agent'          // E25: Verification/validation subagent
+  | 'auto_dream'                  // E25: AutoDream background synthesis
+  | 'cron'                        // E25: ScheduleCronTool background invocation
+  | 'speculation'                 // E25: PromptSuggestion speculative pre-execution
+  | 'background_title'            // C18: Background title generation
+  | 'background_classifier'       // C18: yolo-classifier approval check
+  | 'agent_summarization';        // E25: AgentSummary 30s progress summarization

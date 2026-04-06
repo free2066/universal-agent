@@ -1,17 +1,23 @@
 /**
- * E16 + F15: post-compact-cleanup.ts — 压缩后缓存清理（完整版）
+ * E16 + F15 + E25: post-compact-cleanup.ts — 压缩后缓存清理（完整版）
  *
  * 对标 claude-code/src/services/compact/postCompactCleanup.ts
  *
  * Round 15 (F15): 实现了 4 项清理
  * Round 16 (E16): 扩展到 7 项清理，对标 claude-code 的 10 项（外部可复现的 7 项）
+ * Round 25 (E25): querySource 扩展，接受完整 QuerySource 枚举
  *
- * querySource: 'main' | 'subagent'
- *   - 'main'：主线程，清理全部缓存（含 user context）
- *   - 'subagent'：子代理，仅清理安全的 session 级别缓存
+ * querySource: 'main' | 'repl_main_thread' (foreground) | 'subagent' | 'agent' (background)
+ *   - foreground ('main'/'repl_main_thread')：主线程，清理全部缓存（含 user context）
+ *   - background ('subagent'/'agent')：子代理，仅清理安全的 session 级别缓存
  */
 
 export type CompactQuerySource = 'main' | 'subagent';
+
+// E25: FOREGROUND_COMPACT_SOURCES -- sources that trigger full cache cleanup
+const FOREGROUND_COMPACT_SOURCES = new Set([
+  'main', 'repl_main_thread', 'repl_main_thread:compact', 'agent_main', 'compact',
+]);
 
 /**
  * E16: runPostCompactCleanup — 压缩后 7 类缓存清理
@@ -26,9 +32,10 @@ export type CompactQuerySource = 'main' | 'subagent';
  *   7. LLM client 响应缓存（如果有）
  */
 export async function runPostCompactCleanup(
-  querySource: CompactQuerySource = 'main',
+  querySource: import('../agent/types.js').QuerySource | CompactQuerySource = 'main',
 ): Promise<void> {
-  const isMain = querySource === 'main';
+  // E25: support full QuerySource enumeration for foreground detection
+  const isMain = FOREGROUND_COMPACT_SOURCES.has(querySource as string);
 
   // Helper: 安全调用模块导出的无参函数
   async function tryCall(importPath: string, fnName: string): Promise<void> {
