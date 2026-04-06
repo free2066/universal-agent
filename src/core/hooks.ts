@@ -122,7 +122,16 @@ export type HookEvent =
   | 'task_complete'        // After a task is marked completed
   | 'cwd_change'           // After working directory changes
   | 'domain_switch'        // After /domain switches active domain
-  | 'thinking_change';     // After thinking level changes (none/low/medium/high)
+  | 'thinking_change'      // After thinking level changes (none/low/medium/high)
+  // ── Round 8: New events (Claude Code Stop/Notification/InstructionsLoaded parity) ──
+  | 'agent_stop'           // AI reply completed (Stop parity — fires every turn end)
+  | 'agent_stop_failure'   // AI reply ended with error (StopFailure parity)
+  | 'notification'         // AI pushed a system notification (Notification parity)
+  | 'instructions_loaded'  // AGENTS.md/CLAUDE.md loaded (InstructionsLoaded parity)
+  // ── Round 8: Tool lifecycle split (PreToolUse/PostToolUse/PostToolUseFailure parity) ──
+  | 'tool_pre_use'         // Before tool execution (modifiable: toolArgs)
+  | 'tool_post_use'        // After tool execution (observable: toolResult)
+  | 'tool_use_failure';    // Tool execution failed (PostToolUseFailure parity)
 
 export type HookType = 'shell' | 'inject' | 'block' | 'module' | 'http' | 'agent';
 
@@ -135,6 +144,13 @@ export interface HookDefinition {
   description?: string;
   /** Enabled/disabled (default: true) */
   enabled?: boolean;
+  /**
+   * Async / fire-and-forget mode (Round 8: claude-code async hook parity).
+   * When true, the hook is executed in the background without waiting for
+   * its result. The agent loop is NOT blocked by the hook execution.
+   * Useful for CI triggers, logging, notifications where latency matters.
+   */
+  async?: boolean;
 
   // ── inject/block specific ──
   /** Text to inject (for type=inject) or block message (for type=block) */
@@ -219,6 +235,26 @@ export interface HookContext {
   memoriesAdded?: number;
   /** Current working directory */
   cwd?: string;
+  // ── Round 8: New hook event fields ───────────────────────────────────────
+  /**
+   * agent_stop / agent_stop_failure:防止 hook 造成无限循环。
+   * 如果为 true，agent_stop hook 不再触发，防止在 hook 触发器内的操作再次触发 stop。
+   */
+  stopHookActive?: boolean;
+  /** agent_stop: 最后一条 AI 回复的文本内容 */
+  lastAssistantMessage?: string;
+  /** agent_stop_failure: 错误信息 */
+  stopError?: string;
+  /** notification: AI 推送的通知消息 */
+  notificationMessage?: string;
+  /** instructions_loaded: 指令文件路径 */
+  instructionsFilePath?: string;
+  /** instructions_loaded: 加载原因 */
+  instructionsLoadReason?: 'session_start' | 'compact' | 'include' | 'reload';
+  /** tool_pre_use / tool_post_use / tool_use_failure: 工具执行结果 */
+  toolResult?: string;
+  /** tool_use_failure: 错误信息 */
+  toolError?: string;
 }
 
 export interface HookResult {
@@ -456,12 +492,27 @@ export class HookRunner {
           };
 
         case 'shell':
+          // Round 8: async / fire-and-forget support (claude-code async hook parity)
+          // If hook.async === true, execute in background and return immediately.
+          if (hook.async === true) {
+            // Fire-and-forget: do not await, do not block agent loop
+            this.runShellHook(hook, ctx, currentValue).catch(() => { /* silent: async hooks don't block */ });
+            return { proceed: true };
+          }
           return await this.runShellHook(hook, ctx, currentValue);
 
         case 'module':
+          if (hook.async === true) {
+            this.runModuleHook(hook, ctx, currentValue).catch(() => { /* silent */ });
+            return { proceed: true };
+          }
           return await this.runModuleHook(hook, ctx, currentValue);
 
         case 'http':
+          if (hook.async === true) {
+            this.runHttpHook(hook, ctx, currentValue).catch(() => { /* silent */ });
+            return { proceed: true };
+          }
           return await this.runHttpHook(hook, ctx, currentValue);
 
         case 'agent':

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'fs';
-import { resolve, join, dirname, isAbsolute } from 'path';
+import { resolve, join, dirname, isAbsolute, extname } from 'path';
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
 import { getSkillLoader } from '../skills/skill-loader.js';
@@ -72,7 +72,11 @@ function matchesPathScope(filePath: string, scopePatterns: string[]): boolean {
  * Returns the resolved absolute path, or null if invalid.
  */
 function resolveIncludePath(includePath: string, fromDir: string): string | null {
-  const cleaned = includePath.trim();
+  // Strip URL fragment (#...) to avoid invalid paths like file.md#section
+  // (Round 8: claude-code fragment stripping parity)
+  const withoutFragment = includePath.split('#')[0]!;
+  const cleaned = withoutFragment.trim();
+  if (!cleaned) return null;
   if (cleaned.startsWith('~/')) {
     return join(homedir(), cleaned.slice(2));
   }
@@ -84,8 +88,34 @@ function resolveIncludePath(includePath: string, fromDir: string): string | null
 }
 
 /**
+ * Safe text-file extension whitelist (Round 8: claude-code binary file protection parity).
+ * @include directives that resolve to non-text files are silently skipped.
+ */
+const TEXT_EXTENSIONS = new Set([
+  '.md', '.txt', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp',
+  '.json', '.jsonc', '.yaml', '.yml', '.toml', '.ini', '.env',
+  '.sh', '.bash', '.zsh', '.fish', '.ps1',
+  '.html', '.css', '.scss', '.less', '.xml', '.svg',
+  '.sql', '.graphql', '.proto',
+  '.gitignore', '.gitattributes', '.editorconfig',
+  '.lock', '.conf', '.config', '.cfg',
+]);
+
+function isSafeToInclude(filePath: string): boolean {
+  const ext = extname(filePath).toLowerCase();
+  // Allow files with no extension (e.g. Makefile, Dockerfile)
+  return ext === '' || TEXT_EXTENSIONS.has(ext);
+}
+
+/**
  * Process @include directives in a markdown file's content.
  * Recursively expands included files up to MAX_INCLUDE_DEPTH.
+ *
+ * Round 8 enhancements (claude-code @include safety parity):
+ *   - Code block protection: @include inside ``` or ~~~ blocks is NOT expanded
+ *   - Binary file protection: non-text file extensions are silently skipped
+ *   - Fragment stripping: "path#section" → "path" (handled in resolveIncludePath)
  *
  * @param content   Raw file content (may contain @include lines)
  * @param fileDir   Directory of the file being processed (for relative paths)
@@ -101,22 +131,43 @@ function expandIncludes(
 ): string {
   if (depth >= MAX_INCLUDE_DEPTH) return content;
 
-  return content.replace(/^@([^\n]+)$/gm, (_match, includePathRaw: string) => {
+  // ── Round 8: Code block protection ──────────────────────────────────────────
+  // Replace code block contents with placeholders before @include expansion,
+  // then restore afterwards. Prevents @decorator / @variable inside code blocks
+  // from being mistakenly treated as @include directives.
+  const codeBlocks: string[] = [];
+  const contentStripped = content.replace(
+    /(`{3,}[\s\S]*?`{3,}|~{3,}[\s\S]*?~{3,})/g,
+    (match) => {
+      const idx = codeBlocks.push(match) - 1;
+      return `\x00CODE_BLOCK_${idx}\x00`;
+    },
+  );
+
+  const expanded = contentStripped.replace(/^@([^\n]+)$/gm, (_match, includePathRaw: string) => {
     const includePath = resolveIncludePath(includePathRaw.trim(), fileDir);
     if (!includePath) return `<!-- @include: invalid path "${includePathRaw}" -->`;
     if (visited.has(includePath)) return `<!-- @include: skipped (cycle) "${includePath}" -->`;
     if (!existsSync(includePath)) return `<!-- @include: not found "${includePath}" -->`;
 
+    // ── Round 8: Binary file protection ─────────────────────────────────────
+    if (!isSafeToInclude(includePath)) {
+      return `<!-- @include: skipped (non-text file) "${includePath}" -->`;
+    }
+
     try {
       const includeContent = readFileSync(includePath, 'utf-8');
       visited.add(includePath);
       // Recursively expand includes in the included file
-      const expanded = expandIncludes(includeContent, dirname(includePath), depth + 1, visited);
-      return `<!-- @include: ${includePath} -->\n${expanded.trim()}`;
+      const recursed = expandIncludes(includeContent, dirname(includePath), depth + 1, visited);
+      return `<!-- @include: ${includePath} -->\n${recursed.trim()}`;
     } catch {
       return `<!-- @include: error reading "${includePath}" -->`;
     }
   });
+
+  // Restore code blocks
+  return expanded.replace(/\x00CODE_BLOCK_(\d+)\x00/g, (_, i) => codeBlocks[parseInt(i, 10)] ?? '');
 }
 
 export interface AgentsContext {
@@ -151,9 +202,9 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
       if (!existsSync(filePath)) continue;
       try {
         const stat = statSync(filePath);
-        if (totalBytes + stat.size > MAX_BYTES) break;
+        if (totalBytes + stat.size > MAX_BYTES) continue; // Round 8: continue instead of break, check other candidates
         const rawContent = readFileSync(filePath, 'utf-8').trim();
-        if (!rawContent) { break; }
+        if (!rawContent) { continue; } // Round 8: continue instead of break
 
         // ── @include expansion (Round 4: claude-code @include parity) ──────────
         includeVisited.add(filePath);
@@ -172,7 +223,7 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
               : currentFilePath
             : currentFilePath;
           if (!matchesPathScope(relPath, scopePaths)) {
-            break; // Scope doesn't match — skip this file's instructions
+            continue; // Round 8: continue instead of break, check other candidates
           }
         }
 
@@ -182,7 +233,8 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
           sources.push(filePath);
           totalBytes += stat.size;
         }
-        break;
+        // Round 8: removed `break` — continue checking other candidates in same dir
+        // This ensures both AGENTS.md and CLAUDE.md can be loaded (claude-code parity)
       } catch { /* skip */ }
     }
   }
@@ -200,7 +252,29 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
     } catch { /* skip */ }
   }
 
-  return { instructions: parts.join('\n\n'), sources, totalBytes };
+  const result: AgentsContext = { instructions: parts.join('\n\n'), sources, totalBytes };
+
+  // Round 8: fire instructions_loaded hook (claude-code InstructionsLoaded parity)
+  // Use setImmediate to avoid blocking synchronous call, fire-and-forget via microtask
+  if (sources.length > 0) {
+    const _cwd = cwd;
+    const _firstSource = sources[0]!;
+    setImmediate(() => {
+      import('../hooks.js').then(({ getHookRunner }) => {
+        const runner = getHookRunner(_cwd);
+        if (runner.hasHooksFor('instructions_loaded')) {
+          runner.run({
+            event: 'instructions_loaded',
+            instructionsFilePath: _firstSource,
+            instructionsLoadReason: 'session_start',
+            cwd: _cwd,
+          }).catch(() => { /* non-fatal */ });
+        }
+      }).catch(() => { /* non-fatal */ });
+    });
+  }
+
+  return result;
 }
 
 /**

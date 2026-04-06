@@ -740,6 +740,28 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           }
         }
 
+        // ── Round 8: agent_stop hook (claude-code Stop parity) ───────────────
+        // Fires after each successful AI text reply, before breaking the loop.
+        // stopHookActive prevents infinite loops (hooks triggering another turn).
+        if (!_isSubAgent) {
+          try {
+            const { getHookRunner: _getStopHookRunner } = await import('../hooks.js');
+            const _stopRunner = _getStopHookRunner(process.cwd());
+            if (_stopRunner.hasHooksFor('agent_stop')) {
+              const _lastMsg = history[history.length - 1];
+              const _lastContent = _lastMsg?.role === 'assistant'
+                ? (typeof _lastMsg.content === 'string' ? _lastMsg.content : '')
+                : '';
+              await _stopRunner.run({
+                event: 'agent_stop',
+                stopHookActive: true,
+                lastAssistantMessage: _lastContent.slice(0, 2000), // cap size
+                cwd: process.cwd(),
+              });
+            }
+          } catch { /* agent_stop hook failure is non-fatal */ }
+        }
+
         break;
       }
 
@@ -814,13 +836,17 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           try {
             const { getHookRunner } = await import('../hooks.js');
             const runner = getHookRunner(process.cwd());
-            if (runner.hasHooksFor('on_tool_call')) {
-              const hookResult = await runner.run({
-                event: 'on_tool_call',
+            // Round 8: fire tool_pre_use (PreToolUse parity) + legacy on_tool_call
+            const hasPreUse = runner.hasHooksFor('tool_pre_use');
+            const hasOnToolCall = runner.hasHooksFor('on_tool_call');
+            if (hasPreUse || hasOnToolCall) {
+              const hookCtx = {
                 toolName: call.name,
                 toolArgs: call.arguments as Record<string, unknown>,
                 cwd: process.cwd(),
-              });
+              };
+              const eventToFire = hasPreUse ? 'tool_pre_use' as const : 'on_tool_call' as const;
+              const hookResult = await runner.run({ event: eventToFire, ...hookCtx });
               if (!hookResult.proceed || hookResult.blocked) {
                 // Hook blocked the tool call
                 const reason = hookResult.blockReason ?? 'Blocked by hook';
@@ -871,6 +897,20 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
             await triggerHook(createHookEvent('tool', 'after', { callId, toolName: call.name, success: true }));
             events?.onToolEnd?.(call.name, true, durationMs);
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+            // Round 8: fire tool_post_use (PostToolUse parity)
+            try {
+              const { getHookRunner: _postUseRunner } = await import('../hooks.js');
+              const _pr = _postUseRunner(process.cwd());
+              if (_pr.hasHooksFor('tool_post_use')) {
+                await _pr.run({
+                  event: 'tool_post_use',
+                  toolName: call.name,
+                  toolArgs: effectiveArgs as Record<string, unknown>,
+                  toolResult: resultStr.slice(0, 2000), // cap to avoid huge payloads
+                  cwd: process.cwd(),
+                });
+              }
+            } catch { /* non-fatal */ }
             // ── ToolUseSummary: async compress large results (Round 3) ─────
             // Fire-and-forget background summary for oversized tool outputs.
             // Summary is injected at the start of the NEXT iteration.
@@ -883,7 +923,22 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
             const durationMs = Date.now() - toolStartMs;
             await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: err instanceof Error ? err.message : String(err), success: false }));
             events?.onToolEnd?.(call.name, false, durationMs);
-            return { role: 'tool' as const, toolCallId: call.id, content: `Error: ${err instanceof Error ? err.message : String(err)}` };
+            const toolErrMsg = err instanceof Error ? err.message : String(err);
+            // Round 8: fire tool_use_failure (PostToolUseFailure parity)
+            try {
+              const { getHookRunner: _failRunner } = await import('../hooks.js');
+              const _fr = _failRunner(process.cwd());
+              if (_fr.hasHooksFor('tool_use_failure')) {
+                await _fr.run({
+                  event: 'tool_use_failure',
+                  toolName: call.name,
+                  toolArgs: effectiveArgs as Record<string, unknown>,
+                  toolError: toolErrMsg,
+                  cwd: process.cwd(),
+                });
+              }
+            } catch { /* non-fatal */ }
+            return { role: 'tool' as const, toolCallId: call.id, content: `Error: ${toolErrMsg}` };
           }
         };
 

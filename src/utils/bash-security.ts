@@ -4,12 +4,24 @@
  * Round 4: Supplements the existing soft-block checks in fs-tools.ts with
  * 8 additional safety checks mirroring claude-code's bashSecurity.ts.
  *
+ * Round 8: +5 additional checks for P1 security gaps (claude-code parity):
+ *   CHECK_4:  Obfuscated flags via ANSI-C/locale quoting ($'...' / $"...")
+ *   CHECK_15: Backslash-escaped whitespace (path traversal via command name parsing)
+ *   CHECK_16: Brace expansion injection ({--flag,safe} form)
+ *   CHECK_18: Unicode whitespace characters (parsing inconsistency attacks)
+ *   CHECK_19: Mid-word hash character (shell-quote vs bash parse difference)
+ *
  * Checks implemented here (ID numbering matches claude-code for traceability):
  *   CHECK_2:  JQ system function injection          ($(...) inside jq -e)
+ *   CHECK_4:  Obfuscated flags                      ($'...', $"...", ""-flag, ''-flag)
  *   CHECK_6:  Dangerous variable assignment          ($IFS / $BASH_ENV / $ENV / $CDPATH overwrite)
  *   CHECK_8:  Dangerous command substitution nesting (depth > 2)
  *   CHECK_11: IFS injection                          (IFS= or IFS=: before command)
  *   CHECK_13: /proc/environ access                   (cat /proc/[pid]/environ extraction)
+ *   CHECK_15: Backslash-escaped whitespace           (backslash before space/tab)
+ *   CHECK_16: Brace expansion injection              ({a,b} and {n..m} forms)
+ *   CHECK_18: Unicode whitespace                     (\u00A0 and similar non-standard whitespace)
+ *   CHECK_19: Mid-word hash                          (# inside word causing shell-quote/bash divergence)
  *   CHECK_20: Zsh dangerous built-in commands        (zmodload, zpty, ztcp, zsocket)
  *   CHECK_21: Backslash-escaped shell operators      (backslash before ; | & escaping)
  *   CHECK_22: Comment-quote desync                   (hash inside unbalanced quoted string)
@@ -271,6 +283,137 @@ function checkCommentQuoteDesync(cmd: string): BashSecurityViolation | null {
 
 // ── Main exported function ──────────────────────────────────────────────────────
 
+// ── Round 8: 5 additional security checks (claude-code parity) ───────────────
+
+/**
+ * CHECK_4: Obfuscated flags via ANSI-C quoting / locale quoting / empty-quote concat
+ * (Round 8: claude-code validateObfuscatedFlags parity)
+ *
+ * Threat: $'\x2d' encodes '-' as ANSI-C escape, $"..." uses locale quoting,
+ * ""-exec or ''-exec concatenates empty string to hide flag name.
+ * These techniques bypass blacklists that inspect flag names directly.
+ */
+function checkObfuscatedFlags(cmd: string): BashSecurityViolation | null {
+  // ANSI-C quoting: $'...' — can encode any character including -
+  if (/\$'[^']*'/.test(cmd)) {
+    return {
+      id: 4,
+      message: "Command contains ANSI-C quoting ($'...') which can hide characters and bypass flag blacklists",
+      isHard: false,
+    };
+  }
+  // Locale quoting: $"..." — locale-dependent character encoding
+  if (/\$"[^"]*"/.test(cmd)) {
+    return {
+      id: 4,
+      message: 'Command contains locale quoting ($"...") which can encode characters to bypass checks',
+      isHard: false,
+    };
+  }
+  // Empty-quote flag concatenation: ""-exec, ''-exec, ""-f, ''-f
+  // Matches: ("" or '') immediately followed by optional spaces then a dash
+  if (/(?:''|"")[\s]*-/.test(cmd)) {
+    return {
+      id: 4,
+      message: 'Command contains empty-quote flag concatenation (""-flag) which can hide flag names',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_15: Backslash-escaped whitespace (path traversal via command-name parsing)
+ * (Round 8: claude-code validateBackslashEscapedWhitespace parity)
+ *
+ * Threat: `echo\ test/../../../usr/bin/touch /tmp/file` — bash treats "echo test"
+ * as a single token (command name) due to backslash-space, while shell-quote
+ * may split it differently, enabling directory traversal via command resolution.
+ */
+function checkBackslashEscapedWhitespace(cmd: string): BashSecurityViolation | null {
+  // Detect backslash followed by space or tab (not inside single-quoted strings)
+  if (/\\ /.test(cmd) || /\\\t/.test(cmd)) {
+    return {
+      id: 15,
+      message: 'Command contains backslash-escaped whitespace (\\ space or \\tab) that could alter command parsing and enable path traversal',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_16: Brace expansion injection
+ * (Round 8: claude-code validateBraceExpansion parity)
+ *
+ * Threat: `git ls-remote {--upload-pack="touch /tmp/test",test}` — shell-quote
+ * treats braces as literal, but bash expands them to inject dangerous flags.
+ * Also catches {1..5} sequence expansion used for loop-based attacks.
+ */
+function checkBraceExpansion(cmd: string): BashSecurityViolation | null {
+  // {a,b} form — comma-separated brace expansion
+  if (/\{[^{}]*,[^{}]*\}/.test(cmd)) {
+    return {
+      id: 16,
+      message: 'Command contains brace expansion {a,b} which could inject flags or arguments invisible to shell-quote analysis',
+      isHard: false,
+    };
+  }
+  // {n..m} form — sequence expansion
+  if (/\{[^{}]*\.\.[^{}]*\}/.test(cmd)) {
+    return {
+      id: 16,
+      message: 'Command contains brace sequence expansion {n..m} which could enable loop-based attacks',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_18: Unicode whitespace characters
+ * (Round 8: claude-code validateUnicodeWhitespace parity)
+ *
+ * Threat: Non-standard Unicode whitespace (e.g. \u00A0 non-breaking space,
+ * \u2028 line separator) is treated as a word separator by shell-quote but
+ * as a literal character by bash, causing parsing inconsistencies.
+ */
+const UNICODE_WS_RE = /[\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]/;
+
+function checkUnicodeWhitespace(cmd: string): BashSecurityViolation | null {
+  if (UNICODE_WS_RE.test(cmd)) {
+    return {
+      id: 18,
+      message: 'Command contains Unicode whitespace characters that could cause shell-quote vs bash parsing inconsistencies',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
+/**
+ * CHECK_19: Mid-word hash character
+ * (Round 8: claude-code validateMidWordHash parity)
+ *
+ * Threat: shell-quote treats `#` as start of a comment, but bash treats
+ * it as a literal character when not at word boundary.
+ * Example: `curl http://host:8080#fragment` — shell-quote may truncate URL.
+ * This divergence can cause the validator to see a different command than bash executes.
+ */
+function checkMidWordHash(cmd: string): BashSecurityViolation | null {
+  // Detect non-whitespace followed by # not at the start of the string
+  // Exclude ${...} variable expansions where # is length operator
+  // and #!/ shebang patterns
+  if (/\S#/.test(cmd) && !/^\s*#/.test(cmd) && !/\$\{[^}]*#/.test(cmd)) {
+    return {
+      id: 19,
+      message: 'Command contains mid-word # character which is parsed differently by shell-quote vs bash (e.g. in URLs)',
+      isHard: false,
+    };
+  }
+  return null;
+}
+
 /**
  * Run all extended security checks on a bash command string.
  * Returns an array of violations (empty = safe).
@@ -282,10 +425,15 @@ export function checkExtendedBashSecurity(command: string): BashSecurityViolatio
   const violations: BashSecurityViolation[] = [];
   const checks = [
     checkJqSystemFunction,
+    checkObfuscatedFlags,         // CHECK_4  (Round 8: new)
     checkDangerousVariables,
     checkCommandSubstitutionNesting,
     checkIfsInjection,
     checkProcEnviron,
+    checkBackslashEscapedWhitespace, // CHECK_15 (Round 8: new)
+    checkBraceExpansion,          // CHECK_16 (Round 8: new)
+    checkUnicodeWhitespace,       // CHECK_18 (Round 8: new)
+    checkMidWordHash,             // CHECK_19 (Round 8: new)
     checkZshDangerousCommands,
     checkBackslashEscapedOperators,
     checkCommentQuoteDesync,
