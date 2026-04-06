@@ -165,11 +165,38 @@ export class ToolRegistry {
   }
 
   getToolDefinitions(): ToolDefinition[] {
-    // I13: 字母序排序保证 prompt cache key 稳定（claude-code assembleToolPool 对标）
-    // prompt cache 依赖消息内容的哈希，工具列表顺序变化会导致 cache miss
-    return Array.from(this.tools.values())
-      .map((t) => t.definition)
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // H15: 分区排序（内置工具先排序 + MCP 工具尾部排序）
+    // 对标 claude-code assembleToolPool：防止 MCP 工具混入内置工具破坏 prompt cache breakpoint
+    // 服务端在 last built-in tool 处打 cache breakpoint，MCP 工具混入会导致每次 cache miss
+    const builtIn: ToolDefinition[] = [];
+    const mcp: ToolDefinition[] = [];
+    const byName = (a: ToolDefinition, b: ToolDefinition) => a.name.localeCompare(b.name);
+    for (const tool of this.tools.values()) {
+      const t = tool as ToolRegistration & { isMcp?: boolean };
+      if (t.isMcp) mcp.push(t.definition);
+      else builtIn.push(t.definition);
+    }
+    return [...builtIn.sort(byName), ...mcp.sort(byName)];
+  }
+
+  /**
+   * I15: getToolDefinitionsForPrompt — 支持 deferred 懒加载
+   * 工具数超过 DEFER_THRESHOLD 时，只展开非 deferred 的工具，其余通过 ToolSearch 工具按需加载
+   */
+  getToolDefinitionsForPrompt(): ToolDefinition[] {
+    const DEFER_THRESHOLD = 50;
+    const all = this.getToolDefinitions();
+    if (all.length <= DEFER_THRESHOLD) return all;
+    // 超过阈值：只展开非 deferred 工具 + ToolSearch 自身
+    return all.filter(t => {
+      const tool = this.tools.get(t.name) as (ToolRegistration & { shouldDefer?: boolean; isMcp?: boolean; alwaysLoad?: boolean }) | undefined;
+      if (!tool) return false;
+      if (tool.alwaysLoad) return true;         // alwaysLoad 工具始终展开
+      if (t.name === 'ToolSearch') return true; // ToolSearch 自身不 defer
+      if (tool.isMcp) return false;             // MCP 工具默认 defer
+      if (tool.shouldDefer) return false;       // 明确标记 shouldDefer 的工具
+      return true;
+    });
   }
 
   /**

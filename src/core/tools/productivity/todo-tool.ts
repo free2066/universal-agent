@@ -126,3 +126,30 @@ export const todoWriteTool: ToolRegistration = {
     return todoManager.update(args.items as TodoItem[]);
   },
 };
+
+/**
+ * E15: TodoReadTool — 纯读语义（无副作用）
+ * 对标 claude-code TodoReadTool，LLM 可独立读取当前 todo 状态，无需发起写操作。
+ * alwaysLoad: true — 不参与 deferred 懒加载（工具数超阈值时也保持可见）
+ */
+export const todoReadTool: ToolRegistration & { alwaysLoad?: boolean } = {
+  alwaysLoad: true,
+  definition: {
+    name: 'TodoRead',
+    description: [
+      'Read the current in-session task tracking checklist.',
+      'Use this to check task status before making updates.',
+      'Returns all todos with their current status.',
+    ].join(' '),
+    parameters: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  handler: async (_args: Record<string, unknown>): Promise<string> => {
+    const items = todoManager.getItems();
+    if (items.length === 0) return '(No todos yet — use TodoWrite to create tasks)';
+    return todoManager.render();
+  },
+};

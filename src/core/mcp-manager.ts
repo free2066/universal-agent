@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { join, resolve } from 'path';
 import { spawn } from 'child_process';
 import type { ToolDefinition, ToolRegistration } from '../models/types.js';
@@ -134,6 +134,11 @@ interface MCPToolDef {
   };
 }
 
+// ── A15: MCP 重连状态机常量（claude-code useManageMCPConnections 对标）───────────
+const MAX_RECONNECT_ATTEMPTS = 5;
+const INITIAL_BACKOFF_MS = 1_000;
+const MAX_BACKOFF_MS = 30_000;
+
 /**
  * Communicate with a stdio MCP server using JSON-RPC 2.0.
  * Spawns the process, sends initialize + tools/list, returns tool definitions.
@@ -148,7 +153,16 @@ class StdioMCPClient {
     timer: ReturnType<typeof setTimeout>;
   }>();
   private buffer = '';
-  private server: MCPServer;
+  readonly server: MCPServer;
+
+  // A15: 重连状态追踪
+  private _reconnectAttempt = 0;
+  private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private _reconnectCancelled = false;
+
+  // G15: 热更新通知回调
+  private _toolsChangedCallback?: () => void;
+  private _promptsChangedCallback?: () => void;
 
   constructor(server: MCPServer) {
     this.server = server;
@@ -191,7 +205,7 @@ class StdioMCPClient {
     // Step 1: initialize handshake
     await this.request('initialize', {
       protocolVersion: '2024-11-05',
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, resources: {} },  // D15: 声明 resources 能力
       clientInfo: { name: 'universal-agent', version: '1.0.0' },
     });
 
@@ -208,10 +222,10 @@ class StdioMCPClient {
     try {
       return await this._callToolInternal(toolName, toolArgs);
     } catch (err) {
-      // E14: Session 过期重连 — 检测 -32001 错误，自动重新连接后重试一次
+      // E14: Session 过期重连 — 检测 -32001 错误，自动调用指数退避重连后重试一次
       if (isMcpSessionExpiredError(err)) {
         process.stderr.write(`[MCP:${this.server.name}] Session expired, reconnecting…\n`);
-        await this.reconnect();
+        await this.reconnectWithBackoff();
         return await this._callToolInternal(toolName, toolArgs);
       }
       throw err;
@@ -226,10 +240,81 @@ class StdioMCPClient {
     return content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
   }
 
-  /** E14: 关闭并重新初始化连接 */
+  /**
+   * A15: 指数退避重连（claude-code useManageMCPConnections MAX_RECONNECT_ATTEMPTS 对标）
+   * - stdio 进程意外退出不重连（直接标记失败）
+   * - SSE/HTTP 类型才进行指数退避重连
+   * - 最多 5 次，退避 1s→2s→4s→8s→16s（上限 30s）
+   */
+  async reconnectWithBackoff(): Promise<void> {
+    // stdio 进程退出不应自动重连（进程意外终止通常是配置问题）
+    if (this.server.type === 'stdio') {
+      process.stderr.write(`[MCP:${this.server.name}] stdio process exited — not auto-reconnecting\n`);
+      return;
+    }
+    if (this._reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      process.stderr.write(
+        `[MCP:${this.server.name}] max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached — giving up\n`,
+      );
+      return;
+    }
+    this._reconnectCancelled = false;
+    this._reconnectAttempt++;
+    const backoffMs = Math.min(
+      INITIAL_BACKOFF_MS * Math.pow(2, this._reconnectAttempt - 1),
+      MAX_BACKOFF_MS,
+    );
+    process.stderr.write(
+      `[MCP:${this.server.name}] reconnect attempt ${this._reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS} in ${backoffMs}ms…\n`,
+    );
+    await new Promise<void>((res) => {
+      this._reconnectTimer = setTimeout(res, backoffMs);
+    });
+    if (this._reconnectCancelled) return;
+    this.stop();
+    try {
+      await this.start();
+      this._reconnectAttempt = 0; // 成功后重置计数
+    } catch (err) {
+      process.stderr.write(`[MCP:${this.server.name}] reconnect failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+
+  /** A15: 取消正在进行的重连等待 */
+  cancelReconnect(): void {
+    this._reconnectCancelled = true;
+    if (this._reconnectTimer) clearTimeout(this._reconnectTimer);
+  }
+
+  /** G15: 注册工具列表变更回调（ToolListChanged 热更新） */
+  onToolsChanged(cb: () => void): void { this._toolsChangedCallback = cb; }
+  /** G15: 注册提示列表变更回调（PromptListChanged 热更新） */
+  onPromptsChanged(cb: () => void): void { this._promptsChangedCallback = cb; }
+
+  // D15: MCP 资源访问（resources/list + resources/read）
+  async listResources(): Promise<Array<{ uri: string; name?: string; mimeType?: string }>> {
+    if (!this.proc) return [];
+    try {
+      const res = await this.request('resources/list', {});
+      if (res.error) return [];
+      return (res.result as { resources?: Array<{ uri: string; name?: string; mimeType?: string }> })?.resources ?? [];
+    } catch { return []; }
+  }
+
+  async readResource(uri: string): Promise<string | null> {
+    if (!this.proc) return null;
+    try {
+      const res = await this.request('resources/read', { uri });
+      if (res.error) return null;
+      const contents = (res.result as { contents?: Array<{ text?: string; blob?: string; mimeType?: string }> })?.contents ?? [];
+      return contents.map((c) => c.text ?? (c.blob ? `[binary:${c.mimeType ?? 'data'}]` : '')).join('\n') || null;
+    } catch { return null; }
+  }
+
+  /** E14/A15: 旧接口保留（仅用于 session 过期场景的兼容调用） */
   async reconnect(): Promise<void> {
     this.stop();
-    await new Promise((res) => setTimeout(res, 500)); // brief backoff
+    await new Promise((res) => setTimeout(res, 500));
     await this.start();
   }
 
@@ -271,7 +356,7 @@ class StdioMCPClient {
       const trimmed = line.trim();
       if (!trimmed) continue;
       try {
-        const msg = JSON.parse(trimmed) as JsonRpcResponse;
+        const msg = JSON.parse(trimmed) as JsonRpcResponse & { method?: string };
         if (typeof msg.id === 'number') {
           const pending = this.pending.get(msg.id);
           if (pending) {
@@ -279,8 +364,22 @@ class StdioMCPClient {
             this.pending.delete(msg.id);
             pending.resolve(msg);
           }
+        } else if (msg.method) {
+          // G15: 处理 MCP 服务器推送的通知消息
+          this._handleNotification(msg.method);
         }
       } catch { /* ignore non-JSON lines (e.g. server startup messages) */ }
+    }
+  }
+
+  /** G15: 处理 MCP 通知（tools/list_changed, prompts/list_changed） */
+  private _handleNotification(method: string): void {
+    if (method === 'notifications/tools/list_changed') {
+      process.stderr.write(`[MCP:${this.server.name}] tools list changed — refreshing…\n`);
+      this._toolsChangedCallback?.();
+    } else if (method === 'notifications/prompts/list_changed') {
+      process.stderr.write(`[MCP:${this.server.name}] prompts list changed\n`);
+      this._promptsChangedCallback?.();
     }
   }
 }
@@ -592,6 +691,26 @@ export class MCPManager {
     // 如果 SDK 不支持，registerElicitationHandler 内部会静默忽略
     registerElicitationHandler(client, (msg) => process.stderr.write(msg));
 
+    // G15: 注册热更新通知回调
+    client.onToolsChanged(async () => {
+      try {
+        // 重新拉取工具列表并更新 tools Map
+        const freshDefs = await client.start().catch(() => toolDefs); // fallback to last known
+        for (const t of freshDefs) {
+          const toolDef: ToolDefinition = {
+            name: `mcp_${server.name}_${t.name}`,
+            description: `[MCP:${server.name}] ${t.description ?? t.name}`,
+            parameters: (t.inputSchema as ToolDefinition['parameters']) ?? { type: 'object', properties: {} },
+          };
+          this.tools.set(toolDef.name, {
+            definition: toolDef,
+            handler: async (args: Record<string, unknown>): Promise<string> => client.callTool(t.name, args),
+          });
+        }
+        process.stderr.write(`[MCP:${server.name}] tool pool refreshed (${freshDefs.length} tools)\n`);
+      } catch { /* non-fatal */ }
+    });
+
     return toolDefs.map((t) => {
       const toolDef: ToolDefinition = {
         name: `mcp_${server.name}_${t.name}`,
@@ -617,6 +736,11 @@ export class MCPManager {
 
   getTools(): ToolRegistration[] { return Array.from(this.tools.values()); }
   listServers(): MCPServer[] { return Array.from(this.servers.values()); }
+
+  /** D15: 获取指定服务器的 StdioMCPClient（用于资源访问） */
+  getStdioClient(serverName: string): StdioMCPClient | undefined {
+    return this.stdioClients.get(serverName);
+  }
 
   addServer(name: string, server: Omit<MCPServer, 'name'>) {
     this.servers.set(name, { name, ...server });
@@ -646,7 +770,15 @@ export class MCPManager {
     }
     // Ensure directory exists
     try { mkdirSync(join(this.configPath, '..'), { recursive: true }); } catch { /* ignore */ }
-    writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+    // A15: 原子写文件（先写 .tmp 再 rename），防止写入过程中进程崩溃导致文件损坏
+    const tmpPath = this.configPath + '.tmp';
+    try {
+      writeFileSync(tmpPath, JSON.stringify(config, null, 2));
+      renameSync(tmpPath, this.configPath);
+    } catch {
+      // fallback：直接写入
+      writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+    }
   }
 
   /** Test a server: spawn it (stdio) or HTTP-ping it (SSE), return status string */

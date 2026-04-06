@@ -116,31 +116,40 @@ async function maybeGenerateToolSummary(
   }
 }
 
-// ── maxOutputTokens 三阶段恢复 (claude-code parity) ──────────────────────────
+// ── B15: maxOutputTokens Phase-0 Escalation + Phase-1~3 Recovery ─────────────
 //
-// When a response is cut off by the model's maxOutputTokens limit, claude-code
-// does a three-phase recovery:
-//   Phase 1: Escalate to 64k output tokens (if model supports it)
-//   Phase 2: Inject meta continuation messages up to 3 times to coax the model
-//            to continue where it left off (e.g. "Please continue from where you
-//            left off — the response was cut off")
-//   Phase 3: If still failing after 3 continuations, surface error to user
+// claude-code 的四阶段恢复流程（B15 对齐）：
+//   Phase 0: 精确检测 apiError='max_output_tokens'，以 ESCALATED_MAX_TOKENS=64k 无声重试
+//   Phase 1-3: 注入 recovery 消息 "Output token limit hit..."（最多 3 次）
+//   Phase 4: 超过 3 次 → 向用户显示错误
 //
-// Detection heuristic: finish_reason === 'max_tokens' or 'length', or the
-// response ends abruptly without a natural conclusion.
+// 检测优先级：apiError 字段 > finish_reason 字段 > 尾字符启发式
+
+/** B15: ESCALATED_MAX_TOKENS — Phase-0 静默重试使用的 max token 限制 */
+export const ESCALATED_MAX_TOKENS = 64_000;
+/** B15: CAPPED_DEFAULT_MAX_TOKENS — 默认输出 token 上限（Phase-0 触发阈值） */
+export const CAPPED_DEFAULT_MAX_TOKENS = 8_000;
 
 const MAX_CONTINUATION_RETRIES = 3;
 
-function isResponseTruncated(responseContent: string, finishReason?: string): boolean {
+/**
+ * B15: isWithheldMaxOutputTokens — 精确检测是否命中 max_output_tokens 限制
+ * 对标 claude-code isWithheldMaxOutputTokens()
+ * 优先检查 apiError 字段，其次回落到 finish_reason 和尾字符启发式
+ */
+function isWithheldMaxOutputTokens(responseContent: string, finishReason?: string, apiError?: string): boolean {
+  if (apiError === 'max_output_tokens') return true;
   if (finishReason === 'max_tokens' || finishReason === 'length') return true;
-  // Heuristic: response ends mid-sentence (no period, ?, !, ``` or code block close)
+  // 兼容旧逻辑：尾字符启发式检测
   const trimmed = responseContent.trimEnd();
   if (trimmed.length < 50) return false;
   const lastChar = trimmed[trimmed.length - 1];
   if (['.', '?', '!', '`', '>', '}', ']', '"', "'"].includes(lastChar)) return false;
-  // Ends with partial word or number (likely truncated)
   return /\w$/.test(trimmed);
 }
+
+// 旧别名，保持向后兼容
+const isResponseTruncated = (content: string, fr?: string) => isWithheldMaxOutputTokens(content, fr);
 
 // ─── Pending confirmation helpers ────────────────────────────────────────────
 
@@ -445,10 +454,13 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
 
   // C13: PostCompactContext — 传给 autoCompact，压缩后重注入 MCP 工具和 agent 列表
   // 这里通过 opts.registry 和 opts 推断可注入的上下文
+  // F15: 提前判断是否是子代理（穿讻e _isSubAgent 被下面重复定义但应一致）
+  const _isSubAgentCtx = !!(opts as unknown as Record<string, unknown>).isSubAgent;
   const _postCompactCtx: import('../context/context-compressor.js').PostCompactContext = {
     mcpToolsSummary: undefined,      // 由调用 runStreamLoop 的 AgentCore 填充（目前占位）
     agentListingSummary: undefined,
     reFireSessionStartHooks: false,
+    querySource: _isSubAgentCtx ? 'subagent' : 'main',  // F15: 主线程和子代理区分缓存清理范围
   };
 
   // A14: HistorySnip — autoCompact 之前先做轻量级历史截断
@@ -460,7 +472,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     onChunk(`\n  HistorySnip: freed ~${_snipResult.tokensFreed} tokens (${_snipResult.messages.length} messages remain)\n`);
   }
 
-  const compacted = await autoCompact(history, onChunk, _postCompactCtx);
+  // H15: 将 snipTokensFreed 传入 autoCompact，防止在 snip 后立即重复触发
+  const compacted = await autoCompact(history, onChunk, _postCompactCtx, _snipResult.tokensFreed);
   if (compacted.wasCompacted) {
     await triggerHook(createHookEvent('agent', 'compact', { compacted: compacted.compactedTurns }));
     if (compacted.isRecompactionInChain) {
@@ -484,6 +497,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   let _terminalReason: TerminalReason = 'completed';
   // B14: 追踪最后一次 continue 的原因（测试可观测性，对标 claude-code State.transition）
   let _lastTransition: ContinueTransition | undefined;
+  // B15: maxOutputTokens Phase-0 Escalation 状态变量
+  let _maxOutputTokensOverride: number | undefined; // Phase-0 设置为 ESCALATED_MAX_TOKENS
+  let _motRecoveryCount = 0;                         // Phase-1~3 恢复次数计数器
 
   // ── Token Budget Tracker (Round 5: claude-code tokenBudget.ts parity) ────────
   // Tracks per-turn token usage to detect diminishing returns and enforce budget.
@@ -584,6 +600,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
       } catch { /* plugin hooks are non-fatal */ }
 
       const currentTools = registry.getToolDefinitions();
+      // I15: 注入 registry 到 globalThis，供 ToolSearchTool 访问
+      (globalThis as Record<string, unknown>)['__uagent_tool_registry'] = registry;
       const _lastUserRaw = [...history].reverse().find((m) => m.role === 'user')?.content ?? prompt;
       const lastUserMsg: string = typeof _lastUserRaw === 'string'
         ? _lastUserRaw
@@ -750,33 +768,43 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
       if (response.type === 'text') {
         const content = response.content;
 
-        // ── maxOutputTokens 三阶段恢复 (Round 3: claude-code parity) ──────────
-        // Phase 1-3: If response appears truncated (finish_reason=max_tokens or
-        // heuristic), inject continuation meta-message and retry up to 3 times.
-        // This avoids cut-off responses when the model hits output token limits.
+        // ── B15: maxOutputTokens Phase-0 + Phase-1~3 恢复（claude-code ESCALATED_MAX_TOKENS 对标）
+        // Phase 0: 以 ESCALATED_MAX_TOKENS=64k 无声重试（不注入任何 meta 消息）
+        // Phase 1-3: 注入 recovery 消息，最多 3 次
         const finishReason = (response as unknown as Record<string, unknown>)['finish_reason'] as string | undefined;
-        if (isResponseTruncated(content, finishReason)) {
-          // Count how many continuation attempts have been made in this iteration
-          const contCount = history.filter(
-            (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('[SYSTEM:CONTINUE]'),
-          ).length;
-
-          if (contCount < MAX_CONTINUATION_RETRIES) {
-            // Phase 1+2: Append partial content to history and inject continuation prompt
+        const apiError = (response as unknown as Record<string, unknown>)['apiError'] as string | undefined;
+        if (isWithheldMaxOutputTokens(content, finishReason, apiError)) {
+          if (_maxOutputTokensOverride === undefined && _motRecoveryCount === 0) {
+            // Phase 0: 静默 escalate 到 64k，不注入任何 meta 消息
+            _maxOutputTokensOverride = ESCALATED_MAX_TOKENS;
+            onChunk(`\n  max_output_tokens 检测到 — Phase-0: 升级到 ${ESCALATED_MAX_TOKENS.toLocaleString()} tokens 重试…\n`);
+            _lastTransition = { reason: 'max_output_tokens_escalate' };
+            events?.onWithheld?.('max_output_tokens');
+            continue;
+          }
+          _maxOutputTokensOverride = undefined; // Phase 0 应用一次后重置
+          if (_motRecoveryCount < MAX_CONTINUATION_RETRIES) {
+            _motRecoveryCount++;
+            // Phase 1~3: 将部分内容写入 history 并注入 recovery 消息
             history.push({ role: 'assistant', content });
             history.push({
               role: 'user',
-              content: '[SYSTEM:CONTINUE] Your response was cut off. Please continue exactly from where you left off, without repeating any previous content.',
+              content: 'Output token limit hit. Resume directly where you left off without repeating any previous content.',
             });
-            onChunk(`\n↩️  Response truncated — requesting continuation (attempt ${contCount + 1}/${MAX_CONTINUATION_RETRIES})…\n`);
-            continue; // retry iteration
+            onChunk(`\n↩️  Output token limit hit — requesting recovery (attempt ${_motRecoveryCount}/${MAX_CONTINUATION_RETRIES})…\n`);
+            _lastTransition = { reason: 'max_output_tokens_recovery', attempt: _motRecoveryCount };
+            events?.onWithheld?.('max_output_tokens');
+            continue;
           } else {
-            // Phase 3: Max retries reached — surface error
-            onChunk(`\n⚠️  Response was truncated and ${MAX_CONTINUATION_RETRIES} continuation attempts failed. The response may be incomplete.\n`);
+            // Phase 4: 最大次数达到 — 向用户展示错误
+            onChunk(`\n⚠️  Response was truncated and ${MAX_CONTINUATION_RETRIES} recovery attempts failed. The response may be incomplete.\n`);
             history.push({ role: 'assistant', content });
             break;
           }
         }
+        // 返回正常内容 — 重置所有 maxOutputTokens 计数器
+        _maxOutputTokensOverride = undefined;
+        _motRecoveryCount = 0;
 
         // Confidence mechanism (kstack article #15310)
         const uncertainPattern = /\[UNCERTAIN\]|⚠️\s*\[UNCERTAIN\]/gi;
@@ -830,9 +858,11 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           }
         }
 
-        // ── Round 8: agent_stop hook (claude-code Stop parity) ───────────────
+        // ── C15: Stop Hook Blocking Errors → Continue 循环（claude-code stopHooks.ts 对标）
         // Fires after each successful AI text reply, before breaking the loop.
-        // stopHookActive prevents infinite loops (hooks triggering another turn).
+        // 如果 Stop Hook 返回 blockingErrors → 注入 history，继续 LLM 调用。
+        // 如果 Stop Hook 返回 preventContinuation=true → 终止循环（hook_stopped）。
+        // stopHookActive 字段防止 Stop Hook 触发新一轮 stop hook 形成无限循环。
         if (!_isSubAgent) {
           try {
             const { getHookRunner: _getStopHookRunner } = await import('../hooks.js');
@@ -842,12 +872,34 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               const _lastContent = _lastMsg?.role === 'assistant'
                 ? (typeof _lastMsg.content === 'string' ? _lastMsg.content : '')
                 : '';
-              await _stopRunner.run({
-                event: 'agent_stop',
-                stopHookActive: true,
-                lastAssistantMessage: _lastContent.slice(0, 2000), // cap size
-                cwd: process.cwd(),
-              });
+              // C15: 收集 blocking errors（run() 返回的 blockingErrors 字段）
+              const _blockingErrors: import('../../models/types.js').Message[] = [];
+              let _preventContinuation = false;
+              try {
+                const _hookResult = await _stopRunner.run({
+                  event: 'agent_stop',
+                  stopHookActive: true,
+                  lastAssistantMessage: _lastContent.slice(0, 2000),
+                  cwd: process.cwd(),
+                });
+                const _hr = _hookResult as unknown as Record<string, unknown> | undefined;
+                if (_hr?.preventContinuation === true) {
+                  _preventContinuation = true;
+                } else if (Array.isArray(_hr?.blockingErrors) && (_hr.blockingErrors as unknown[]).length > 0) {
+                  _blockingErrors.push(...(_hr.blockingErrors as import('../../models/types.js').Message[]));
+                }
+              } catch { /* hook run non-fatal */ }
+
+              if (_blockingErrors.length > 0) {
+                // C15: 将 blocking errors 注入 history，继续 LLM 调用
+                history.push(..._blockingErrors);
+                _lastTransition = { reason: 'stop_hook_blocking' };
+                continue; // 重新进入主循环
+              }
+              if (_preventContinuation) {
+                _terminalReason = 'hook_stopped';
+                break;
+              }
             }
           } catch { /* agent_stop hook failure is non-fatal */ }
         }

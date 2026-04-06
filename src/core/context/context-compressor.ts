@@ -180,6 +180,7 @@ export function calculateTokenWarningState(
 export function shouldCompact(
   history: Message[],
   model = modelManager.getCurrentModel('main'),
+  snipTokensFreed = 0,  // H15: 已释放的 token，从阈值中减去以防止重复触发
 ): CompactDecision {
   const profile = [...modelManager.listProfiles()].find(
     (p) => p.name === model || p.modelName === model,
@@ -187,13 +188,15 @@ export function shouldCompact(
   const contextLength = profile?.contextLength ?? 128000;
   const threshold = Math.floor(contextLength * COMPACT_THRESHOLD);
   const estimatedTokens = estimateHistoryTokens(history);
-  const warningState = calculateTokenWarningState(estimatedTokens, model);
+  // H15: 减去 snip 已释放的部分，防止在 snip 后立即重复触发 autoCompact
+  const effectiveTokens = Math.max(0, estimatedTokens - snipTokensFreed);
+  const warningState = calculateTokenWarningState(effectiveTokens, model);
 
   // 触发条件：百分比阈值（向后兼容）OR 四档阈值达到 error/blocking
   const shouldCompactByState = warningState === 'error' || warningState === 'blocking';
 
   return {
-    shouldCompact: estimatedTokens > threshold || shouldCompactByState,
+    shouldCompact: effectiveTokens > threshold || shouldCompactByState,
     estimatedTokens,
     contextLength,
     threshold,
@@ -419,6 +422,12 @@ export interface PostCompactContext {
    * C13-3: 是否重新触发 session_start hooks（默认 false，避免重复触发）
    */
   reFireSessionStartHooks?: boolean;
+  /**
+   * F15: querySource — 用于 postCompactCleanup 判断是否是主线程（子代理不重置全局状态）
+   * 'main'：主线程压缩，清理所有缓存
+   * 'subagent'：子代理压缩，仅清理安全的 session 级别缓存
+   */
+  querySource?: 'main' | 'subagent';
 }
 
 // ── C14: CompactionResult — 结构化压缩返回值（claude-code CompactionResult 对标）─
@@ -531,6 +540,7 @@ export async function autoCompact(
   history: Message[],
   onProgress?: (msg: string) => void,
   postCompactCtx?: PostCompactContext,
+  snipTokensFreed = 0,  // H15: snip 已释放的 token 数（防止重复触发 autoCompact）
 ): Promise<CompactionResult> {
   const _noCompact: CompactionResult = {
     wasCompacted: false, compactedTurns: 0, preTokens: 0, postTokens: 0,
@@ -551,7 +561,7 @@ export async function autoCompact(
   // Anti-recursion guard
   if (isCompacting) return _noCompact;
 
-  const decision = shouldCompact(history);
+  const decision = shouldCompact(history, undefined, snipTokensFreed);
   if (!decision.shouldCompact) return _noCompact;
 
   const targetSplit = history.length - KEEP_LAST_TURNS;
@@ -741,7 +751,7 @@ export async function autoCompact(
 
   // C14: 返回 CompactionResult 结构化结果
   const postTokens = estimateHistoryTokens(history);
-  return {
+  const compactionResult: CompactionResult = {
     wasCompacted: true,
     compactedTurns: toCompact.length,
     preTokens,
@@ -750,6 +760,14 @@ export async function autoCompact(
     isRecompactionInChain,
     compactionPath: 'llm_full',
   };
+
+  // F15: runPostCompactCleanup — 压缩后 5 类缓存清理（claude-code postCompactCleanup.ts 对标）
+  try {
+    const { runPostCompactCleanup } = await import('./post-compact-cleanup.js');
+    await runPostCompactCleanup(postCompactCtx?.querySource ?? 'main');
+  } catch { /* non-fatal */ }
+
+  return compactionResult;
 }
 
 // ── Layer 7: Reactive Compact (emergency compaction on 413 / context overflow) ──

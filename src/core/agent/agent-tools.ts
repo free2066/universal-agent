@@ -51,7 +51,9 @@ import { redisProbeTool } from '../tools/productivity/redis-probe.js';
 import { databaseQueryTool } from '../tools/productivity/database-query.js';
 import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool } from '../task-board.js';
 import { backgroundRunTool, checkBackgroundTool, killBashTool } from '../tools/productivity/background-tools.js';
-import { todoWriteTool } from '../tools/productivity/todo-tool.js';
+import { todoWriteTool, todoReadTool } from '../tools/productivity/todo-tool.js';
+import { toolSearchToolRegistration } from '../tools/tool-search-tool.js';
+import { ListMcpResourcesRegistration, ReadMcpResourceRegistration } from '../tools/mcp/mcp-resource-tools.js';
 import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
 import { askUserQuestionTool } from '../tools/productivity/ask-user-question-tool.js';
 import {
@@ -149,7 +151,15 @@ export function registerAllTools(
       todoEnabled = cs.loadConfig().todo !== false;
     } catch { /* config unavailable → default ON */ }
     if (todoEnabled) reg(todoWriteTool);
+    if (todoEnabled) reg(todoReadTool);  // E15: TodoRead — 纯读语义，alwaysLoad
   }
+
+  // I15: ToolSearch — 工具关键词搜索（工具数 > 50 时支持按需加载）
+  reg(toolSearchToolRegistration);
+
+  // D15: MCP Resources — 允许 LLM 访问 MCP 服务器暴露的资源
+  reg(ListMcpResourcesRegistration);
+  reg(ReadMcpResourceRegistration);
 
   // AskUserQuestion — interactive structured prompting (Round 5: claude-code parity)
   reg(askUserQuestionTool);
