@@ -29,8 +29,9 @@
 
 import type { Message } from '../../models/types.js';
 import { getMemoryStore } from './memory-store.js';
-import { resolve } from 'path';
+import { resolve, join } from 'path';
 import { createHash } from 'crypto';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 
 // ── Dual-threshold configuration (claude-code parity) ────────────────────────
 
@@ -291,10 +292,86 @@ ${conversationSummary}`;
       }
     }
 
+    // F12-1: Update MEMORY.md after extraction (async, non-blocking)
+    if (added > 0) {
+      setImmediate(() => { updateMemoryMd(projectRoot); });
+    }
+
     return { added, updated, skipped: 0 };
   } catch {
     return { added: 0, updated: 0, skipped: 0 };
   }
+}
+
+// ── MEMORY.md generation (F12: claude-code parity) ───────────────────────────
+
+const MEMORY_MD_MAX_LINES = 200;
+const MEMORY_MD_MAX_BYTES = 25 * 1024; // 25 KB
+
+/**
+ * Generate/update MEMORY.md from the vector memory store for a project.
+ * Written to ~/.uagent/projects/<sanitizedCwd>/MEMORY.md for auto-injection.
+ *
+ * Mirrors claude-code's entrypoint MEMORY.md with 200-line / 25KB truncation.
+ */
+export function updateMemoryMd(projectRoot: string): void {
+  try {
+    if (process.env.AGENT_NO_MEMORY_MD === '1') return;
+
+    const project = resolve(projectRoot);
+    const store = getMemoryStore(project);
+
+    // Load all memories synchronously via the JSONL files directly
+    // (store.recall() is async, so we read the store files directly for sync operation)
+    const allMemories: Array<{ type: string; content: string }> = [];
+    try {
+      const { readFileSync: rfs, existsSync: efs } = require('fs') as typeof import('fs');
+      const { join: pj } = require('path') as typeof import('path');
+      const { createHash: ch } = require('crypto') as typeof import('crypto');
+      const home = process.env.HOME ?? '~';
+      const projectHash = ch('sha256').update(project).digest('hex').slice(0, 16);
+      const memDir = resolve(home, '.uagent', 'memory', projectHash);
+      const types = ['insight', 'fact', 'iteration', 'pinned'];
+      for (const t of types) {
+        const file = pj(memDir, `${t}.jsonl`);
+        if (!efs(file)) continue;
+        const lines = rfs(file, 'utf-8').split('\n').filter(Boolean);
+        for (const line of lines) {
+          try {
+            const item = JSON.parse(line) as { content: string };
+            allMemories.push({ type: t, content: item.content });
+          } catch { /* skip */ }
+        }
+        if (allMemories.length >= 200) break;
+      }
+    } catch { /* skip */ }
+
+    if (allMemories.length === 0) return;
+
+    const lines: string[] = ['# Agent Memory', '', `_Auto-generated from ${allMemories.length} memory entries. Last updated: ${new Date().toISOString()}_`, ''];
+
+    for (const mem of allMemories) {
+      const tag = mem.type === 'insight' ? '💡' : mem.type === 'fact' ? '📌' : '🔄';
+      lines.push(`${tag} ${mem.content}`);
+    }
+
+    // F12-2: Line/byte dual truncation
+    let content = lines.join('\n');
+    const byContent = Buffer.byteLength(content, 'utf-8');
+    if (lines.length > MEMORY_MD_MAX_LINES || byContent > MEMORY_MD_MAX_BYTES) {
+      const truncatedLines = lines.slice(0, MEMORY_MD_MAX_LINES);
+      content = truncatedLines.join('\n') + '\n\n_(truncated — showing first 200 entries)_';
+    }
+
+    // Write to ~/.uagent/projects/<sanitizedCwd>/MEMORY.md
+    const { getProjectSessionsDir } = require('./session-snapshot.js') as typeof import('./session-snapshot.js');
+    const sessionsDir = getProjectSessionsDir(projectRoot);
+    const projectDir = join(sessionsDir, '..');
+    const memoryMdPath = join(projectDir, 'MEMORY.md');
+
+    if (!existsSync(projectDir)) mkdirSync(projectDir, { recursive: true });
+    writeFileSync(memoryMdPath, content, 'utf-8');
+  } catch { /* non-fatal */ }
 }
 
 // ── Cursor helper (shared with memory-store.ts) ───────────────────────────────

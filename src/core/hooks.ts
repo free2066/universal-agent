@@ -194,8 +194,18 @@ export interface HookDefinition {
   command?: string;
   /** For on_tool_call: tool name to match (or "*" for all) */
   tool?: string;
-  /** For on_file_change: glob pattern for files to watch */
+  /** For on_file_change / file_changed: glob pattern for files to watch */
   file_pattern?: string;
+  /**
+   * G12-3: Conditional filter using glob-style pattern (claude-code parity).
+   * If set, the hook only fires when the event context matches this pattern.
+   * Supports tool+arg patterns like "Bash(*)", "Write(src/**)" and plain globs.
+   * Examples:
+   *   "Bash(*)"           — only for Bash tool calls
+   *   "Write(src/**)"     — only for Write calls to src/ tree
+   *   "*.ts"              — only for .ts files in file_changed events
+   */
+  if?: string;
 }
 
 export interface HooksConfig {
@@ -405,6 +415,27 @@ export class HookRunner {
       }
       if (ctx.event === 'on_tool_call' && hook.tool && hook.tool !== '*') {
         return ctx.toolName === hook.tool;
+      }
+      // G12-3: `if` condition glob filter (claude-code parity)
+      // Applies to any event where toolName or filePath is available
+      if (hook.if) {
+        const { matchesPattern } = require('./agent/permission-manager.js') as typeof import('./agent/permission-manager.js');
+        if (ctx.toolName) {
+          // Check as "ToolName(keyArg)" pattern
+          if (!matchesPattern(hook.if, ctx.toolName, ctx.toolArgs)) return false;
+        } else if (ctx.filePath) {
+          // Check as glob pattern against file path (simple ** and * expansion)
+          const globToRegex = (glob: string): RegExp => {
+            const parts = glob.split('**');
+            // Escape special regex chars except * (which we handle separately)
+            const metaRe = new RegExp('[.+^${}()|\[\]\\]', 'g');
+            const escaped = parts.map((p) =>
+              p.replace(metaRe, '\$&').replace(/\*/g, '[^/]*'),
+            );
+            return new RegExp('^' + escaped.join('.*') + '$');
+          };
+          if (!globToRegex(hook.if).test(ctx.filePath)) return false;
+        }
       }
       return true;
     });
@@ -1036,4 +1067,48 @@ export function emitHook(event: HookEvent, ctx: Partial<HookContext> = {}): void
   if (!runner.hasHooksFor(event)) return;
   // Fire-and-forget; errors are non-fatal
   runner.run({ event, cwd: process.cwd(), ...ctx }).catch(() => { /* non-fatal */ });
+}
+
+// ── G12-1: FileChanged hook ────────────────────────────────────────────────────
+//
+// Called by writeFileTool and editFileTool after a successful write.
+// Fires both 'on_file_change' (legacy) and can be consumed by 'file_changed'
+// patterns in hooks.json.
+
+/**
+ * Fire file_changed / on_file_change hooks after a file write succeeds.
+ * Should be called from writeFileTool and editFileTool handlers.
+ */
+export function fireFileChanged(filePath: string, cwd?: string): void {
+  const runner = getHookRunner(cwd);
+  const ctx: Partial<HookContext> = { filePath, cwd: cwd ?? process.cwd() };
+  if (runner.hasHooksFor('on_file_change')) {
+    runner.run({ event: 'on_file_change', ...ctx }).catch(() => { /* non-fatal */ });
+  }
+}
+
+// ── G12-2: CwdChanged hook ─────────────────────────────────────────────────────
+//
+// Called after bash execution when the working directory may have changed.
+// Detects CWD changes by comparing before/after state.
+
+let _lastKnownCwd: string = process.cwd();
+
+/**
+ * Check if CWD has changed and fire cwd_change hook if so.
+ * Should be called after bash execution completes.
+ */
+export function maybeFireCwdChanged(newCwd: string): void {
+  if (newCwd === _lastKnownCwd) return;
+  const prevCwd = _lastKnownCwd;
+  _lastKnownCwd = newCwd;
+  const runner = getHookRunner(newCwd);
+  if (runner.hasHooksFor('cwd_change')) {
+    runner.run({
+      event: 'cwd_change',
+      prevValue: prevCwd,
+      newValue: newCwd,
+      cwd: newCwd,
+    }).catch(() => { /* non-fatal */ });
+  }
 }

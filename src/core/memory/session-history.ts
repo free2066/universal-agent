@@ -3,17 +3,22 @@
  *
  * Inspired by claude-code's history.ts
  *
- * Persists conversation turns to ~/.uagent/history.jsonl so they survive
- * process restarts. Each entry records the user prompt, the project root,
- * and a session ID so multi-project / multi-session histories stay separated.
+ * Round 11 (D11): Enhancements:
+ *   - pendingEntries[] buffer + setImmediate async flush (avoid blocking writes)
+ *   - Simple lockfile-based concurrent write protection (multi-window safe)
+ *   - removeLastFromHistory() for SIGINT undo support
+ *   - getProjectHistory() sorts current-session entries first
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync, unlinkSync } from 'fs';
 import { resolve, join } from 'path';
 
 const CONFIG_DIR = resolve(process.env.HOME ?? '~', '.uagent');
 const HISTORY_FILE = join(CONFIG_DIR, 'history.jsonl');
+const LOCK_FILE = join(CONFIG_DIR, 'history.lock');
 const MAX_ENTRIES = 200;
+const LOCK_RETRY_INTERVAL_MS = 50;
+const LOCK_MAX_RETRIES = 10;
 
 export interface HistoryEntry {
   /** Display text (user prompt, first 500 chars) */
@@ -29,8 +34,6 @@ export interface HistoryEntry {
 }
 
 // ── Session ID ────────────────────────────────────────────────────────────────
-// Use crypto.randomUUID() for proper UUID v4 (mirrors claude-code's randomUUID() usage).
-// Falls back to Math.random() in environments where crypto is unavailable.
 const SESSION_ID = (() => {
   try {
     return (globalThis as { crypto?: { randomUUID?: () => string } })
@@ -44,7 +47,7 @@ export function getSessionId(): string {
   return SESSION_ID;
 }
 
-// ── Write ──────────────────────────────────────────────────────────────────────
+// ── Directory init ─────────────────────────────────────────────────────────────
 
 let initialized = false;
 
@@ -55,13 +58,82 @@ function ensureDir() {
   }
 }
 
+// ── Lockfile-based write protection ───────────────────────────────────────────
+//
+// Uses O_EXCL to atomically create a lock file. On failure, retries up to
+// LOCK_MAX_RETRIES times with LOCK_RETRY_INTERVAL_MS delays.
+// Stale locks (pid no longer running) are broken automatically.
+
+function acquireLock(): boolean {
+  for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
+    try {
+      const fd = openSync(LOCK_FILE, 'wx');
+      writeFileSync(fd as unknown as string, String(process.pid));
+      closeSync(fd);
+      return true;
+    } catch {
+      // Lock held — check for stale lock
+      try {
+        const pid = parseInt(readFileSync(LOCK_FILE, 'utf-8').trim(), 10);
+        if (pid && pid !== process.pid) {
+          try {
+            process.kill(pid, 0); // throws if pid doesn't exist
+          } catch {
+            // Stale lock — remove it and retry immediately
+            try { unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+            continue;
+          }
+        }
+      } catch { /* lock file read failed, retry */ }
+
+      // Synchronous sleep (history writes are infrequent, this is fine)
+      const end = Date.now() + LOCK_RETRY_INTERVAL_MS;
+      while (Date.now() < end) { /* busy wait */ }
+    }
+  }
+  return false; // Failed to acquire lock
+}
+
+function releaseLock(): void {
+  try { unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+}
+
+// ── pendingEntries buffer ──────────────────────────────────────────────────────
+//
+// Entries are first pushed to pendingEntries[].
+// A setImmediate flush writes them to disk, protecting the hot path from I/O latency.
+// Multiple addToHistory() calls in the same tick are batched into one write.
+
+const pendingEntries: HistoryEntry[] = [];
+let flushScheduled = false;
+
+function scheduledFlush(): void {
+  flushScheduled = false;
+  if (pendingEntries.length === 0) return;
+
+  const toFlush = pendingEntries.splice(0);
+  try {
+    ensureDir();
+    const locked = acquireLock();
+    try {
+      const lines = toFlush.map((e) => JSON.stringify(e)).join('\n') + '\n';
+      appendFileSync(HISTORY_FILE, lines, { encoding: 'utf8', mode: 0o600 });
+    } finally {
+      if (locked) releaseLock();
+    }
+  } catch {
+    // History write failure is non-fatal; silently discard
+  }
+}
+
+// ── Write ──────────────────────────────────────────────────────────────────────
+
 /**
- * Append a user prompt to the history file.
+ * Append a user prompt to the history file (buffered, async).
  * Fire-and-forget — never throws.
  */
 export function addToHistory(prompt: string, projectRoot?: string): void {
   try {
-    ensureDir();
     const entry: HistoryEntry = {
       display: prompt.slice(0, 500),
       prompt,
@@ -69,23 +141,62 @@ export function addToHistory(prompt: string, projectRoot?: string): void {
       sessionId: SESSION_ID,
       timestamp: Date.now(),
     };
-    appendFileSync(HISTORY_FILE, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: 0o600 });
+    pendingEntries.push(entry);
+    if (!flushScheduled) {
+      flushScheduled = true;
+      setImmediate(scheduledFlush);
+    }
   } catch {
-    // History write failure is non-fatal
+    // Non-fatal
   }
+}
+
+/**
+ * Remove the last history entry for this session (SIGINT undo support).
+ * Mirrors claude-code's removeLastFromHistory().
+ * Called by SIGINT handler when user cancels a prompt mid-execution.
+ */
+export function removeLastFromHistory(projectRoot?: string): void {
+  // First, remove from pending buffer (not yet flushed)
+  const project = resolve(projectRoot ?? process.cwd());
+  for (let i = pendingEntries.length - 1; i >= 0; i--) {
+    if (pendingEntries[i]!.sessionId === SESSION_ID && pendingEntries[i]!.project === project) {
+      pendingEntries.splice(i, 1);
+      return;
+    }
+  }
+
+  // If already flushed, rewrite history file without the last matching entry
+  if (!existsSync(HISTORY_FILE)) return;
+  try {
+    const lines = readFileSync(HISTORY_FILE, 'utf8').split('\n').filter(Boolean);
+    let removed = false;
+    for (let i = lines.length - 1; i >= 0 && !removed; i--) {
+      try {
+        const entry = JSON.parse(lines[i]!) as HistoryEntry;
+        if (entry.sessionId === SESSION_ID && entry.project === project) {
+          lines.splice(i, 1);
+          removed = true;
+        }
+      } catch { /* skip malformed */ }
+    }
+    if (removed) {
+      const locked = acquireLock();
+      try {
+        writeFileSync(HISTORY_FILE, lines.join('\n') + (lines.length > 0 ? '\n' : ''), { encoding: 'utf8', mode: 0o600 });
+      } finally {
+        if (locked) releaseLock();
+      }
+    }
+  } catch { /* non-fatal */ }
 }
 
 // ── Read ───────────────────────────────────────────────────────────────────────
 
 /**
  * Read history entries for a given project, newest first.
+ * D11: Current session entries sorted before other sessions (claude-code parity).
  * Returns at most MAX_ENTRIES items.
- *
- * Performance note: for large history files we scan from the end of the file
- * rather than reading everything then reversing. We use a two-pass line-count
- * approach to keep the implementation simple while avoiding the O(n) reverse.
- * For files < ~200 lines the difference is negligible, but for long-running
- * sessions (thousands of turns) this avoids allocating the entire reversed array.
  */
 export function getProjectHistory(projectRoot?: string): HistoryEntry[] {
   const project = resolve(projectRoot ?? process.cwd());
@@ -95,23 +206,30 @@ export function getProjectHistory(projectRoot?: string): HistoryEntry[] {
   try {
     const raw = readFileSync(HISTORY_FILE, 'utf8');
     const lines = raw.split('\n').filter(Boolean);
-    // Scan newest-first by iterating in reverse — avoids allocating a reversed copy
-    const results: HistoryEntry[] = [];
     const seen = new Set<string>();
+    const sessionEntries: HistoryEntry[] = [];
+    const otherEntries: HistoryEntry[] = [];
 
-    for (let i = lines.length - 1; i >= 0 && results.length < MAX_ENTRIES; i--) {
+    // Scan newest-first by iterating in reverse
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (sessionEntries.length + otherEntries.length >= MAX_ENTRIES) break;
       try {
-        const entry = JSON.parse(lines[i]) as HistoryEntry;
+        const entry = JSON.parse(lines[i]!) as HistoryEntry;
         if (entry.project !== project) continue;
         if (seen.has(entry.display)) continue;
         seen.add(entry.display);
-        results.push(entry);
+        // D11: current session entries first
+        if (entry.sessionId === SESSION_ID) {
+          sessionEntries.push(entry);
+        } else {
+          otherEntries.push(entry);
+        }
       } catch {
         // Skip malformed lines
       }
     }
 
-    return results;
+    return [...sessionEntries, ...otherEntries];
   } catch {
     return [];
   }
@@ -148,10 +266,12 @@ export function clearHistory(projectRoot?: string): void {
       });
 
     const outContent = lines.length > 0 ? lines.join('\n') + '\n' : '';
-    writeFileSync(HISTORY_FILE, outContent, {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
+    const locked = acquireLock();
+    try {
+      writeFileSync(HISTORY_FILE, outContent, { encoding: 'utf8', mode: 0o600 });
+    } finally {
+      if (locked) releaseLock();
+    }
   } catch {
     // Non-fatal
   }

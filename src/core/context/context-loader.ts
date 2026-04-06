@@ -3,6 +3,7 @@ import { resolve, join, dirname, isAbsolute, extname } from 'path';
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
 import { getSkillLoader } from '../skills/skill-loader.js';
+import { getUserSetting } from '../agent/permission-manager.js';
 
 // ── @include directive parser (Round 4: claude-code claudemd.ts parity) ─────────────────
 //
@@ -191,6 +192,19 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
   // Shared visited set for @include cycle prevention across all loaded files
   const includeVisited = new Set<string>();
 
+  // E11-4: Admin-level path — highest priority, loaded first
+  const adminAgentsMd = '/etc/uagent/AGENTS.md';
+  if (existsSync(adminAgentsMd)) {
+    try {
+      const adminContent = readFileSync(adminAgentsMd, 'utf-8').trim();
+      if (adminContent) {
+        parts.push(`<!-- From: ${adminAgentsMd} (admin) -->\n${adminContent.trim()}`);
+        sources.push(adminAgentsMd);
+        totalBytes += adminContent.length;
+      }
+    } catch { /* non-fatal */ }
+  }
+
   for (const dir of dirs) {
     const candidates = [
       join(dir, 'AGENTS.override.md'),
@@ -251,6 +265,23 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
       }
     } catch { /* skip */ }
   }
+
+  // E11-3: MEMORY.md auto-injection (claude-code parity)
+  // Reads ~/.uagent/projects/<sanitizedCwd>/MEMORY.md if it exists
+  try {
+    const { getProjectSessionsDir } = require('../memory/session-snapshot.js') as typeof import('../memory/session-snapshot.js');
+    const sessionsDir = getProjectSessionsDir(cwd);
+    const memoryMd = join(sessionsDir, '..', 'MEMORY.md');
+    const resolvedMemoryMd = resolve(memoryMd);
+    if (existsSync(resolvedMemoryMd)) {
+      const memContent = readFileSync(resolvedMemoryMd, 'utf-8').trim();
+      if (memContent && totalBytes + memContent.length <= MAX_BYTES) {
+        parts.push(`<!-- From: ${resolvedMemoryMd} (auto-memory) -->\n${memContent}`);
+        sources.push(resolvedMemoryMd);
+        totalBytes += memContent.length;
+      }
+    }
+  } catch { /* non-fatal: memory module may not be available */ }
 
   const result: AgentsContext = { instructions: parts.join('\n\n'), sources, totalBytes };
 
@@ -423,7 +454,6 @@ export function buildSystemPromptWithContext(basePrompt: string, startDir?: stri
 
   const sections: string[] = [basePrompt, HARNESS_CONSTRAINTS];
 
-  // Inject project coding rules (SSOT — kstack article #15310)
   if (rules.content) {
     sections.push(`---\n## 📐 Project Rules (SSOT — follow these exactly)\n${rules.content}\n---`);
   }
@@ -436,8 +466,6 @@ export function buildSystemPromptWithContext(basePrompt: string, startDir?: stri
     sections.push(`---\n## Git Status (at session start — may be stale)\n\`\`\`\n${gitStatus}\n\`\`\`\n---`);
   }
 
-  // s05 — Layer 1 skill injection: skill names + descriptions only (~100 tokens total).
-  // Full skill bodies are loaded on-demand via the load_skill tool (Layer 2).
   try {
     const skillDescriptions = getSkillLoader(startDir ?? process.cwd()).getDescriptions();
     if (skillDescriptions) {
@@ -446,6 +474,14 @@ export function buildSystemPromptWithContext(basePrompt: string, startDir?: stri
       );
     }
   } catch { /* non-fatal: no skills dir */ }
+
+  // B10-2: language → system prompt injection (claude-code parity)
+  try {
+    const lang = getUserSetting('language', startDir);
+    if (lang) {
+      sections.push(`---\n## Language\nYou MUST reply in: ${lang}\n---`);
+    }
+  } catch { /* non-fatal */ }
 
   return sections.join('\n\n');
 }

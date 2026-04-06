@@ -58,6 +58,32 @@ export interface PermissionSettings {
    * Example: ["/tmp/workspace", "~/repos/shared"]
    */
   additionalDirectories?: string[];
+  /**
+   * Extra environment variables injected into all tool subprocess executions.
+   * Mirrors claude-code's SettingsJson.env field.
+   * Example: { "NODE_ENV": "development", "DEBUG": "app:*" }
+   */
+  env?: Record<string, string>;
+  /**
+   * Number of days after which old session files are automatically cleaned up.
+   * Set to 0 to disable cleanup. Default: 30.
+   * Mirrors claude-code's cleanupPeriodDays.
+   */
+  cleanupPeriodDays?: number;
+  /**
+   * Language the agent must use when replying.
+   * Injected as a system prompt suffix on every turn.
+   * Mirrors claude-code's language setting.
+   * Example: "zh-CN", "en-US", "Japanese"
+   */
+  language?: string;
+  /**
+   * Default shell to use when executing Bash commands.
+   * Falls back to process.env.SHELL then auto-detection.
+   * Mirrors claude-code's defaultShell setting.
+   * Example: "/bin/zsh", "/usr/bin/bash"
+   */
+  defaultShell?: string;
 }
 
 const EMPTY_SETTINGS: PermissionSettings = {
@@ -142,6 +168,10 @@ function loadSettingsFile(path: string): PermissionSettings {
       alwaysDeny: Array.isArray(raw.alwaysDeny) ? raw.alwaysDeny : [],
       ask: Array.isArray(raw.ask) ? raw.ask : [],
       additionalDirectories: Array.isArray(raw.additionalDirectories) ? raw.additionalDirectories : [],
+      env: raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env) ? raw.env as Record<string, string> : undefined,
+      cleanupPeriodDays: typeof raw.cleanupPeriodDays === 'number' ? raw.cleanupPeriodDays : undefined,
+      language: typeof raw.language === 'string' ? raw.language : undefined,
+      defaultShell: typeof raw.defaultShell === 'string' ? raw.defaultShell : undefined,
     };
   } catch {
     return { ...EMPTY_SETTINGS };
@@ -539,4 +569,56 @@ export function getPermissionManager(cwd?: string): PermissionManager {
     _instance = new PermissionManager(cwd ?? process.cwd());
   }
   return _instance;
+}
+
+// ── getUserSetting() helper (B10: claude-code parity) ─────────────────────────
+//
+// Merges settings from all three layers (user < project < local) for a single key.
+// The local layer wins over project, project wins over user.
+// Returns undefined if the key is not set in any layer.
+
+type SettingsKey = keyof PermissionSettings;
+
+/**
+ * Get a single setting value, merged across all layers (local > project > user).
+ * Generic helper to avoid repeating the 3-layer merge for every setting.
+ */
+export function getUserSetting<K extends SettingsKey>(key: K, cwd?: string): PermissionSettings[K] | undefined {
+  const pm = getPermissionManager(cwd);
+  // Access private fields via the lazy-loading getters
+  const local = (pm as unknown as { localSettings: PermissionSettings }).localSettings;
+  const project = (pm as unknown as { projectSettings: PermissionSettings }).projectSettings;
+  const user = (pm as unknown as { userSettings: PermissionSettings }).userSettings;
+
+  // For array fields, merge (handled by PermissionManager getters directly)
+  // For scalar fields: local wins, then project, then user
+  if (local[key] !== undefined) return local[key];
+  if (project[key] !== undefined) return project[key];
+  if (user[key] !== undefined) return user[key];
+  return undefined;
+}
+
+/**
+ * Get merged env variables from all settings layers.
+ * All layers are merged, with local > project > user priority.
+ */
+export function getMergedEnv(cwd?: string): Record<string, string> {
+  const pm = getPermissionManager(cwd);
+  const local = (pm as unknown as { localSettings: PermissionSettings }).localSettings;
+  const project = (pm as unknown as { projectSettings: PermissionSettings }).projectSettings;
+  const user = (pm as unknown as { userSettings: PermissionSettings }).userSettings;
+  return {
+    ...(user.env ?? {}),
+    ...(project.env ?? {}),
+    ...(local.env ?? {}),
+  };
+}
+
+/**
+ * Get the effective cleanup period in days (default 30).
+ * Returns 0 if cleanup is disabled.
+ */
+export function getCleanupPeriodDays(cwd?: string): number {
+  const val = getUserSetting('cleanupPeriodDays', cwd);
+  return val ?? 30;
 }

@@ -5,6 +5,9 @@ import { createInterface } from 'readline';
 import type { ToolRegistration } from '../../../models/types.js';
 import { mmrRerankGrepResults } from '../../memory/mmr.js';
 import { checkExtendedBashSecurity, formatBashSecurityViolations } from '../../../utils/bash-security.js';
+import { getUserSetting, getMergedEnv } from '../../agent/permission-manager.js';
+import { findSuitableShell, buildSubprocessEnv } from '../../../utils/shell-provider.js';
+import { fireFileChanged, maybeFireCwdChanged } from '../../hooks.js';
 
 // ─── Path Safety Helper ──────────────────────────────────────────────────────
 /**
@@ -269,6 +272,8 @@ export const writeFileTool: ToolRegistration = {
         } catch { /* ignore diff errors */ }
       }
       writeFileSync(filePath, content, 'utf-8');
+      // G12-1: Fire file_changed hook after successful write
+      setImmediate(() => { try { fireFileChanged(filePath); } catch { /* non-fatal */ } });
       const lines = content.split('\n').length;
       const secretWarning = secretType ? `\n⚠️  Warning: potential secret (${secretType}) detected in written content.` : '';
       return `✓ Written ${lines} lines to ${filePath}${diffSummary}${secretWarning}`;
@@ -506,6 +511,8 @@ export const editFileTool: ToolRegistration = {
         }
         const replaced = normalized.split(normOld).join(newStr);
         writeFileSync(filePath, replaced, 'utf-8');
+        // G12-1: Fire file_changed hook
+        setImmediate(() => { try { fireFileChanged(filePath); } catch { /* non-fatal */ } });
         return `✓ Edit applied to ${filePath} (replaced ${occurrences} occurrence${occurrences !== 1 ? 's' : ''})`;
       }
 
@@ -528,6 +535,8 @@ export const editFileTool: ToolRegistration = {
       const result = fuzzyReplace(content, oldStr, newStr);
       if (result !== null) {
         writeFileSync(filePath, result, 'utf-8');
+        // G12-1: Fire file_changed hook
+        setImmediate(() => { try { fireFileChanged(filePath); } catch { /* non-fatal */ } });
         return `✓ Edit applied to ${filePath}`;
       }
 
@@ -554,7 +563,7 @@ export const bashTool: ToolRegistration = {
       properties: {
         command: { type: 'string', description: 'Shell command to execute' },
         cwd: { type: 'string', description: 'Working directory (default: current directory)' },
-        timeout: { type: 'number', description: 'Timeout in milliseconds (default: 30000)' },
+        timeout: { type: 'number', description: 'Timeout in milliseconds (default: 1800000 = 30 minutes)' },
       },
       required: ['command'],
     },
@@ -562,7 +571,8 @@ export const bashTool: ToolRegistration = {
   handler: async (args) => {
     const command = args.command as string;
     const cwd = args.cwd ? resolve(process.cwd(), args.cwd as string) : process.cwd();
-    const timeout = (args.timeout as number) || 30000;
+    // C10-2: Default timeout raised to 30 minutes (claude-code parity)
+    const timeout = (args.timeout as number) || 30 * 60 * 1000;
 
     // Safe mode: dangerous commands require explicit user confirmation before execution.
     // Inspired by kstack article #15313 — dry-run + confirm flow instead of hard block.
@@ -662,6 +672,10 @@ export const bashTool: ToolRegistration = {
     // Validate cwd exists
     if (!existsSync(cwd)) return `Error: Working directory not found: ${cwd}`;
 
+    // C10-1/B10-3: Use findSuitableShell() + B10-4: inject user env
+    const shell = findSuitableShell();
+    const subprocessEnv = buildSubprocessEnv();
+
     const startMs = Date.now();
     try {
       const output = execSync(command, {
@@ -670,12 +684,37 @@ export const bashTool: ToolRegistration = {
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
         stdio: ['pipe', 'pipe', 'pipe'],
+        shell,
+        env: subprocessEnv,
       });
       const elapsed = Date.now() - startMs;
       const raw = output.trim() || '(no output)';
-      // Truncate large bash output to avoid context bloat
+      // C10-4: Large output file storage — outputs > 100KB are written to a temp file
+      const OUTPUT_FILE_THRESHOLD = 100 * 1024;
+      if (Buffer.byteLength(raw, 'utf-8') > OUTPUT_FILE_THRESHOLD) {
+        try {
+          const { mkdtempSync, writeFileSync: wfs } = require('fs') as typeof import('fs');
+          const { join: pjoin } = require('path') as typeof import('path');
+          const { tmpdir } = require('os') as typeof import('os');
+          const tmpDir = mkdtempSync(pjoin(tmpdir(), 'uagent-bash-'));
+          const outFile = pjoin(tmpDir, 'output.txt');
+          wfs(outFile, raw, 'utf-8');
+          const lines = raw.split('\n').length;
+          const bytes = Buffer.byteLength(raw, 'utf-8');
+          const timingNote = elapsed > 5000 ? ` (${(elapsed / 1000).toFixed(1)}s)` : '';
+          return (
+            `Output too large to display inline (${lines} lines, ${Math.round(bytes / 1024)}KB).${timingNote}\n` +
+            `Saved to: ${outFile}\n` +
+            `Use Read tool to view: Read { file_path: "${outFile}" }\n\n` +
+            `Preview (first 100 lines):\n` +
+            raw.split('\n').slice(0, 100).join('\n')
+          );
+        } catch { /* fall through to normal truncation */ }
+      }
       const { content, truncated } = truncateOutput(raw);
       const timingNote = elapsed > 5000 ? `\n(Completed in ${(elapsed / 1000).toFixed(1)}s)` : '';
+      // G12-2: Detect CWD changes after bash execution
+      setImmediate(() => { try { maybeFireCwdChanged(process.cwd()); } catch { /* non-fatal */ } });
       return content + (truncated ? timingNote : timingNote);
     } catch (err: unknown) {
       const elapsed = Date.now() - startMs;
