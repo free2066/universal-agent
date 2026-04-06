@@ -12,7 +12,7 @@ import type { ToolRegistry } from '../tool-registry.js';
 import type { DomainRouter } from '../domain-router.js';
 import type { MCPManager } from '../mcp-manager.js';
 import type { ModelFallbackChain } from '../model-fallback.js';
-import type { AgentEvents, PendingConfirmation } from './types.js';
+import type { AgentEvents, PendingConfirmation, StreamLoopResult, TerminalReason } from './types.js';
 import {
   PARALLELIZABLE_TOOLS,
   DEFAULT_MAX_ITERATIONS,
@@ -346,7 +346,7 @@ export interface RunStreamOptions {
   approvalMode?: import('./permission-manager.js').ApprovalMode;
 }
 
-export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
+export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopResult> {
   const {
     prompt, onChunk, events, filePath,
     history, pendingConfirmationRef, uncertainItems,
@@ -360,7 +360,10 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
     const pending = pendingConfirmationRef.value;
     pendingConfirmationRef.value = null;
     await handlePendingConfirmation(pending, prompt, history, onChunk);
-    return;
+    // B13: 等待用户确认时终止
+    const result: StreamLoopResult = { reason: 'pending_confirmation', iterations: 0 };
+    events?.onTerminal?.(result);
+    return result;
   }
 
   // Auto-detect domain
@@ -434,10 +437,21 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
   const _warningState = calculateTokenWarningState(estimateHistoryTokens(history), _currentModel);
   if (_warningState === 'blocking') {
     onChunk('\n[SYSTEM] Context window critical — stopping to prevent prompt_too_long error.\n');
-    return;
+    // B13: blocking_limit 终止
+    const result: StreamLoopResult = { reason: 'blocking_limit', iterations: 0, tokensEstimated: estimateHistoryTokens(history) };
+    events?.onTerminal?.(result);
+    return result;
   }
 
-  const compacted = await autoCompact(history, onChunk);
+  // C13: PostCompactContext — 传给 autoCompact，压缩后重注入 MCP 工具和 agent 列表
+  // 这里通过 opts.registry 和 opts 推断可注入的上下文
+  const _postCompactCtx: import('../context/context-compressor.js').PostCompactContext = {
+    mcpToolsSummary: undefined,      // 由调用 runStreamLoop 的 AgentCore 填充（目前占位）
+    agentListingSummary: undefined,
+    reFireSessionStartHooks: false,
+  };
+
+  const compacted = await autoCompact(history, onChunk, _postCompactCtx);
   if (compacted > 0) {
     await triggerHook(createHookEvent('agent', 'compact', { compacted }));
   }
@@ -453,6 +467,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
   let iteration = 0;
   let lastLLMCallAt = 0;
   const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? String(DEFAULT_MAX_ITERATIONS), 10);
+
+  // B13: 记录终止原因，默认 'completed'
+  let _terminalReason: TerminalReason = 'completed';
 
   // ── Token Budget Tracker (Round 5: claude-code tokenBudget.ts parity) ────────
   // Tracks per-turn token usage to detect diminishing returns and enforce budget.
@@ -477,6 +494,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
 
   // Outer unattended-retry loop
   let _unattendedDone = false;
+  // B13: _earlyExit — 在嵌套循环中（工具执行）需要提前终止函数时使用
+  let _earlyExit = false;
   while (!_unattendedDone) {
     _unattendedDone = true;
 
@@ -621,39 +640,48 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           const ptlKey = '__ptl_retry_count__';
           const ptlCount = ((opts as unknown as Record<string, unknown>)[ptlKey] as number | undefined) ?? 0;
 
+          // A13: withheld 机制 — PTL 是可恢复错误，先扣留再尝试恢复
+          events?.onWithheld?.('prompt_too_long');
+
           if (ptlCount < MAX_PTL_RETRIES) {
             (opts as unknown as Record<string, unknown>)[ptlKey] = ptlCount + 1;
             // Remove oldest 2 messages (one user+assistant pair)
             const removeCount = Math.min(2, Math.max(0, history.length - 3));
             if (removeCount > 0) {
               history.splice(0, removeCount);
-              onChunk(`\n⚠️  Prompt too long — truncating oldest ${removeCount} message(s) and retrying (attempt ${ptlCount + 1}/${MAX_PTL_RETRIES})…\n`);
+              // A13: 恢复成功 — 不向用户输出错误，只输出轻量提示
+              events?.onRecovered?.('prompt_too_long');
+              onChunk(`\n  Prompt too long — truncating oldest ${removeCount} message(s) and retrying (attempt ${ptlCount + 1}/${MAX_PTL_RETRIES})…\n`);
               history.push(createTombstone(history.length) as unknown as Message);
               continue;
             }
           }
-          onChunk(`\n❌ Prompt too long and max PTL retries (${MAX_PTL_RETRIES}) reached.\n`);
+          // A13: 恢复失败 — 释放 withheld 错误消息
+          onChunk(`\n  Prompt too long and max PTL retries (${MAX_PTL_RETRIES}) reached.\n`);
           history.push(createTombstone(history.length) as unknown as Message);
+          _terminalReason = 'prompt_too_long';
           break;
         }
 
         if (isContextOverflow) {
-          onChunk(`\n⚠️  Context overflow detected (${errMsg.slice(0, 80)}) — attempting reactive compact…\n`);
+          // A13: context overflow 是可恢复错误，先扣留再尝试恢复
+          events?.onWithheld?.('context_overflow');
+          onChunk(`\n  Context overflow detected — attempting reactive compact…\n`);
           // ── Tombstone: clear partial streaming messages before retry ────────
-          // Inject a tombstone so the UI removes any orphaned partial assistant
-          // messages that may have been rendered during the interrupted stream.
-          // Mirrors claude-code's query.ts tombstone pattern.
           history.push(createTombstone(history.length) as unknown as Message);
           const recovered = await reactiveCompact(history, onChunk);
           if (recovered) {
-            onChunk('  ↩️  Retrying with compacted context…\n');
+            // A13: 恢复成功 — 不向用户显示错误，继续正常流
+            events?.onRecovered?.('context_overflow');
+            onChunk('  Retrying with compacted context…\n');
             continue;
           }
         }
         // ── Tombstone on any LLM error (not just context overflow) ──────────
         // Ensures UI cleans up partial renders from failed stream attempts.
         history.push(createTombstone(history.length) as unknown as Message);
-        onChunk(`\n❌ LLM error: ${errMsg}\n`);
+        onChunk(`\n  LLM error: ${errMsg}\n`);
+        _terminalReason = 'model_error';
         break;
       }
 
@@ -773,6 +801,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
             const _stopReason = _budgetDecision.reason as 'budget_exhausted' | 'diminishing_returns';
             const stopMsg = buildBudgetStopMessage(_stopReason);
             onChunk(`\n${stopMsg}\n`);
+            _terminalReason = 'budget_exhausted';
             break;
           } else if (_budgetDecision.action === 'continue') {
             const _nudge = (_budgetDecision as { action: 'continue'; nudgeMessage?: string }).nudgeMessage;
@@ -1072,7 +1101,10 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
                 }
               } catch { /* ignore — user will still see the raw prompt */ }
 
-              return;
+              // B13: 等待用户确认时设置终止原因，通过 _earlyExit 标志跳出嵌套循环
+              _terminalReason = 'pending_confirmation';
+              _earlyExit = true;
+              break;
             }
 
             toolResults.push(toolResult);
@@ -1090,6 +1122,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         }
       }
     } // end inner while
+
+    // B13: 如果提前退出（pending_confirmation），立即结束外层循环
+    if (_earlyExit) break;
 
     if (iteration >= MAX_ITERATIONS) {
       onChunk(
@@ -1118,7 +1153,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         });
       }
     } else {
-      // Success — capture iteration snapshot (non-blocking)
+      // _terminalReason stays 'completed' for successful runs
+      // Capture iteration snapshot (non-blocking)
       captureIterationSnapshot(prompt, history).catch(() => { /* non-fatal */ });
       // Incremental memory ingest: fire-and-forget after each successful round
       // Inspired by claude-code's extractMemories: per-round instead of exit-time batch.
@@ -1127,5 +1163,14 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
     }
   } // end outer while
 
-  log.debug('runStream completed', { iterations: iteration });
+  // B13: 返回结构化终止结果（claude-code Terminal 对标）
+  if (iteration >= MAX_ITERATIONS) _terminalReason = 'max_iterations';
+  const _result: StreamLoopResult = {
+    reason: _terminalReason,
+    iterations: iteration,
+    tokensEstimated: estimateHistoryTokens(history),
+  };
+  events?.onTerminal?.(_result);
+  log.debug('runStream completed', { reason: _terminalReason, iterations: iteration });
+  return _result;
 }

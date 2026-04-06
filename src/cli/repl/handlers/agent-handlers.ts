@@ -737,3 +737,95 @@ export async function handleRewind(input: string, ctx: SlashContext): Promise<tr
   rl.resume();
   return done(rl);
 }
+
+// ── G13: /plan — Plan Mode 切换（claude-code /plan 命令对标） ───────────────────
+//
+// Plan Mode: LLM 只输出规划而不调用任何工具（通过修改 system prompt 实现）。
+// /plan        — 进入 plan mode
+// /plan off    — 退出 plan mode，恢复正常工具执行
+
+const PLAN_MODE_PROMPT =
+  'PLAN MODE ENABLED: You are in planning-only mode. Analyze the request thoroughly and ' +
+  'output a detailed step-by-step plan. DO NOT call any tools or make any changes. ' +
+  'Only describe what you would do and why. ' +
+  'End your plan with: "Ready to execute — type /plan off to proceed."';
+
+export async function handlePlan(input: string, ctx: SlashContext): Promise<true> {
+  const { rl, agent } = ctx;
+  const arg = input.slice('/plan'.length).trim().toLowerCase();
+
+  rl.pause();
+  process.stdout.write('\n');
+
+  if (arg === 'off' || arg === 'exit' || arg === 'disable' || arg === 'false') {
+    // 退出 plan mode — 清除 plan mode 专用的 appendSystemPrompt
+    agent.setPlanMode(false);
+    process.stdout.write(chalk.green('Plan Mode disabled — tools are now active.\n'));
+    process.stdout.write(chalk.gray('  The agent will now execute changes as requested.\n\n'));
+  } else {
+    // 进入 plan mode
+    agent.setPlanMode(true);
+    process.stdout.write(chalk.cyan('Plan Mode enabled — LLM will plan but not execute.\n'));
+    process.stdout.write(chalk.gray('  Type your request and the agent will output a plan only.\n'));
+    process.stdout.write(chalk.gray('  Type /plan off to disable and allow tool execution.\n\n'));
+  }
+
+  rl.resume();
+  return done(rl);
+}
+
+// ── H13: /upgrade — CLI 自动升级（claude-code /upgrade 命令对标） ──────────────
+
+export async function handleUpgrade(ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  rl.pause();
+  process.stdout.write('\n');
+  process.stdout.write(chalk.cyan('Checking for updates...\n'));
+
+  try {
+    // 读取当前版本
+    const currentVersion = (
+      await import('../../../../package.json', { assert: { type: 'json' } })
+    ).default.version as string;
+
+    // 查询 npm registry 最新版本（超时 5s）
+    let latestVersion = '';
+    try {
+      latestVersion = execSync('npm show universal-agent version --no-update-notifier 2>/dev/null', {
+        encoding: 'utf-8',
+        timeout: 5_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch {
+      // 网络不可用
+    }
+
+    if (!latestVersion) {
+      process.stdout.write(chalk.yellow('Could not check remote version (network unavailable).\n'));
+      process.stdout.write(chalk.gray(`  Current: v${currentVersion}\n`));
+      process.stdout.write(chalk.gray('  Manual upgrade: npm install -g universal-agent@latest\n\n'));
+    } else if (latestVersion === currentVersion) {
+      process.stdout.write(chalk.green(`Already up to date (v${currentVersion}).\n\n`));
+    } else {
+      process.stdout.write(`Current: v${currentVersion} → Latest: ${chalk.green('v' + latestVersion)}\n`);
+      process.stdout.write(chalk.cyan('Upgrading (this may take a moment)...\n'));
+      try {
+        execSync(`npm install -g universal-agent@${latestVersion} --no-update-notifier`, {
+          stdio: 'inherit',
+          timeout: 120_000,
+        });
+        process.stdout.write(chalk.green(`\nUpgraded to v${latestVersion} successfully.\n`));
+        process.stdout.write(chalk.gray('  Please restart the agent to apply changes.\n\n'));
+      } catch (installErr) {
+        process.stdout.write(chalk.red(`\nUpgrade failed: ${installErr instanceof Error ? installErr.message : String(installErr)}\n`));
+        process.stdout.write(chalk.gray(`  Manual upgrade: npm install -g universal-agent@${latestVersion}\n\n`));
+      }
+    }
+  } catch (err) {
+    process.stdout.write(chalk.red(`Upgrade check failed: ${err instanceof Error ? err.message : String(err)}\n`));
+    process.stdout.write(chalk.gray('  Manual upgrade: npm install -g universal-agent@latest\n\n'));
+  }
+
+  rl.resume();
+  return done(rl);
+}

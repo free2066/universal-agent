@@ -55,6 +55,19 @@ export interface AgentEvents {
   onToolEnd?: (name: string, success: boolean, durationMs: number) => void;
   /** LLM 开始输出文本（首个 text chunk 到来）时触发 */
   onResponseStart?: () => void;
+  /**
+   * A13: withheld 可恢复错误被扣留时触发（claude-code withheld 机制对标）
+   * 调用方可用于 UI 显示"正在尝试恢复..."状态
+   */
+  onWithheld?: (reason: 'prompt_too_long' | 'max_output_tokens' | 'context_overflow') => void;
+  /**
+   * A13: withheld 恢复成功后触发
+   */
+  onRecovered?: (reason: string) => void;
+  /**
+   * B13: 循环终止时触发，携带结构化终止原因
+   */
+  onTerminal?: (result: StreamLoopResult) => void;
 }
 
 export interface AgentOptions {
@@ -87,4 +100,30 @@ export interface PendingConfirmation {
   label: string;
   /** Index in history where the synthetic [SYSTEM] message was injected. */
   injectedAt?: number;
+}
+
+// ─── B13: Terminal / StreamLoopResult ────────────────────────────────────────
+
+/**
+ * B13: TerminalReason — 结构化循环终止原因（claude-code Terminal 对标）
+ * 调用方可区分 9 种终止路径，提供精细的日志和恢复逻辑。
+ */
+export type TerminalReason =
+  | 'completed'            // LLM 不再调用工具，正常完成
+  | 'max_iterations'       // 达到最大迭代次数
+  | 'blocking_limit'       // context 已满（blocking 状态）
+  | 'hook_stopped'         // hook 返回 stop
+  | 'budget_exhausted'     // token 预算耗尽
+  | 'prompt_too_long'      // PTL 无法恢复
+  | 'model_error'          // 模型调用失败
+  | 'aborted'              // 用户中断（AbortSignal）
+  | 'pending_confirmation'; // 等待用户确认危险操作
+
+/**
+ * B13: StreamLoopResult — runStreamLoop() 返回值类型（claude-code Terminal 对标）
+ */
+export interface StreamLoopResult {
+  reason: TerminalReason;
+  iterations: number;
+  tokensEstimated?: number;
 }

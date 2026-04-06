@@ -71,6 +71,12 @@ export interface ToolDefinition {
     properties: Record<string, ParameterSchema>;
     required?: string[];
   };
+  /**
+   * I13: 向后兼容别名（claude-code Tool.aliases 对标）
+   * 工具重命名后旧名称仍可查找，防止 SDK 用旧名称调用报 "Unknown tool" 错误。
+   * 示例: aliases: ['read_file', 'readFile'] 使 'Read' 工具可被旧名称调用。
+   */
+  aliases?: string[];
 }
 
 export interface ParameterSchema {

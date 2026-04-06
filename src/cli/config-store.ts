@@ -16,6 +16,11 @@
  *   uagent config set <key> <val> -g — set in global config
  *   uagent config add <key> <val> — append to array field
  *   uagent config rm  <key> [val] — remove key or array item
+ *
+ * E13: Zod-like schema validation (手工实现，无外部依赖) + migrationVersion 版本迁移系统
+ *   - validateConfig() — 校验配置对象，返回清洗后的合法字段
+ *   - runConfigMigrations() — 按版本号顺序执行迁移
+ *   - migrationVersion 字段跟踪已执行的最高迁移版本
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
@@ -32,6 +37,8 @@ export interface CommitConfig {
 }
 
 export interface UAgentConfig {
+  /** E13: 版本迁移字段 — 跟踪已执行的最高迁移版本（claude-code migrationVersion 对标） */
+  migrationVersion?: number;
   approvalMode?: 'default' | 'autoEdit' | 'yolo';
   autoCompact?: boolean;
   autoUpdate?: boolean;
@@ -271,4 +278,162 @@ export function parseCliValue(raw: string): unknown {
   if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
   try { return JSON.parse(raw); } catch { /* not JSON */ }
   return raw;
+}
+
+// ── E13: Config Schema Validation (claude-code SettingsSchema 对标) ───────────
+//
+// 手工实现轻量级 schema 校验，无需 zod 依赖。
+// 校验逻辑：过滤未知字段 + 校验已知字段的类型，非致命（返回校验结果，不抛异常）。
+
+/** E13: 校验结果类型 */
+export interface ConfigValidationResult {
+  valid: boolean;
+  issues: string[];
+  /** 清洗后的合法配置（unknown keys 已移除，类型错误字段已跳过） */
+  cleaned: UAgentConfig;
+}
+
+/** E13: 已知的合法 config key 集合（用于过滤 unknown keys） */
+const KNOWN_CONFIG_KEYS: Set<string> = new Set([
+  'migrationVersion', 'approvalMode', 'autoCompact', 'autoUpdate',
+  'commit', 'language', 'mcpServers', 'model', 'notification',
+  'outputStyle', 'plugins', 'systemPrompt', 'thinkingLevel', 'todo', 'tools',
+]);
+
+/**
+ * E13: validateConfig — 校验配置对象
+ * 过滤未知字段，校验已知字段的基本类型，返回清洗后的合法配置。
+ * 非致命：不抛异常，返回 issues 列表。
+ */
+export function validateConfig(raw: Record<string, unknown>): ConfigValidationResult {
+  const issues: string[] = [];
+  const cleaned: UAgentConfig = {};
+
+  for (const [key, value] of Object.entries(raw)) {
+    if (!KNOWN_CONFIG_KEYS.has(key)) {
+      issues.push(`Unknown config key: "${key}" (ignored)`);
+      continue;
+    }
+
+    // Type checks for known fields
+    switch (key) {
+      case 'migrationVersion':
+        if (typeof value === 'number') (cleaned as Record<string, unknown>)[key] = value;
+        else issues.push(`"${key}" must be a number, got ${typeof value}`);
+        break;
+      case 'approvalMode':
+        if (['default', 'autoEdit', 'yolo'].includes(value as string)) {
+          cleaned.approvalMode = value as UAgentConfig['approvalMode'];
+        } else {
+          issues.push(`"approvalMode" must be one of: default, autoEdit, yolo`);
+        }
+        break;
+      case 'autoCompact':
+      case 'autoUpdate':
+      case 'notification':
+      case 'todo':
+        if (typeof value === 'boolean' || typeof value === 'string') {
+          (cleaned as Record<string, unknown>)[key] = value;
+        } else {
+          issues.push(`"${key}" must be a boolean or string, got ${typeof value}`);
+        }
+        break;
+      case 'model':
+      case 'language':
+      case 'systemPrompt':
+      case 'outputStyle':
+        if (typeof value === 'string') {
+          (cleaned as Record<string, unknown>)[key] = value;
+        } else {
+          issues.push(`"${key}" must be a string, got ${typeof value}`);
+        }
+        break;
+      case 'thinkingLevel':
+        if (['low', 'medium', 'high', 'max', 'xhigh', 'maxOrXhigh'].includes(value as string)) {
+          cleaned.thinkingLevel = value as UAgentConfig['thinkingLevel'];
+        } else {
+          issues.push(`"thinkingLevel" must be one of: low, medium, high, max, xhigh, maxOrXhigh`);
+        }
+        break;
+      case 'plugins':
+        if (Array.isArray(value)) {
+          cleaned.plugins = value.filter((v) => typeof v === 'string') as string[];
+        } else {
+          issues.push(`"plugins" must be an array`);
+        }
+        break;
+      case 'commit':
+      case 'mcpServers':
+      case 'tools':
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          (cleaned as Record<string, unknown>)[key] = value;
+        } else {
+          issues.push(`"${key}" must be an object`);
+        }
+        break;
+      default:
+        // fallback: copy as-is
+        (cleaned as Record<string, unknown>)[key] = value;
+    }
+  }
+
+  return { valid: issues.length === 0, issues, cleaned };
+}
+
+// ── E13: Config Migration System (claude-code runMigrations 对标) ─────────────
+//
+// 按版本号顺序执行迁移，每个版本只执行一次（通过 migrationVersion 字段追踪）。
+// claude-code 有 11 个迁移版本；我们从 v1 开始。
+
+const CURRENT_MIGRATION_VERSION = 1;
+
+interface Migration {
+  version: number;
+  description: string;
+  migrate: (cfg: Record<string, unknown>) => Record<string, unknown>;
+}
+
+const MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    description: 'Normalize legacy field names',
+    migrate: (cfg) => {
+      // v0→v1: 重命名历史遗留字段（如有）
+      if ('approval_mode' in cfg) {
+        cfg['approvalMode'] = cfg['approval_mode'];
+        delete cfg['approval_mode'];
+      }
+      if ('auto_compact' in cfg) {
+        cfg['autoCompact'] = cfg['auto_compact'];
+        delete cfg['auto_compact'];
+      }
+      return cfg;
+    },
+  },
+];
+
+/**
+ * E13: runConfigMigrations — 按版本执行迁移，写回 global config
+ * 对标 claude-code 的 runMigrations() 函数。
+ * 每次启动时调用一次（幂等操作）。
+ */
+export function runConfigMigrations(cwd = process.cwd()): void {
+  const filePath = globalConfigPath();
+  let cfg = readJsonSafe(filePath) as Record<string, unknown>;
+  const currentVersion = (cfg['migrationVersion'] as number | undefined) ?? 0;
+  if (currentVersion >= CURRENT_MIGRATION_VERSION) return; // 已是最新版本
+
+  let updated = { ...cfg };
+  for (const migration of MIGRATIONS) {
+    if (migration.version > currentVersion) {
+      try {
+        updated = migration.migrate(updated);
+      } catch {
+        // 迁移失败不阻塞启动
+      }
+    }
+  }
+  updated['migrationVersion'] = CURRENT_MIGRATION_VERSION;
+  void cwd; // 暂时只迁移 global config
+  writeJson(filePath, updated as UAgentConfig);
 }

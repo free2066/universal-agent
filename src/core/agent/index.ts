@@ -140,6 +140,32 @@ export class AgentCore {
   }
 
   /**
+   * G13: setPlanMode — Plan Mode 开关（claude-code /plan 命令对标）
+   * Plan Mode 下 LLM 只输出规划而不调用任何工具。
+   * @param enabled  true = 进入 plan mode；false = 退出 plan mode
+   */
+  setPlanMode(enabled: boolean): void {
+    const PLAN_MODE_PROMPT =
+      'PLAN MODE ENABLED: You are in planning-only mode. Analyze the request thoroughly and ' +
+      'output a detailed step-by-step plan. DO NOT call any tools or make any changes. ' +
+      'Only describe what you would do and why. ' +
+      'End your plan with: "Ready to execute — type /plan off to proceed."';
+
+    // Plan mode 使用 appendSystemPrompt 注入规划指令
+    const existing = (this._appendSystemPrompt ?? '')
+      .replace(/\n?PLAN MODE ENABLED:.*?(?=\n[A-Z]|\n?$)/s, '')
+      .trim();
+
+    if (enabled) {
+      this._appendSystemPrompt = existing
+        ? `${existing}\n\n${PLAN_MODE_PROMPT}`
+        : PLAN_MODE_PROMPT;
+    } else {
+      this._appendSystemPrompt = existing || null;
+    }
+  }
+
+  /**
    * J12: rewindHistory — 回滚对话历史 n 轮。
    * 一轮 = 最多一对 user + assistant 消息（从尾部向前移除）。
    * 对标 claude-code /rewind 命令的历史回退功能。

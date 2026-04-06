@@ -165,7 +165,11 @@ export class ToolRegistry {
   }
 
   getToolDefinitions(): ToolDefinition[] {
-    return Array.from(this.tools.values()).map((t) => t.definition);
+    // I13: 字母序排序保证 prompt cache key 稳定（claude-code assembleToolPool 对标）
+    // prompt cache 依赖消息内容的哈希，工具列表顺序变化会导致 cache miss
+    return Array.from(this.tools.values())
+      .map((t) => t.definition)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /**
@@ -214,7 +218,18 @@ export class ToolRegistry {
   }
 
   async execute(name: string, args: Record<string, unknown>): Promise<unknown> {
-    const tool = this.tools.get(name);
+    // I13: alias 查找 — 先用 name 直接查，找不到则遍历别名
+    // 对标 claude-code Tool.ts toolMatchesName() / findToolByName() 逻辑
+    let tool = this.tools.get(name);
+    if (!tool) {
+      for (const [, t] of this.tools) {
+        if (t.definition.aliases?.includes(name)) {
+          log.debug(`Tool alias "${name}" resolved to canonical name "${t.definition.name}"`);
+          tool = t;
+          break;
+        }
+      }
+    }
     if (!tool) throw new Error(`Unknown tool: "${name}". Available: ${Array.from(this.tools.keys()).join(', ')}`);
 
     // Data Contract: enforce schema before execution

@@ -45,6 +45,18 @@
 
 import type { Message } from '../../models/types.js';
 import { getContentText } from '../../models/types.js';
+import { findSafeSplitPoint } from '../context/context-compressor.js';
+
+// ─── D13: adjustIndexToPreserveAPIInvariants ─────────────────────────────────
+//
+// claude-code sessionMemoryCompact.ts 中的核心函数：
+// 确保分割点不会拆断 tool_use + tool_result 消息对（会导致 API 400 错误）。
+// 调整策略：从候选分割点向前移动，直到找到安全位置（role=user 或 assistant+no-tool）。
+
+function adjustIndexToPreserveAPIInvariants(history: Message[], cutIdx: number): number {
+  // 复用 context-compressor 导出的 findSafeSplitPoint（已处理 tool_use/tool_result 配对检查）
+  return findSafeSplitPoint(history, cutIdx);
+}
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -374,12 +386,11 @@ export function trySessionMemoryCompaction(
   // Must actually compact something
   if (keepFrom === 0) return false;
 
-  // Check that we can't break tool_use/tool_result pairs
-  // Advance keepFrom forward if needed to avoid splitting a pair
-  while (keepFrom < history.length && history[keepFrom].role === 'tool') {
-    keepFrom++;
-  }
-  if (keepFrom >= history.length) return false;
+  // D13: adjustIndexToPreserveAPIInvariants — 防止 tool_use/tool_result 对被拆分
+  // 对标 claude-code sessionMemoryCompact.ts 的 adjustIndexToPreserveAPIInvariants()
+  // claude-code: "adjust the split index to not split a tool_use/tool_result pair"
+  keepFrom = adjustIndexToPreserveAPIInvariants(history, keepFrom);
+  if (keepFrom >= history.length || keepFrom <= 0) return false;
 
   const summaryMessage: Message = {
     role: 'user',

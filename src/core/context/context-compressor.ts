@@ -311,7 +311,10 @@ function serializeTurns(turns: Message[]): string {
  * Find a safe split point that doesn't break tool_use/tool_result pairs.
  * Returns the largest index ≤ `targetIdx` where splitting is safe.
  */
-function findSafeSplitPoint(history: Message[], targetIdx: number): number {
+/**
+ * Export for use in session-memory.ts (D13: adjustIndexToPreserveAPIInvariants)
+ */
+export function findSafeSplitPoint(history: Message[], targetIdx: number): number {
   let idx = targetIdx;
   while (idx > 0) {
     const msg = history[idx];
@@ -397,9 +400,31 @@ async function runTimeBasedMicrocompact(
   return cleared;
 }
 
+// ── C13: PostCompactContext — PostCompact 重注入上下文接口 ────────────────────
+//
+// claude-code compact.ts L517-694 在压缩完成后执行 7 个步骤重注入环境。
+// 我们实现其中可选控的三步：MCP 工具摘要、agent 列表摘要、session_start hooks。
+// 文件恢复（步骤 2）已在 Round 12 (D12) 实现。
+
+export interface PostCompactContext {
+  /**
+   * C13-1: MCP 工具描述摘要（注入为 user 消息，防止压缩后 LLM 遗忘 MCP 工具）
+   */
+  mcpToolsSummary?: string;
+  /**
+   * C13-2: 子 agent 列表摘要（注入为 user 消息）
+   */
+  agentListingSummary?: string;
+  /**
+   * C13-3: 是否重新触发 session_start hooks（默认 false，避免重复触发）
+   */
+  reFireSessionStartHooks?: boolean;
+}
+
 export async function autoCompact(
   history: Message[],
   onProgress?: (msg: string) => void,
+  postCompactCtx?: PostCompactContext,
 ): Promise<number> {
   // Environment kill switch
   if (AUTO_COMPACT_DISABLED) return 0;
