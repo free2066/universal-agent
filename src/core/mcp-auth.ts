@@ -77,13 +77,82 @@ function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
 
+// ── C23: RFC 9728 OAuth 自动发现链 ───────────────────────────────────────────
+//
+// 三段式自动发现：① RFC 9728 → ② RFC 8414 AS 元数据 → ③ 路径感知 fallback
+// Mirrors claude-code auth.ts L256-311 fetchAuthServerMetadata().
+//
+// 无需手动配置 authorizationUrl/tokenUrl，适用于所有标准 MCP 服务器。
+
+interface OAuthDiscoveredEndpoints {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+}
+
+export async function discoverOAuthEndpoints(
+  serverUrl: string,
+): Promise<OAuthDiscoveredEndpoints | null> {
+  const DISCOVERY_TIMEOUT_MS = 5000;
+  const signal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS);
+
+  // Step 1: RFC 9728 — /.well-known/oauth-protected-resource
+  try {
+    const prmUrl = new URL('/.well-known/oauth-protected-resource', serverUrl);
+    const prmRes = await fetch(prmUrl.href, { signal });
+    if (prmRes.ok) {
+      const prm = await prmRes.json() as Record<string, unknown>;
+      const asServers = prm['authorization_servers'];
+      const asUrl = Array.isArray(asServers) && typeof asServers[0] === 'string'
+        ? asServers[0] : null;
+      if (asUrl) {
+        // Step 2: RFC 8414 — AS 的 /.well-known/oauth-authorization-server
+        const asmUrl = new URL('/.well-known/oauth-authorization-server', asUrl);
+        const asmRes = await fetch(asmUrl.href, { signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
+        if (asmRes.ok) {
+          const asm = await asmRes.json() as Record<string, unknown>;
+          if (typeof asm['authorization_endpoint'] === 'string' && typeof asm['token_endpoint'] === 'string') {
+            return {
+              authorizationEndpoint: asm['authorization_endpoint'] as string,
+              tokenEndpoint: asm['token_endpoint'] as string,
+            };
+          }
+        }
+      }
+    }
+  } catch { /* fallthrough to path-aware discovery */ }
+
+  // Step 3: 路径感知 fallback — 直接对 serverUrl 走 RFC 8414
+  // 适用于 MCP 服务器自身也是 AS 的场景（路径型服务器）
+  try {
+    const asmUrl = new URL('/.well-known/oauth-authorization-server', serverUrl);
+    const asmRes = await fetch(asmUrl.href, { signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
+    if (asmRes.ok) {
+      const asm = await asmRes.json() as Record<string, unknown>;
+      if (typeof asm['authorization_endpoint'] === 'string' && typeof asm['token_endpoint'] === 'string') {
+        return {
+          authorizationEndpoint: asm['authorization_endpoint'] as string,
+          tokenEndpoint: asm['token_endpoint'] as string,
+        };
+      }
+    }
+  } catch { /* all discovery paths failed */ }
+
+  return null; // 无法自动发现，调用方需手动配置
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface OAuthConfig {
-  /** OAuth 2.0 Authorization endpoint URL */
-  authorizationUrl: string;
-  /** OAuth 2.0 Token endpoint URL */
-  tokenUrl: string;
+  /**
+   * OAuth 2.0 Authorization endpoint URL.
+   * C23: 可选 — 若未设置，通过 RFC 9728 自动发现链推断。
+   */
+  authorizationUrl?: string;
+  /**
+   * OAuth 2.0 Token endpoint URL.
+   * C23: 可选 — 若未设置，通过 RFC 9728 自动发现链推断。
+   */
+  tokenUrl?: string;
   /** OAuth 2.0 Client ID */
   clientId: string;
   /** Optional client secret (PKCE is used when omitted) */
@@ -105,6 +174,10 @@ export interface OAuthConfig {
    * Auto-computed from (url + type) if not provided.
    */
   configHash?: string;
+  /**
+   * C23: 服务器 URL，用于 RFC 9728 自动发现链（当 authorizationUrl/tokenUrl 未配置时使用）
+   */
+  serverUrl?: string;
 }
 
 export interface TokenData {
@@ -293,8 +366,8 @@ function getSecureStorage(): SecureStorage {
 
 function computeServerKey(serverName: string, config: OAuthConfig): string {
   const hashInput = JSON.stringify({
-    url: config.tokenUrl,
-    auth: config.authorizationUrl,
+    url: config.tokenUrl ?? config.serverUrl ?? '',
+    auth: config.authorizationUrl ?? config.serverUrl ?? '',
     clientId: config.clientId,
   });
   const hash = createHash('sha256').update(hashInput).digest('hex').slice(0, 16);
@@ -381,17 +454,19 @@ async function exchangeCode(
     code_verifier: verifier,
   });
   if (config.clientSecret) body.set('client_secret', config.clientSecret);
-
+  if (!config.tokenUrl) throw new Error(`[MCP OAuth] tokenUrl is required for code exchange`);
   const res = await fetch(config.tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: body.toString(),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Token exchange failed: HTTP ${res.status} — ${text.slice(0, 200)}`);
+  // A23: normalizeOAuthErrorBody for token exchange response too
+  const normalizedRes = await normalizeOAuthErrorBody(res);
+  if (!normalizedRes.ok) {
+    const text = await normalizedRes.text();
+    throw new Error(`Token exchange failed: HTTP ${normalizedRes.status} — ${text.slice(0, 200)}`);
   }
-  const data = await res.json() as {
+  const data = await normalizedRes.json() as {
     access_token: string;
     refresh_token?: string;
     token_type?: string;
@@ -420,14 +495,19 @@ async function _doRefresh(serverKey: string, config: OAuthConfig, token: TokenDa
     client_id: config.clientId,
   });
   if (config.clientSecret) body.set('client_secret', config.clientSecret);
-
+  if (!config.tokenUrl) throw new Error(`[MCP OAuth] tokenUrl is required for token refresh (server: ${serverKey})`);
   const res = await fetch(config.tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: body.toString(),
   });
-  if (!res.ok) throw new Error(`Token refresh failed: HTTP ${res.status}`);
-  const data = await res.json() as {
+  // A23: normalizeOAuthErrorBody — Slack 等非标准 AS 可能返回 200 但 body 含 error
+  const normalizedRes = await normalizeOAuthErrorBody(res);
+  if (!normalizedRes.ok) {
+    const text = await normalizedRes.text();
+    throw new Error(`Token refresh failed: HTTP ${normalizedRes.status} — ${text.slice(0, 200)}`);
+  }
+  const data = await normalizedRes.json() as {
     access_token: string;
     refresh_token?: string;
     token_type?: string;
@@ -482,6 +562,71 @@ async function refreshTokenData(serverKey: string, config: OAuthConfig, token: T
   }
 }
 
+// ── A23: normalizeOAuthErrorBody — Slack 200-but-error 兼容 ─────────────────
+//
+// 部分非标准 OAuth 服务器（如 Slack）在 token refresh 时返回 HTTP 200，
+// 但 body 包含 {"error":"invalid_refresh_token"} 这样的错误对象。
+// 此函数将这类"伪成功"响应重写为 HTTP 400，使错误处理路径正常触发。
+// 同时将 Slack 专有错误码规范化为 RFC 6749 标准 error code。
+//
+// Mirrors claude-code auth.ts L127-190 normalizeOAuthErrorBody().
+
+const NONSTANDARD_INVALID_GRANT_ALIASES = new Set([
+  'invalid_refresh_token',
+  'expired_refresh_token',
+  'token_expired',
+  'token_revoked',
+]);
+
+async function normalizeOAuthErrorBody(res: Response): Promise<Response> {
+  if (!res.ok) return res; // 已经是错误状态，无需处理
+  // 克隆以避免消费原始 body（确保调用方还能读取）
+  let body: Record<string, unknown>;
+  try {
+    body = await res.clone().json() as Record<string, unknown>;
+  } catch {
+    return res; // 非 JSON body — 不干预
+  }
+  const errCode = typeof body['error'] === 'string' ? body['error'] : undefined;
+  if (!errCode) return res; // 无 error 字段 → 正常成功响应
+  // 规范化非标准错误码
+  const normalizedCode = NONSTANDARD_INVALID_GRANT_ALIASES.has(errCode)
+    ? 'invalid_grant' : errCode;
+  const normalizedBody = { ...body, error: normalizedCode };
+  return new Response(
+    JSON.stringify(normalizedBody),
+    { status: 400, statusText: 'Bad Request', headers: { 'Content-Type': 'application/json' } },
+  );
+}
+
+// ── B23: wrapFetchWithStepUpDetection — 403 insufficient_scope 拦截 ───────────
+//
+// 当 MCP 服务器响应 403 且 WWW-Authenticate 含 insufficient_scope 时，
+// 清除当前 token 并设置 _pendingStepUpScope 标志，迫使下次 getToken()
+// 跳过 refresh_token 走完整 PKCE 重新授权，避免 403 无限重试循环。
+//
+// Mirrors claude-code auth.ts L1354-1471 wrapFetchWithStepUpDetection().
+
+function wrapFetchWithStepUpDetection(
+  originalFetch: typeof globalThis.fetch,
+  onStepUpNeeded: (scope: string) => void,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const res = await originalFetch(input as Parameters<typeof fetch>[0], init);
+    if (res.status === 403) {
+      const wwwAuth = res.headers.get('WWW-Authenticate') ?? '';
+      if (wwwAuth.includes('insufficient_scope')) {
+        // 尝试解析所需 scope
+        const scopeMatch = /scope="?([^",\s]+)"?/.exec(wwwAuth) ??
+                           /error_scope="?([^",\s]+)"?/.exec(wwwAuth);
+        const scope = scopeMatch?.[1] ?? 'unknown';
+        onStepUpNeeded(scope);
+      }
+    }
+    return res;
+  };
+}
+
 // ── RFC 7009 Token Revocation ─────────────────────────────────────────────────
 
 async function revokeTokenAtServer(
@@ -514,6 +659,9 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000; // Refresh 5 min before expiry
 
 export class McpAuth {
   private serverKey: string | null = null;
+  // B23: Step-up 认证状态（claude-code auth.ts markStepUpPending() parity）
+  // 当检测到 403 insufficient_scope 时设置，下次 getToken() 跳过 refresh 走完整 PKCE
+  private _pendingStepUpScope: string | null = null;
 
   constructor(private readonly serverName: string) {}
 
@@ -525,13 +673,47 @@ export class McpAuth {
   }
 
   /**
+   * B23: 创建带 step-up 检测的 fetch 包装器
+   * 返回的 fetch 会在检测到 403 insufficient_scope 时触发 _pendingStepUpScope
+   */
+  createFetchWithStepUp(): typeof globalThis.fetch {
+    return wrapFetchWithStepUpDetection(globalThis.fetch, (scope) => {
+      this._pendingStepUpScope = scope;
+      process.stderr.write(
+        `[MCP OAuth] ${this.serverName}: step-up required for scope "${scope}" — next request will re-authenticate.\n`,
+      );
+    });
+  }
+
+  /**
    * Get a valid access token, initiating OAuth flow if needed.
    * Prints instructions to stderr so TTY stdout is not corrupted.
+   * C23: 若 config 未设置 authorizationUrl/tokenUrl，先调用 RFC 9728 自动发现链。
    */
   async getToken(config: OAuthConfig): Promise<TokenData> {
+    // C23: 若未提供 endpoints，先 RFC 9728 自动发现，然后递归调用
+    if (!config.authorizationUrl || !config.tokenUrl) {
+      if (config.serverUrl) {
+        const discovered = await discoverOAuthEndpoints(config.serverUrl).catch(() => null);
+        if (discovered) {
+          return this.getToken({
+            ...config,
+            authorizationUrl: discovered.authorizationEndpoint,
+            tokenUrl: discovered.tokenEndpoint,
+          });
+        }
+        // 无法发现 → 交给 authorize() 抛出清晰错误
+      }
+    }
     const key = this.getServerKey(config);
     const cached = await loadToken(key);
     if (cached) {
+      // B23: Step-up pending — 跳过 refresh_token，强制走完整 PKCE
+      if (this._pendingStepUpScope) {
+        this._pendingStepUpScope = null; // 清除标志（无论后续认证是否成功）
+        await clearToken(key);           // 清除旧 token
+        return this.authorize(config);
+      }
       // Token still valid (with 5-min buffer)?
       if (cached.expiresAt - Date.now() > REFRESH_BUFFER_MS) {
         return cached;
@@ -550,18 +732,44 @@ export class McpAuth {
 
   /**
    * Initiate Authorization Code Flow (PKCE).
+   * C23: 若 config 未设置 authorizationUrl/tokenUrl，先调用 RFC 9728 自动发现链。
    */
   async authorize(config: OAuthConfig): Promise<TokenData> {
-    const port = config.callbackPort ?? 9876;
-    const redirectUri = config.redirectUri ?? `http://localhost:${port}/callback`;
+    // C23: 若未提供 endpoints，先 RFC 9728 自动发现
+    let effectiveConfig = config;
+    if (!config.authorizationUrl || !config.tokenUrl) {
+      if (config.serverUrl) {
+        const discovered = await discoverOAuthEndpoints(config.serverUrl).catch(() => null);
+        if (discovered) {
+          effectiveConfig = {
+            ...config,
+            authorizationUrl: discovered.authorizationEndpoint,
+            tokenUrl: discovered.tokenEndpoint,
+          };
+        } else {
+          throw new Error(
+            `[MCP OAuth] Cannot auto-discover OAuth endpoints for ${this.serverName}. ` +
+            `Please configure authorizationUrl and tokenUrl manually.`,
+          );
+        }
+      } else {
+        throw new Error(
+          `[MCP OAuth] ${this.serverName}: authorizationUrl and tokenUrl are required ` +
+          `(or provide serverUrl for RFC 9728 auto-discovery).`,
+        );
+      }
+    }
+
+    const port = effectiveConfig.callbackPort ?? 9876;
+    const redirectUri = effectiveConfig.redirectUri ?? `http://localhost:${port}/callback`;
     const verifier = generateCodeVerifier();
     const challenge = generateCodeChallenge(verifier);
     const state = randomBytes(8).toString('hex');
-    const scopes = (config.scopes ?? ['openid']).join(' ');
+    const scopes = (effectiveConfig.scopes ?? ['openid']).join(' ');
 
-    const authUrl = new URL(config.authorizationUrl);
+    const authUrl = new URL(effectiveConfig.authorizationUrl!);
     authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('client_id', config.clientId);
+    authUrl.searchParams.set('client_id', effectiveConfig.clientId);
     authUrl.searchParams.set('redirect_uri', redirectUri);
     authUrl.searchParams.set('scope', scopes);
     authUrl.searchParams.set('state', state);
@@ -574,8 +782,8 @@ export class McpAuth {
     );
     await openBrowser(authUrl.toString());
     const code = await waitForCallback(port);
-    const key = this.getServerKey(config);
-    const token = await exchangeCode(code, config, verifier, redirectUri);
+    const key = this.getServerKey(effectiveConfig);
+    const token = await exchangeCode(code, effectiveConfig, verifier, redirectUri);
     await saveToken(key, token);
     process.stderr.write(`[MCP OAuth] ${this.serverName}: authorized successfully.\n`);
     return token;
@@ -628,4 +836,25 @@ export function getMcpAuth(serverName: string): McpAuth {
     _instances.set(serverName, new McpAuth(serverName));
   }
   return _instances.get(serverName)!;
+}
+
+/**
+ * C23: hasMcpDiscoveryButNoToken — 已发现 AS 但无有效 token
+ *
+ * 用于连接预检：若此函数返回 true，跳过连接尝试，提示用户先认证。
+ * Mirrors claude-code auth.ts L349-363 hasMcpDiscoveryButNoToken().
+ */
+export async function hasMcpDiscoveryButNoToken(
+  serverName: string,
+  serverUrl: string,
+): Promise<boolean> {
+  const discovered = await discoverOAuthEndpoints(serverUrl).catch(() => null);
+  if (!discovered) return false; // 不支持 OAuth → 无需认证
+  const auth = getMcpAuth(serverName);
+  const hasT = await auth.hasToken({
+    authorizationUrl: discovered.authorizationEndpoint,
+    tokenUrl: discovered.tokenEndpoint,
+    clientId: 'uagent',
+  }).catch(() => false);
+  return !hasT;
 }

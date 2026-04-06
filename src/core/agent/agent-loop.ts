@@ -1588,6 +1588,13 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
         title: domain,
       });
     } catch { /* notification hooks are non-fatal */ }
+
+    // F23: AutoDream — 后台记忆整合（claude-code autoDream.ts parity）
+    // 非阻塞触发，三重门控（时间/会话数/进程锁），失败不影响主循环。
+    try {
+      const { executeAutoDream } = await import('../memory/auto-dream.js');
+      executeAutoDream(domain); // 异步触发，不 await
+    } catch { /* auto-dream is non-fatal */ }
   }
 
   const _result: StreamLoopResult = {

@@ -15,6 +15,33 @@ import { execSync, spawnSync } from 'child_process';
 import { AgentCore } from '../core/agent.js';
 import { modelManager } from '../models/model-manager.js';
 
+// ── D23: getAttributionTexts — Co-Authored-By attribution ─────────────────────
+//
+// Mirrors claude-code src/utils/attribution.ts L39-98.
+// 在 commit message 末尾追加 Co-Authored-By trailer，支持 PR description 文本。
+// 仅当 config.attribution !== false 时追加（用户可选关闭）。
+
+export function getAttributionTexts(modelName?: string): { commit: string; pr: string } {
+  const model = modelName ?? 'Claude';
+  return {
+    commit: `Co-Authored-By: ${model} <noreply@anthropic.com>`,
+    pr: '🤖 Generated with [Claude Code](https://claude.ai/code)',
+  };
+}
+
+/** D23: 是否在 commit message 末尾追加 Co-Authored-By */
+function shouldAddAttribution(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { loadConfig } = require('./config-store.js') as typeof import('./config-store.js');
+    const cfg = loadConfig() as Record<string, unknown>;
+    // attribution.commit === false → 关闭
+    const attr = cfg['attribution'] as Record<string, unknown> | undefined;
+    if (attr?.['commit'] === false) return false;
+  } catch { /* config unavailable → default on */ }
+  return true;
+}
+
 export interface CommitOptions {
   stage?: boolean;         // -s: git add -A before generating
   commit?: boolean;        // -c: auto git commit
@@ -152,6 +179,14 @@ ${fullDiff}`;
 
   // Strip markdown fences if model added them
   message = message.replace(/^```[^\n]*\n?/, '').replace(/\n?```$/, '').trim();
+
+  // D23: Co-Authored-By attribution（claude-code attribution.ts parity）
+  if (shouldAddAttribution()) {
+    const attribution = getAttributionTexts(
+      modelManager.getCurrentModel('main') ?? undefined,
+    );
+    message = `${message}\n\n${attribution.commit}`;
+  }
 
   process.stdout.write('\n');
 

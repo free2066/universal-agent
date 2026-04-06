@@ -58,6 +58,7 @@ import { ListMcpResourcesRegistration, ReadMcpResourceRegistration } from '../to
 import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
 import { askUserQuestionTool } from '../tools/productivity/ask-user-question-tool.js';
 import { configGetTool, configSetTool } from '../tools/config/config-tool.js';
+import { cronCreateTool, cronDeleteTool, cronListTool } from '../tools/productivity/cron-tools.js';
 import {
   spawnTeammateTool,
   listTeammatesTool,
@@ -256,6 +257,10 @@ export function registerAllTools(
   // D22: ConfigTool — LLM 读写 Agent 配置（claude-code ConfigTool parity）
   reg(configGetTool);
   reg(configSetTool);
+
+  // E23: ScheduleCronTool — 定时任务系统（claude-code ScheduleCronTool parity）
+  // 门控：AGENT_TRIGGERS 环境变量（默认开启）
+  regMany([cronCreateTool, cronDeleteTool, cronListTool]);
 
   // Domain-specific tools
   router.registerTools(registry, domain);
