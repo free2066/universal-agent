@@ -83,10 +83,10 @@ function checkType(
 //
 // 工具可声明可选的 validate() 方法，进行 JSON schema 之外的语义层验证。
 // errorCode 让 LLM 能读懂失败原因，从而自我纠正进一步调用。
+// D18: Now formally typed as ToolValidationResult in models/types.ts (re-exported here for compat)
 
-export type ValidationResult =
-  | { result: true }
-  | { result: false; message: string; errorCode?: string };
+import type { ToolValidationResult } from '../models/types.js';
+export type ValidationResult = ToolValidationResult;
 
 // Extend ToolRegistration with E12 + F12 fields
 // （这些字段在 types.ts 中的 ToolRegistration interface 添加）
@@ -272,15 +272,12 @@ export class ToolRegistry {
     }
 
     // E12: Semantic validation (claude-code Tool.validateInput parity)
+    // D18: validate field now formally declared in ToolRegistration interface (types.ts)
     // Runs after schema validation; provides domain-specific checks with errorCode
     // that give the LLM actionable feedback to self-correct on the next call.
-    const registration = tool as ToolRegistration & {
-      validate?: (a: Record<string, unknown>) => Promise<ValidationResult> | ValidationResult;
-      maxResultSizeBytes?: number;
-    };
-    if (registration.validate) {
+    if (tool.validate) {
       try {
-        const vr = await registration.validate(args);
+        const vr = await Promise.resolve(tool.validate(args));
         if (!vr.result) {
           const code = vr.errorCode ? ` [${vr.errorCode}]` : '';
           throw new Error(`Tool "${name}" validation failed${code}: ${vr.message}`);
@@ -294,9 +291,8 @@ export class ToolRegistry {
     const result = await tool.handler(args);
 
     // F12: Auto-persist large tool results (claude-code maxResultSizeChars parity)
-    // If the result exceeds maxResultSizeBytes, write to a temp file and return
-    // a compact reference. Prevents oversized results from consuming context tokens.
-    const maxBytes = registration.maxResultSizeBytes ?? 50_000; // 50KB default
+    // D18: maxResultSizeBytes now formally declared in ToolRegistration interface (types.ts)
+    const maxBytes = tool.maxResultSizeBytes ?? 50_000; // 50KB default
     const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
     if (Buffer.byteLength(resultStr, 'utf-8') > maxBytes) {
       try {
@@ -317,5 +313,22 @@ export class ToolRegistry {
 
   list(): string[] {
     return Array.from(this.tools.keys());
+  }
+
+  /**
+   * A18: Get the full ToolRegistration for a tool name (including contextModifier).
+   * Used by StreamingToolExecutor to collect contextModifiers after execution.
+   */
+  getRegistration(name: string): ToolRegistration | undefined {
+    let tool = this.tools.get(name);
+    if (!tool) {
+      for (const [, t] of this.tools) {
+        if (t.definition.aliases?.includes(name)) {
+          tool = t;
+          break;
+        }
+      }
+    }
+    return tool;
   }
 }

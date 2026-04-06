@@ -170,6 +170,17 @@ export interface LLMClient {
 
 export type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
+/**
+ * D18 (claude-code Tool.ValidationResult parity): Tool semantic validation result.
+ * Returned by ToolRegistration.validate() — used by tool-registry execute() pipeline.
+ *
+ * errorCode provides LLM-readable failure context for self-correction.
+ * Examples: 'file_not_found', 'permission_denied', 'invalid_format', 'out_of_range'
+ */
+export type ToolValidationResult =
+  | { result: true }
+  | { result: false; message: string; errorCode?: string };
+
 // ── Plugin Slash Command ──────────────────────────────────────────────────────
 
 /**
@@ -257,4 +268,48 @@ export interface DomainPlugin {
 export interface ToolRegistration {
   definition: ToolDefinition;
   handler: ToolHandler;
+  /**
+   * D18 (claude-code Tool.validateInput parity): Optional semantic validation.
+   * Called AFTER JSON schema validation, BEFORE tool handler execution.
+   * Provides domain-specific checks with structured errorCode for LLM self-correction.
+   *
+   * Return { result: true } to allow; { result: false, message, errorCode } to block.
+   * errorCode gives the LLM actionable context (e.g. 'file_not_found', 'permission_denied').
+   */
+  validate?: (args: Record<string, unknown>) => ToolValidationResult | Promise<ToolValidationResult>;
+  /** F12: Maximum result size in bytes before auto-persisting to temp file (default 50KB). */
+  maxResultSizeBytes?: number;
+  /** Whether this is an MCP tool (affects tool pool partitioning) */
+  isMcp?: boolean;
+  /** Whether to defer loading this tool until explicitly requested via ToolSearch */
+  shouldDefer?: boolean;
+  /** Whether to always load this tool regardless of defer threshold */
+  alwaysLoad?: boolean;
+  /**
+   * A18 (claude-code contextModifier parity): Optional modifier applied after tool execution.
+   * Allows tools (EnterPlanMode, WorktreeEnter, etc.) to update agent session state
+   * (cwd, approvalMode, etc.) without tight coupling to the agent loop.
+   *
+   * Called by agent-loop after tool batch completion; result replaces current AgentContextState.
+   * Mirrors claude-code StreamingToolExecutor.ts TrackedTool.contextModifiers[].
+   *
+   * @param ctx  Current agent context state
+   * @returns    Updated agent context state (must return new object, not mutate in place)
+   */
+  contextModifier?: (ctx: AgentContextState) => AgentContextState;
+}
+
+/**
+ * A18: Session-level agent context state that tools can modify via contextModifier.
+ * Mirrors claude-code's ToolUseContext (the mutable portion).
+ */
+export interface AgentContextState {
+  /** Current working directory for the agent session */
+  cwd: string;
+  /** Current approval/permission mode */
+  approvalMode: 'default' | 'autoEdit' | 'yolo';
+  /** Whether plan mode is active (blocks write tools) */
+  planModeActive: boolean;
+  /** Pre-plan-mode approval mode (E18: restored on exit) */
+  prePlanApprovalMode?: 'default' | 'autoEdit' | 'yolo';
 }

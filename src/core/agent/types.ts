@@ -155,3 +155,23 @@ export interface StreamLoopResult {
   /** B14: 最后一次 continue 的原因（测试可观测性）*/
   lastTransition?: ContinueTransition;
 }
+
+/**
+ * C18 (claude-code withRetry.ts parity): QuerySource — caller identity for LLM calls.
+ * Used to differentiate foreground (agent main loop, compact) from background
+ * (title/summary/classifier) tasks when deciding 529 retry behavior.
+ *
+ * Rule: background tasks 529 → fail immediately (don't waste retries)
+ *       foreground tasks 529 → retry up to 3 times (INTERACTIVE_RATE_LIMIT_MAX_RETRIES)
+ *
+ * Mirrors claude-code FOREGROUND_529_RETRY_SOURCES Set in withRetry.ts L62-88.
+ */
+export type QuerySource =
+  | 'agent_main'            // Main agent conversation turn
+  | 'compact'               // Context compaction / microcompact
+  | 'tool_summary'          // maybeGenerateToolSummary (background)
+  | 'session_memory'        // Session memory extraction (background)
+  | 'background_title'      // Background title generation (background)
+  | 'background_classifier' // yolo-classifier approval check (background)
+  | 'hook_agent'            // Hook agent sub-call
+  | 'side_question';        // Side question / ask-expert model

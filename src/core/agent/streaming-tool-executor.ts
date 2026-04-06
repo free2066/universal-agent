@@ -38,6 +38,7 @@
  */
 
 import type { ToolRegistry } from '../tool-registry.js';
+import type { AgentContextState } from '../../models/types.js';
 import { PARALLELIZABLE_TOOLS } from './types.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -57,6 +58,11 @@ interface TrackedTool {
   result?: ToolCallResult;
   /** Progress messages emitted during execution — flushed before result */
   pendingProgress: ToolCallResult[];
+  /**
+   * A18: contextModifier collected from tool registration.
+   * Applied by agent-loop after the tool batch completes.
+   */
+  contextModifier?: (ctx: AgentContextState) => AgentContextState;
 }
 
 export interface ToolCallResult {
@@ -347,6 +353,16 @@ export class StreamingToolExecutor {
     return results;
   }
 
+  /**
+   * A18: Collect all contextModifiers from completed tools, in declaration order.
+   * Called by agent-loop after drainAndCollect() to apply session state changes.
+   */
+  collectContextModifiers(): Array<(ctx: AgentContextState) => AgentContextState> {
+    return this.tools
+      .filter((t) => t.contextModifier && t.status === 'yielded')
+      .map((t) => t.contextModifier!);
+  }
+
   // ── Tool execution ─────────────────────────────────────────────────────────
 
   /**
@@ -394,6 +410,11 @@ export class StreamingToolExecutor {
         toolCallId: id, toolName: tracked.toolName,
         content, success: true, durationMs: Date.now() - start,
       };
+      // A18: collect contextModifier from tool registration (if any)
+      const reg = this.registry.getRegistration(tracked.toolName);
+      if (reg?.contextModifier) {
+        tracked.contextModifier = reg.contextModifier;
+      }
     } catch (err) {
       clearTimeout(progressTimer);
       const errMsg = err instanceof Error ? err.message : String(err);

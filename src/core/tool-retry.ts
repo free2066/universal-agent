@@ -119,17 +119,29 @@ export function isRateLimitError(err: unknown): boolean {
  *   - Prints heartbeat '.' every 30s to keep CI logs alive
  *   - Hard abort after 6 hours total wait (prevents infinite blocking)
  *
- * Usage: wrap LLM API calls that may hit 429/529 in unattended/CI mode.
+ * C18 (claude-code withRetry.ts FOREGROUND_529_RETRY_SOURCES parity):
+ *   - Background tasks (querySource='tool_summary'/'background_*'/'session_memory')
+ *     → 529 fails immediately (no retries, preserves retry budget for foreground)
+ *   - Foreground tasks (querySource='agent_main'/'compact') → normal retry logic
  *
  * @param fn - Async function to execute (typically an LLM API call)
  * @param onHeartbeat - Optional callback for each 30s heartbeat (e.g. log to console)
+ * @param querySource - C18: Caller identity for 529 retry gating (default: 'agent_main')
  */
 export async function withApiRateLimitRetry<T>(
   fn: () => Promise<T>,
   onHeartbeat?: (waitedMs: number) => void,
+  querySource?: import('./agent/types.js').QuerySource,
 ): Promise<T> {
   const unattended = process.env.AGENT_UNATTENDED_RETRY === '1';
   const startTime = Date.now();
+
+  // C18: Background tasks should fail immediately on 529 — no retries
+  // Mirrors claude-code FOREGROUND_529_RETRY_SOURCES Set (withRetry.ts L62-88)
+  const FOREGROUND_SOURCES = new Set<import('./agent/types.js').QuerySource>([
+    'agent_main', 'compact', 'hook_agent', 'side_question',
+  ]);
+  const isBackground = querySource !== undefined && !FOREGROUND_SOURCES.has(querySource);
 
   // ── Interactive mode: short exponential backoff (up to 3 retries) ──────────
   // Free-tier models (wanqing, Gemini free, Groq) have low QPS limits.
@@ -142,6 +154,8 @@ export async function withApiRateLimitRetry<T>(
         return await fn();
       } catch (err) {
         if (!isRateLimitError(err)) throw err;           // non-429: rethrow immediately
+        // C18: Background tasks fail immediately on 529 — don't waste retries
+        if (isBackground) throw err;
         if (interactiveRetry >= INTERACTIVE_RATE_LIMIT_MAX_RETRIES) throw err; // give up
 
         // Exponential backoff: 5s → 10s → 20s  (±25% jitter)
@@ -171,6 +185,8 @@ export async function withApiRateLimitRetry<T>(
     } catch (err) {
       // Always rethrow non-rate-limit errors immediately
       if (!isRateLimitError(err)) throw err;
+      // C18: Background tasks fail immediately even in unattended mode
+      if (isBackground) throw err;
 
       const elapsed = Date.now() - startTime;
 

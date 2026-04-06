@@ -79,27 +79,26 @@ function createTombstone(historyLength: number): TombstoneMessage {
 //
 // When a tool result exceeds TOOL_USE_SUMMARY_THRESHOLD characters, fire a
 // background Haiku-model call to generate a compressed summary. The summary
-// is stored in _pendingToolSummaries and injected as a user message at the
-// START of the next iteration, before the LLM call.
+// is stored as a Promise (_pendingToolUseSummaryPromise, B18 upgrade) and awaited
+// at the START of the next iteration, before the LLM call.
 //
-// This prevents tool results (e.g. large file reads, long grep outputs) from
-// consuming excessive context. The background generation runs concurrently
-// with other work, so latency impact is minimal for read-only tools.
+// B18: Upgrade from fire-and-forget array to cross-iteration Promise propagation.
+// Mirrors claude-code State.pendingToolUseSummary (Promise<ToolUseSummaryMessage | null>).
+// Two things happen in parallel:
+//   1. Previous iteration fires summary generation (fire-and-forget Promise)
+//   2. Next iteration awaits the Promise before calling LLM, injects as user message
 
 const TOOL_USE_SUMMARY_THRESHOLD = 8_000; // chars above which we summarize
-const _pendingToolSummaries: Array<{ toolName: string; summary: string }> = [];
-let _summaryGenerationCount = 0; // rate-limit: max 2 concurrent summaries
 
 async function maybeGenerateToolSummary(
   toolName: string,
   rawResult: string,
-): Promise<void> {
-  if (rawResult.length < TOOL_USE_SUMMARY_THRESHOLD) return;
-  if (_summaryGenerationCount >= 2) return; // rate limit concurrent summaries
+): Promise<string | null> {
+  if (rawResult.length < TOOL_USE_SUMMARY_THRESHOLD) return null;
 
-  _summaryGenerationCount++;
   try {
     const client = modelManager.getClient('compact');
+    // C18: querySource='tool_summary' — background, 529 fails immediately (no retries)
     const response = await client.chat({
       systemPrompt: 'You are summarizing a tool result for an AI coding assistant. Be concise and preserve key findings, errors, and actionable information.',
       messages: [{
@@ -109,10 +108,11 @@ async function maybeGenerateToolSummary(
     });
     const summary = response.content.trim();
     if (summary.length > 50 && summary.length < rawResult.length * 0.8) {
-      _pendingToolSummaries.push({ toolName, summary });
+      return `[${toolName} result compressed] ${summary}`;
     }
-  } catch { /* summary failure is non-fatal */ } finally {
-    _summaryGenerationCount--;
+    return null;
+  } catch {
+    return null; // summary failure is non-fatal
   }
 }
 
@@ -550,6 +550,11 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   let roundsWithoutTodo = 0;
   const teamMgr = getTeammateManager(process.cwd());
 
+  // B18: Cross-iteration tool summary Promise (claude-code State.pendingToolUseSummary parity)
+  // Fires summary generation as a Promise after tool batch; awaited before the next LLM call.
+  // Two things happen in parallel: previous iteration generates summary, next iteration awaits.
+  let _pendingToolUseSummaryPromise: Promise<string | null> | undefined;
+
   // Outer unattended-retry loop
   let _unattendedDone = false;
   // B13: _earlyExit — 在嵌套循环中（工具执行）需要提前终止函数时使用
@@ -560,16 +565,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     while (iteration < MAX_ITERATIONS) {
       iteration++;
 
-      // ── ToolUseSummary: inject pending summaries (Round 3: claude-code parity) ──
-      // Summaries generated in the previous iteration (for oversized tool results)
-      // are injected as a system note at the start of each iteration so the LLM
-      // can reference the compressed version without expanding the context.
-      if (_pendingToolSummaries.length > 0) {
-        const summaryLines = _pendingToolSummaries
-          .map((s) => `[${s.toolName} result compressed] ${s.summary}`)
-          .join('\n');
-        history.push({ role: 'user', content: `<tool-summaries>\n${summaryLines}\n</tool-summaries>` });
-        _pendingToolSummaries.length = 0;
+      // ── B18: Await pendingToolUseSummary Promise (claude-code State.pendingToolUseSummary parity) ──
+      // Summary was fire-and-forget fired at end of previous iteration.
+      // Await it NOW (before LLM call) and inject as user message if available.
+      if (_pendingToolUseSummaryPromise) {
+        try {
+          const summary = await _pendingToolUseSummaryPromise;
+          if (summary) {
+            history.push({ role: 'user', content: `<tool-summaries>\n${summary}\n</tool-summaries>` });
+          }
+        } catch { /* non-fatal */ } finally {
+          _pendingToolUseSummaryPromise = undefined;
+        }
       }
 
       // ── Min-round-interval throttle ──────────────────────────────────────────
@@ -1093,11 +1100,10 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               }
             } catch { /* non-fatal */ }
             // ── ToolUseSummary: async compress large results (Round 3) ─────
-            // Fire-and-forget background summary for oversized tool outputs.
-            // Summary is injected at the start of the NEXT iteration.
-            // Only triggered for read-only tools (write tools rarely produce huge output).
+            // B18 upgrade: fire-and-forget into Promise, awaited at next iteration start.
             if (finalResultStr.length >= TOOL_USE_SUMMARY_THRESHOLD && PARALLELIZABLE_TOOLS.has(call.name)) {
-              maybeGenerateToolSummary(call.name, finalResultStr).catch(() => { /* non-fatal */ });
+              _pendingToolUseSummaryPromise = maybeGenerateToolSummary(call.name, finalResultStr)
+                .catch(() => null);
             }
             return { role: 'tool' as const, toolCallId: call.id, content: finalResultStr };
           } catch (err) {
@@ -1221,6 +1227,33 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
         }
 
         history.push(...toolResults);
+
+        // A18: Apply contextModifiers from StreamingToolExecutor (claude-code parity)
+        // Tools like EnterPlanMode/ExitPlanMode/WorktreeEnter can modify session state
+        // by returning a contextModifier in their ToolRegistration.
+        if (_streamingExecutor) {
+          try {
+            const modifiers = _streamingExecutor.collectContextModifiers();
+            for (const modifier of modifiers) {
+              try {
+                // Build current AgentContextState snapshot and apply modifier
+                const { isPlanModeActive } = await import('../tools/agents/plan-mode-tools.js');
+                const currentCtx: import('../../models/types.js').AgentContextState = {
+                  cwd: process.cwd(),
+                  approvalMode: approvalMode as 'default' | 'autoEdit' | 'yolo',
+                  planModeActive: isPlanModeActive(),
+                };
+                const newCtx = modifier(currentCtx);
+                // Apply non-cwd state changes (cwd change via process.chdir would affect subprocess)
+                // Plan mode state is managed by plan-mode-tools.ts module, so we skip it here
+                // approvalMode is local to this runStreamLoop closure — reassign if changed
+                if (newCtx.approvalMode !== currentCtx.approvalMode) {
+                  (opts as unknown as Record<string, unknown>).approvalMode = newCtx.approvalMode;
+                }
+              } catch { /* non-fatal: contextModifier errors do not block agent */ }
+            }
+          } catch { /* non-fatal */ }
+        }
 
         // s03: TodoWrite nag
         const usedTodo = response.toolCalls.some((tc) => tc.name === 'TodoWrite');

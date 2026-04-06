@@ -22,20 +22,33 @@ import type { ToolRegistration } from '../../../models/types.js';
 // ── Global plan mode state ────────────────────────────────────────────────────
 
 let _planModeActive = false;
+/**
+ * E18: Pre-plan-mode approval mode (claude-code prePlanMode parity).
+ * Saved when entering plan mode, restored when exiting.
+ * Ensures exact permission mode restoration rather than hardcoding a default.
+ */
+let _prePlanApprovalMode: 'default' | 'autoEdit' | 'yolo' | undefined;
 
 /** Returns true if plan mode is currently active */
 export function isPlanModeActive(): boolean {
   return _planModeActive;
 }
 
-/** Activate plan mode */
-export function enterPlanMode(): void {
+/** Activate plan mode, saving the current approval mode for later restoration */
+export function enterPlanMode(currentApprovalMode?: 'default' | 'autoEdit' | 'yolo'): void {
   _planModeActive = true;
+  _prePlanApprovalMode = currentApprovalMode;
 }
 
-/** Deactivate plan mode */
-export function exitPlanMode(): void {
+/**
+ * Deactivate plan mode.
+ * @returns The approval mode that was active before plan mode (for restoration), or undefined.
+ */
+export function exitPlanMode(): 'default' | 'autoEdit' | 'yolo' | undefined {
   _planModeActive = false;
+  const mode = _prePlanApprovalMode;
+  _prePlanApprovalMode = undefined;
+  return mode;
 }
 
 // ── EnterPlanMode tool ────────────────────────────────────────────────────────
@@ -74,6 +87,7 @@ export const enterPlanModeTool: ToolRegistration = {
     const input = args as { reason?: string };
     const reason = input.reason?.trim();
 
+    // E18: enterPlanMode() will receive approvalMode via contextModifier
     enterPlanMode();
 
     const lines = [
@@ -91,6 +105,12 @@ export const enterPlanModeTool: ToolRegistration = {
     ].filter((l) => l !== undefined);
 
     return lines.join('\n');
+  },
+
+  // A18 + E18: contextModifier saves current approvalMode so ExitPlanMode can restore it
+  contextModifier(ctx) {
+    enterPlanMode(ctx.approvalMode); // overwrite with correct approvalMode
+    return { ...ctx, planModeActive: true };
   },
 };
 
@@ -151,5 +171,11 @@ export const exitPlanModeTool: ToolRegistration = {
     ].filter((l) => l !== undefined);
 
     return lines.join('\n');
+  },
+
+  // A18 + E18: contextModifier restores prePlanApprovalMode on exit
+  contextModifier(ctx) {
+    const restoredMode = exitPlanMode() ?? ctx.approvalMode;
+    return { ...ctx, planModeActive: false, approvalMode: restoredMode };
   },
 };
