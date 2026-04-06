@@ -472,11 +472,19 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   }
 
   // G12: A12 blocking 拦截 — context 已满时直接停止，不发起新 LLM 调用
-  const _warningState = calculateTokenWarningState(estimateHistoryTokens(history), _currentModel);
+  // D21: 扣减 snipTokensFreed 避免 snip 后 stale token 计数错误触发 blocking_limit
+  // Mirrors claude-code query.ts L638: tokenCountWithEstimation(messagesForQuery) - snipTokensFreed
+  const _snipResult = snipCompactIfNeeded(history, _currentModel);
+  if (_snipResult.tokensFreed > 0) {
+    history.splice(0, history.length, ..._snipResult.messages);
+    onChunk(`\n  HistorySnip: freed ~${_snipResult.tokensFreed} tokens (${_snipResult.messages.length} messages remain)\n`);
+  }
+  const _adjustedBlockingTokens = Math.max(0, estimateHistoryTokens(history) - _snipResult.tokensFreed);
+  const _warningState = calculateTokenWarningState(_adjustedBlockingTokens, _currentModel);
   if (_warningState === 'blocking') {
-    onChunk('\n[SYSTEM] Context window critical — stopping to prevent prompt_too_long error.\n');
+    onChunk(`\n[SYSTEM] Context window critical (${_adjustedBlockingTokens.toLocaleString()} tokens after snip adjustment) — stopping to prevent prompt_too_long error.\n`);
     // B13: blocking_limit 终止
-    const result: StreamLoopResult = { reason: 'blocking_limit', iterations: 0, tokensEstimated: estimateHistoryTokens(history) };
+    const result: StreamLoopResult = { reason: 'blocking_limit', iterations: 0, tokensEstimated: _adjustedBlockingTokens };
     events?.onTerminal?.(result);
     return result;
   }
@@ -491,15 +499,6 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     reFireSessionStartHooks: false,
     querySource: _isSubAgentCtx ? 'subagent' : 'main',  // F15: 主线程和子代理区分缓存清理范围
   };
-
-  // A14: HistorySnip — autoCompact 之前先做轻量级历史截断
-  // 对标 claude-code query.ts L401-410 snipCompactIfNeeded
-  // 在 warning/error 状态下删除旧轮次，减少 LLM compact 的频率（降低 5-30s 等待）
-  const _snipResult = snipCompactIfNeeded(history, _currentModel);
-  if (_snipResult.tokensFreed > 0) {
-    history.splice(0, history.length, ..._snipResult.messages);
-    onChunk(`\n  HistorySnip: freed ~${_snipResult.tokensFreed} tokens (${_snipResult.messages.length} messages remain)\n`);
-  }
 
   // H15: 将 snipTokensFreed 传入 autoCompact，防止在 snip 后立即重复触发
   const compacted = await autoCompact(history, onChunk, _postCompactCtx, _snipResult.tokensFreed);
@@ -521,6 +520,10 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   let iteration = 0;
   let lastLLMCallAt = 0;
   const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? String(DEFAULT_MAX_ITERATIONS), 10);
+  // C21: maxTurns 外部注入参数 (claude-code query.ts L191 parity)
+  // 调用方可通过 opts.maxTurns 注入，优先于环境变量 AGENT_MAX_ITERATIONS
+  const _externalMaxTurns = (opts as unknown as Record<string, unknown>).maxTurns as number | undefined;
+  const _effectiveMaxTurns = _externalMaxTurns ?? MAX_ITERATIONS;
 
   // B13: 记录终止原因，默认 'completed'
   let _terminalReason: TerminalReason = 'completed';
@@ -1223,7 +1226,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
             // Round 8: fire tool_post_use (PostToolUse parity)
             // H17: updatedMCPToolOutput — allows hook to modify MCP tool output
+            // B21: hook_stopped_continuation + hook_blocking_error (claude-code toolHooks.ts parity)
             let finalResultStr = resultStr;
+            let _postUsePreventContinuation = false;
             try {
               const { getHookRunner: _postUseRunner } = await import('../hooks.js');
               const _pr = _postUseRunner(process.cwd());
@@ -1244,8 +1249,26 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
                     ? _postResult.updatedMCPToolOutput
                     : JSON.stringify(_postResult.updatedMCPToolOutput);
                 }
+                // B21: hook_blocking_error — PostToolUse exit-2 阻断，覆盖工具输出
+                // Mirrors claude-code toolHooks.ts runPostToolUseHooks() hook_blocking_error branch.
+                if (_postResult.blocked && _postResult.blockReason) {
+                  finalResultStr = `[PostToolUse hook blocked] ${_postResult.blockReason}`;
+                }
+                // B21: hook_stopped_continuation — PostToolUse preventContinuation 终止主循环
+                // Mirrors claude-code toolHooks.ts L121-130: yield hook_stopped_continuation → return.
+                // Flag is checked after all tool results are collected, then breaks the main loop.
+                const _preventCont = (_postResult as unknown as Record<string, unknown>)['preventContinuation'];
+                if (_preventCont === true || _postResult.stopReason) {
+                  _postUsePreventContinuation = true;
+                  onChunk(`\n🛑 PostToolUse hook requested stop (hook_stopped_continuation)\n`);
+                }
               }
             } catch { /* non-fatal */ }
+            // B21: propagate prevent-continuation flag to outer runCall context
+            if (_postUsePreventContinuation) {
+              _terminalReason = 'hook_stopped';
+              _earlyExit = true;
+            }
             // ── ToolUseSummary: async compress large results (Round 3) ─────
             // B18 upgrade: fire-and-forget into Promise, awaited at next iteration start.
             if (finalResultStr.length >= TOOL_USE_SUMMARY_THRESHOLD && PARALLELIZABLE_TOOLS.has(call.name)) {
@@ -1375,6 +1398,13 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
 
         history.push(...toolResults);
 
+        // B21: hook_stopped_continuation — 工具结果收集完毕后检查 PostToolUse 终止标志
+        // Mirrors claude-code toolHooks.ts L121-130 + query.ts hook_stopped_continuation handling.
+        // PostToolUse hook 请求停止时，结果已注入 history（让 LLM 知道工具执行了），但主循环终止。
+        if (_earlyExit && _terminalReason === 'hook_stopped') {
+          break; // B21: hook_stopped_continuation 生效
+        }
+
         // A18: Apply contextModifiers from StreamingToolExecutor (claude-code parity)
         // Tools like EnterPlanMode/ExitPlanMode/WorktreeEnter can modify session state
         // by returning a contextModifier in their ToolRegistration.
@@ -1417,13 +1447,21 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     // B13: 如果提前退出（pending_confirmation），立即结束外层循环
     if (_earlyExit) break;
 
-    if (iteration >= MAX_ITERATIONS) {
-      onChunk(
-        `\n⚠️  Reached iteration limit (${MAX_ITERATIONS} rounds).\n` +
-        `   Type /continue (or just press Enter after typing your next message)\n` +
-        `   to keep going from where the agent left off.\n` +
-        `   To raise the limit: AGENT_MAX_ITERATIONS=100 uagent\n`,
-      );
+    if (iteration >= _effectiveMaxTurns) {
+      // C21: max_turns_reached — 外部注入 maxTurns 超出时发出结构化通知
+      // Mirrors claude-code query.ts L1705-1711: yield createAttachmentMessage({ type: 'max_turns_reached' })
+      if (_externalMaxTurns !== undefined) {
+        // 外部注入的 maxTurns — 触发 max_turns_reached 事件（client 可捕获）
+        onChunk(`\n⚠️  Max turns limit reached (${_externalMaxTurns} turns).\n`);
+        _terminalReason = 'max_turns';
+      } else {
+        onChunk(
+          `\n⚠️  Reached iteration limit (${_effectiveMaxTurns} rounds).\n` +
+          `   Type /continue (or just press Enter after typing your next message)\n` +
+          `   to keep going from where the agent left off.\n` +
+          `   To raise the limit: AGENT_MAX_ITERATIONS=100 uagent\n`,
+        );
+      }
       const last = history[history.length - 1];
       if (last?.role === 'tool') {
         history.push({ role: 'assistant', content: '[Iteration limit reached]' });
@@ -1455,7 +1493,23 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   } // end outer while
 
   // B13: 返回结构化终止结果（claude-code Terminal 对标）
-  if (iteration >= MAX_ITERATIONS) _terminalReason = 'max_iterations';
+  if (iteration >= _effectiveMaxTurns && _terminalReason === 'completed') {
+    _terminalReason = _externalMaxTurns !== undefined ? 'max_turns' : 'max_iterations';
+  }
+  // E21: executeNotificationHooks — 触发 notification hook（claude-code executeNotificationHooks 对标）
+  // 在 agent 正常完成时向用户/脚本发送结构化通知。
+  // Mirrors claude-code src/utils/hooks.ts executeNotificationHooks() L3570-3592.
+  if (_terminalReason === 'completed') {
+    try {
+      const { executeNotificationHooks } = await import('../hooks.js');
+      await executeNotificationHooks({
+        notificationType: 'agent_complete',
+        message: 'Agent completed successfully',
+        title: domain,
+      });
+    } catch { /* notification hooks are non-fatal */ }
+  }
+
   const _result: StreamLoopResult = {
     reason: _terminalReason,
     iterations: iteration,

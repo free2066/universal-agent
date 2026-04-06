@@ -119,6 +119,7 @@ export interface PendingConfirmation {
 export type TerminalReason =
   | 'completed'            // LLM 不再调用工具，正常完成
   | 'max_iterations'       // 达到最大迭代次数
+  | 'max_turns'            // C21: 外部注入 maxTurns 超出 (claude-code query.ts parity)
   | 'blocking_limit'       // context 已满（blocking 状态）
   | 'hook_stopped'         // hook 返回 stop
   | 'hook_blocked'         // C17: user_prompt_submit hook 阻止了提交

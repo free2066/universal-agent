@@ -1178,3 +1178,48 @@ export function maybeFireCwdChanged(newCwd: string): void {
     }).catch(() => { /* non-fatal */ });
   }
 }
+
+// ── E21: executeNotificationHooks ─────────────────────────────────────────────
+//
+// Mirrors claude-code hooks.ts executeNotificationHooks() (L3570-3592).
+// Fires 'notification' hook event with structured context including notificationType
+// for matcher filtering (e.g. 'elicitation_complete', 'agent_complete').
+// Non-blocking: errors are swallowed so notification hooks never crash agent flow.
+
+export interface NotificationHookContext {
+  /** Human-readable notification message */
+  message: string;
+  /** Optional title for desktop notifications */
+  title?: string;
+  /**
+   * Notification type for matcher filtering.
+   * Mirrors claude-code NotificationHookInput.notification_type.
+   * Examples: 'agent_complete', 'elicitation_complete', 'elicitation_response'
+   */
+  notificationType: string;
+}
+
+/**
+ * E21: executeNotificationHooks — trigger 'notification' hooks with structured context.
+ * Mirrors claude-code src/utils/hooks.ts executeNotificationHooks() (L3570-3592).
+ *
+ * Usage:
+ *   await executeNotificationHooks({ message: 'Agent finished', notificationType: 'agent_complete' });
+ */
+export async function executeNotificationHooks(ctx: NotificationHookContext): Promise<void> {
+  try {
+    const runner = getHookRunner(process.cwd());
+    if (!runner.hasHooksFor('notification')) return;
+    await runner.run({
+      event: 'notification',
+      notificationMessage: ctx.message,
+      // title and notificationType are passed as extra fields for hook scripts via env vars
+      cwd: process.cwd(),
+      // E21: additional fields for hook matcher / shell env injection
+      ...({
+        notificationType: ctx.notificationType,
+        notificationTitle: ctx.title,
+      } as Partial<HookContext>),
+    });
+  } catch { /* notification hooks are non-fatal */ }
+}
