@@ -70,44 +70,112 @@ export async function handleClear(ctx: SlashContext): Promise<true> {
 export async function handleResume(input: string, ctx: SlashContext): Promise<true> {
   const { agent, rl, loadLastSnapshot, saveSnapshot: _save, formatAge } = ctx;
   const parts = input.split(/\s+/);
-  const sessionId = parts[1];
-  if (sessionId) {
-    const { loadSnapshot: _loadSnap } = await import('../../../core/memory/session-snapshot.js');
-    const snap = _loadSnap(sessionId);
-    if (snap && snap.messages.length >= 2) {
-      agent.setHistory(snap.messages as never);
-      process.stdout.write(chalk.green(`  ✓ Restored session "${sessionId}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n');
-    } else {
-      const { readdirSync: _rds, statSync: _ss, existsSync: _es } = await import('fs');
-      const { resolve: _res, join: _jn } = await import('path');
-      const sessDir = _res(process.env.HOME ?? '~', '.uagent', 'sessions');
-      if (_es(sessDir)) {
-        const files = _rds(sessDir).filter(f => f.endsWith('.json'));
-        if (files.length) {
-          console.log(chalk.yellow('\n💾 Available sessions:\n'));
-          const sorted = files
-            .map(f => ({ f, mtime: _ss(_jn(sessDir, f)).mtimeMs }))
-            .sort((a, b) => b.mtime - a.mtime)
-            .slice(0, 10);
-          for (const { f, mtime } of sorted) {
-            const id = f.replace('.json', '');
-            console.log(`  ${chalk.cyan(id.padEnd(30))} ${chalk.gray(new Date(mtime).toLocaleString('zh-CN', { hour12: false }))}`);
-          }
-          console.log(chalk.gray('\n  Use: /resume <session-id>\n'));
-        } else {
-          process.stdout.write(chalk.dim(`  Session "${sessionId}" not found.\n\n`));
+  // /resume [sessionId-or-keyword] [--fork]
+  const forkFlag = parts.includes('--fork');
+  const rawArg = parts.filter((p) => !p.startsWith('--') && p !== '/resume')[0];
+  const sessionIdOrKeyword = rawArg;
+
+  if (sessionIdOrKeyword) {
+    const { loadSnapshot: _loadSnap, listAllSnapshots: _listAll, searchSnapshots: _search } = await import('../../../core/memory/session-snapshot.js');
+
+    // Step 1: Try exact sessionId match
+    let snap = _loadSnap(sessionIdOrKeyword);
+
+    // Step 2: Try title match (exact then prefix)
+    if (!snap) {
+      const allSnaps = _listAll(50);
+      const titleMatch = allSnaps.find(
+        (s) => s.displayTitle?.toLowerCase() === sessionIdOrKeyword.toLowerCase()
+      ) ?? allSnaps.find(
+        (s) => s.displayTitle?.toLowerCase().startsWith(sessionIdOrKeyword.toLowerCase())
+      );
+      if (titleMatch) snap = _loadSnap(titleMatch.sessionId);
+    }
+
+    // Step 3: Content keyword search (claude-code parity — UUID → title → content)
+    if (!snap) {
+      const searchResults = _search(sessionIdOrKeyword, 10);
+      if (searchResults.length === 1) {
+        // Single result — restore directly
+        snap = _loadSnap(searchResults[0]!.sessionId);
+        if (snap) {
+          process.stdout.write(
+            chalk.gray(`  (Keyword match in session from ${formatAge(snap.savedAt)})\n`)
+          );
         }
+      } else if (searchResults.length > 1) {
+        // Multiple matches — show list for user to pick from
+        console.log(chalk.yellow(`\n🔍 Found ${searchResults.length} sessions matching "${sessionIdOrKeyword}":\n`));
+        for (let i = 0; i < searchResults.length && i < 8; i++) {
+          const r = searchResults[i]!;
+          const age = formatAge(r.savedAt);
+          console.log(
+            `  ${chalk.cyan((i + 1).toString().padEnd(3))} ${chalk.white(r.sessionId.slice(0, 18).padEnd(20))} ` +
+            `${chalk.gray(age.padEnd(12))} ${chalk.dim(r.snippet.slice(0, 60))}`
+          );
+        }
+        console.log(chalk.gray('\n  Use: /resume <session-id> to restore a specific session\n'));
+        return done(rl);
+      }
+    }
+
+    if (snap && snap.messages.length >= 2) {
+      // --fork: create a new session ID instead of resuming the original
+      if (forkFlag) {
+        const newId = `fork-${Date.now()}`;
+        _save(newId, snap.messages);
+        agent.setHistory(snap.messages as never);
+        (agent as unknown as Record<string, unknown>).sessionId = newId;
+        process.stdout.write(
+          chalk.green(`  ✓ Forked session "${sessionIdOrKeyword}" → "${newId}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n'
+        );
       } else {
-        process.stdout.write(chalk.dim(`  Session "${sessionId}" not found.\n\n`));
+        agent.setHistory(snap.messages as never);
+        process.stdout.write(
+          chalk.green(`  ✓ Restored session "${sessionIdOrKeyword}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n'
+        );
+      }
+    } else {
+      // Nothing found — show available sessions list
+      const { listAllSnapshots: _list } = await import('../../../core/memory/session-snapshot.js');
+      const sessions = _list(12);
+      if (sessions.length) {
+        console.log(chalk.yellow('\n💾 Available sessions:\n'));
+        for (const s of sessions) {
+          const titlePart = s.displayTitle ? chalk.white(s.displayTitle.slice(0, 25).padEnd(26)) : chalk.dim('(untitled)'.padEnd(26));
+          console.log(
+            `  ${chalk.cyan(s.sessionId.slice(0, 18).padEnd(20))} ${titlePart} ` +
+            `${chalk.gray(formatAge(s.savedAt).padEnd(12))} ${chalk.dim(s.messageCount + ' msgs')}`
+          );
+        }
+        console.log(chalk.gray('\n  Use: /resume <session-id> or /resume <keyword>\n'));
+      } else {
+        process.stdout.write(chalk.dim(`  Session "${sessionIdOrKeyword}" not found.\n\n`));
       }
     }
   } else {
+    // No argument: restore last session or show picker
     const snap = loadLastSnapshot();
     if (snap && snap.messages.length >= 2) {
       agent.setHistory(snap.messages as never);
       process.stdout.write(chalk.green(`  ✓ Restored session from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n\n');
     } else {
-      process.stdout.write(chalk.dim('  No saved session found.') + '\n\n');
+      // Show recent sessions list as fallback (claude-code interactive picker equivalent)
+      const { listAllSnapshots: _list } = await import('../../../core/memory/session-snapshot.js');
+      const sessions = _list(10);
+      if (sessions.length) {
+        console.log(chalk.yellow('\n💾 Recent sessions (use /resume <session-id> to restore):\n'));
+        for (const s of sessions) {
+          const titlePart = s.displayTitle ? chalk.white(s.displayTitle.slice(0, 30).padEnd(31)) : chalk.dim('(untitled)'.padEnd(31));
+          console.log(
+            `  ${chalk.cyan(s.sessionId.slice(0, 20).padEnd(22))} ${titlePart} ` +
+            `${chalk.gray(formatAge(s.savedAt).padEnd(12))} ${chalk.dim(s.messageCount + ' msgs')}`
+          );
+        }
+        console.log(chalk.gray('\n  Tip: /resume <keyword> searches session content\n'));
+      } else {
+        process.stdout.write(chalk.dim('  No saved sessions found.\n\n'));
+      }
     }
   }
   return done(rl);

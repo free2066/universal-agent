@@ -62,7 +62,8 @@ program
   .option('--vision-model <model>', 'Vision-capable model for image tasks')
   .option('-q, --quiet', 'Non-interactive: print response and exit (pipe-friendly)')
   .option('-c, --continue', 'Continue from last session snapshot')
-  .option('-r, --resume <sessionId>', 'Resume a specific session by ID (see: uagent log)')
+  .option('-r, --resume <sessionIdOrKeyword>', 'Resume a session by ID, title, or content keyword (see: uagent log)')
+  .option('--fork-session', 'When resuming, create a new session ID instead of reusing the original (fork the conversation)')
   .option('--safe', 'Enable safe mode (blocks dangerous commands)', false)
   .option('-v, --verbose', 'Show tool call details')
   .option('--system-prompt <text>', 'Override system prompt')
@@ -79,7 +80,7 @@ program
   .option('--ui <mode>', 'UI mode: ink (default, React/Ink terminal UI) | readline (classic readline REPL)', 'ink')
   .action(async (promptArg: string | undefined, options: {
     domain: string; model?: string; planModel?: string; smallModel?: string; visionModel?: string;
-    quiet?: boolean; continue?: boolean; resume?: string;
+    quiet?: boolean; continue?: boolean; resume?: string; forkSession?: boolean;
     safe: boolean; verbose?: boolean; systemPrompt?: string;
     appendSystemPrompt?: string; outputStyle?: string; thinking?: string; outputFormat?: string;
     language?: string; cwd?: string; approvalMode?: string; tools?: string;
@@ -239,6 +240,7 @@ program
         initialPrompt: promptArg,
         continueSession: options.continue ?? false,
         resumeSessionId: options.resume,
+        forkSession: options.forkSession ?? false,
         inferProviderEnvKey,
         notification: cfg.notification,
       });
@@ -247,6 +249,7 @@ program
         initialPrompt: promptArg,
         continueSession: options.continue ?? false,
         resumeSessionId: options.resume,
+        forkSession: options.forkSession ?? false,
         inferProviderEnvKey,
         notification: cfg.notification,
       });

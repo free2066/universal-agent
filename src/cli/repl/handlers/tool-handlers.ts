@@ -552,3 +552,84 @@ export async function handleThinkback(input: string, ctx: SlashContext): Promise
   console.log('\n');
   return done(rl);
 }
+
+// ── /permissions — Permission rule management (Round 4: claude-code parity) ──
+
+/**
+ * /permissions             — list all rules
+ * /permissions allow <pat> — add an alwaysAllow rule (project-level)
+ * /permissions deny <pat>  — add an alwaysDeny rule (project-level)
+ * /permissions remove allow <pat> — remove an alwaysAllow rule
+ * /permissions remove deny <pat>  — remove an alwaysDeny rule
+ *
+ * Pattern examples:
+ *   Bash           — exact tool name
+ *   Bash(npm test) — tool + argument glob
+ *   Write(src/**)  — Write tool on src/** paths
+ *   *              — all tools
+ */
+export async function handlePermissions(input: string, ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  const parts = input.trim().split(/\s+/);
+  // parts[0] = '/permissions'
+
+  const { getPermissionManager } = await import('../../../core/agent/permission-manager.js');
+  const mgr = getPermissionManager(process.cwd());
+
+  // /permissions (no sub-command) — list
+  if (parts.length === 1) {
+    console.log('\n' + mgr.formatRules() + '\n');
+    return done(rl);
+  }
+
+  const sub = parts[1]?.toLowerCase();
+
+  // /permissions allow <pattern>
+  if (sub === 'allow' && parts[2]) {
+    const pattern = parts.slice(2).join(' ');
+    mgr.addRule('allow', pattern, 'project');
+    console.log(chalk.green(`\n✓ Added alwaysAllow rule: "${pattern}" (project scope)\n`));
+    return done(rl);
+  }
+
+  // /permissions deny <pattern>
+  if (sub === 'deny' && parts[2]) {
+    const pattern = parts.slice(2).join(' ');
+    mgr.addRule('deny', pattern, 'project');
+    console.log(chalk.yellow(`\n✓ Added alwaysDeny rule: "${pattern}" (project scope)\n`));
+    return done(rl);
+  }
+
+  // /permissions remove allow <pattern>
+  // /permissions remove deny <pattern>
+  if (sub === 'remove' && parts[2] && parts[3]) {
+    const type = parts[2].toLowerCase() === 'allow' ? 'allow' : 'deny';
+    const pattern = parts.slice(3).join(' ');
+    const removed = mgr.removeRule(type, pattern);
+    if (removed) {
+      console.log(chalk.green(`\n✓ Removed ${type} rule: "${pattern}"\n`));
+    } else {
+      console.log(chalk.red(`\n✗ Rule not found: ${type} "${pattern}"\n`));
+    }
+    return done(rl);
+  }
+
+  // Help
+  console.log([
+    '',
+    chalk.yellow('Usage:'),
+    '  /permissions                      — list all rules',
+    '  /permissions allow <pattern>      — add alwaysAllow rule',
+    '  /permissions deny <pattern>       — add alwaysDeny rule',
+    '  /permissions remove allow <pat>   — remove rule',
+    '  /permissions remove deny <pat>    — remove rule',
+    '',
+    chalk.yellow('Pattern examples:'),
+    '  Bash                   exact tool name',
+    '  Bash(npm test)         tool + argument match',
+    '  Write(src/**)          Write on src/** paths',
+    '  *                      all tools (use carefully!)',
+    '',
+  ].join('\n'));
+  return done(rl);
+}

@@ -39,6 +39,7 @@ import { backgroundManager } from '../background-manager.js';
 import { todoManager } from '../tools/productivity/todo-tool.js';
 import { getTeammateManager } from '../teammate-manager.js';
 import { sessionMetrics } from '../metrics.js';
+import { getPermissionManager } from './permission-manager.js';
 
 const log = createLogger('agent-loop');
 
@@ -336,6 +337,8 @@ export interface RunStreamOptions {
   router: DomainRouter;
   getLLM: () => LLMClient;
   fallbackChain: ModelFallbackChain | null;
+  /** Permission mode: 'default' | 'autoEdit' | 'yolo' (Round 4, claude-code parity) */
+  approvalMode?: import('./permission-manager.js').ApprovalMode;
 }
 
 export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
@@ -344,6 +347,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
     history, pendingConfirmationRef, uncertainItems,
     systemPromptOverride, appendSystemPrompt, thinkingLevel,
     currentDomain, verbose, registry, router, getLLM, fallbackChain,
+    approvalMode = 'default',
   } = opts;
 
   // ── Pending confirmation check ─────────────────────────────────────────────
@@ -705,6 +709,17 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           const toolStartMs = Date.now();
           await triggerHook(createHookEvent('tool', 'before', { callId, toolName: call.name, args: call.arguments }));
 
+          // ── ApprovalMode enforcement (Round 4: claude-code parity) ──────────
+          // Check permission rules before hooks. In yolo mode, bypass entirely.
+          // In autoEdit mode, write tools that are not in alwaysAllow still prompt.
+          const permMgr = getPermissionManager(process.cwd());
+          const permDecision = permMgr.decide(call.name, call.arguments as Record<string, unknown>, approvalMode);
+          if (permDecision === 'deny') {
+            await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: 'Denied by permission rule', success: false }));
+            events?.onToolEnd?.(call.name, false, Date.now() - toolStartMs);
+            return { role: 'tool' as const, toolCallId: call.id, content: `[Permission denied] Tool "${call.name}" is blocked by an alwaysDeny rule.` };
+          }
+
           // ── PreToolUse hook: block/modify tool input (inspired by claude-code) ──
           // Hooks may: (1) block the tool by outputting JSON with proceed=false or exit 2
           //            (2) modify tool arguments via updatedInput in JSON stdout
@@ -820,7 +835,19 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
             }
 
             // ── Dry-run confirmation gate (kstack article #15313) ──────────────
+            // In yolo mode (approvalMode='yolo'), skip the confirmation gate entirely.
             if (toolResult.content.startsWith('__CONFIRM_REQUIRED__:')) {
+              // yolo mode: skip user confirmation — execute directly
+              if (approvalMode === 'yolo') {
+                // Strip the sentinel prefix and continue without prompting
+                const firstNewline = toolResult.content.indexOf('\n');
+                const dangerousCommand = firstNewline > -1
+                  ? toolResult.content.slice(firstNewline + 1).trim()
+                  : '';
+                onChunk(`\n⚡ [yolo mode] Auto-approving command: \`${dangerousCommand.slice(0, 80)}\`\n`);
+                toolResults.push({ ...toolResult, content: `[Auto-approved by yolo mode] ${toolResult.content.slice('__CONFIRM_REQUIRED__:'.length)}` });
+                continue;
+              }
               const firstNewline = toolResult.content.indexOf('\n');
               const header = toolResult.content.slice('__CONFIRM_REQUIRED__:'.length, firstNewline > -1 ? firstNewline : undefined);
               const dangerousCommand = firstNewline > -1 ? toolResult.content.slice(firstNewline + 1).trim() : '';

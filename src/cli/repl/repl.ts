@@ -76,8 +76,10 @@ export interface ReplOptions {
 export interface ReplExtra {
   initialPrompt?: string;
   continueSession?: boolean;
-  /** Resume a specific session by ID — takes precedence over continueSession */
+  /** Resume a specific session by ID, title, or content keyword */
   resumeSessionId?: string;
+  /** When resuming, fork to a new session ID instead of reusing the original (Round 4: claude-code --fork-session parity) */
+  forkSession?: boolean;
   inferProviderEnvKey?: (msg: string) => string | undefined;
   /** notification config value — if set, trigger notification on session end */
   notification?: boolean | string;
@@ -404,13 +406,47 @@ export async function runREPL(
   const lastSnap = loadLastSnapshot();
 
   if (extra.resumeSessionId) {
-    // -r / --resume <sessionId>: restore a specific session by ID
-    const snap = loadSnapshot(extra.resumeSessionId);
+    // -r / --resume <keyword|sessionId>: restore a specific session (claude-code parity)
+    // Priority: exact sessionId → title match → content keyword search
+    const { loadSnapshot, listAllSnapshots, searchSnapshots } = await import('../../core/memory/session-snapshot.js');
+    let snap = loadSnapshot(extra.resumeSessionId);
+
+    // Title match fallback
+    if (!snap) {
+      const allSnaps = listAllSnapshots(50);
+      const keyword = extra.resumeSessionId.toLowerCase();
+      const titleMatch = allSnaps.find((s) => s.displayTitle?.toLowerCase() === keyword)
+        ?? allSnaps.find((s) => s.displayTitle?.toLowerCase().startsWith(keyword));
+      if (titleMatch) snap = loadSnapshot(titleMatch.sessionId);
+    }
+
+    // Content keyword search fallback
+    if (!snap) {
+      const results = searchSnapshots(extra.resumeSessionId, 5);
+      if (results.length > 0) {
+        snap = loadSnapshot(results[0]!.sessionId);
+        if (snap) {
+          process.stdout.write(chalk.gray(`  (Matched keyword in session from ${formatAge(snap.savedAt)})\n`));
+        }
+      }
+    }
+
     if (snap && snap.messages.length >= 2) {
-      agent.setHistory(snap.messages);
-      process.stdout.write(
-        chalk.green(`  ✓ Resumed session ${extra.resumeSessionId} from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n',
-      );
+      // --fork-session: create a new session ID for this resumed conversation
+      if (extra.forkSession) {
+        const { saveSnapshot: _saveSnap } = await import('../../core/memory/session-snapshot.js');
+        const forkId = `fork-${Date.now()}`;
+        _saveSnap(forkId, snap.messages);
+        agent.setHistory(snap.messages);
+        process.stdout.write(
+          chalk.green(`  ✓ Forked session "${extra.resumeSessionId}" → "${forkId}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n',
+        );
+      } else {
+        agent.setHistory(snap.messages);
+        process.stdout.write(
+          chalk.green(`  ✓ Resumed session "${extra.resumeSessionId}" from ${formatAge(snap.savedAt)} (${snap.messages.length} messages)`) + '\n',
+        );
+      }
     } else {
       process.stdout.write(
         chalk.yellow(`  ⚠ Session "${extra.resumeSessionId}" not found — starting fresh`) + '\n',

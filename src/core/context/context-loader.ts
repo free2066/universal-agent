@@ -1,8 +1,123 @@
 import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from 'fs';
-import { resolve, join, dirname } from 'path';
+import { resolve, join, dirname, isAbsolute } from 'path';
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
 import { getSkillLoader } from '../skills/skill-loader.js';
+
+// ── @include directive parser (Round 4: claude-code claudemd.ts parity) ─────────────────
+//
+// Supports:
+//   @./relative/path.md       — relative to the including file's directory
+//   @~/home/path.md           — relative to user's home directory
+//   @/absolute/path.md        — absolute path
+//
+// Maximum recursion depth: MAX_INCLUDE_DEPTH (mirrors claude-code's value of 5)
+
+const MAX_INCLUDE_DEPTH = 5;
+
+/**
+ * Parse YAML-like frontmatter from a Markdown file.
+ * Returns { body, paths } where paths is an optional glob list from `paths:` key.
+ *
+ * Example frontmatter:
+ * ```
+ * ---
+ * paths:
+ *   - src/**\/*.ts
+ *   - tests/**
+ * ---
+ * ```
+ */
+function parseFrontmatter(content: string): { body: string; paths: string[] | null } {
+  if (!content.startsWith('---\n') && !content.startsWith('---\r\n')) {
+    return { body: content, paths: null };
+  }
+  const endIdx = content.indexOf('\n---', 4);
+  if (endIdx === -1) return { body: content, paths: null };
+
+  const fm = content.slice(4, endIdx);
+  const body = content.slice(endIdx + 4).replace(/^\r?\n/, '');
+
+  // Parse `paths:` list from YAML frontmatter
+  const pathsMatch = fm.match(/^paths:\s*\n((?:\s+-\s+.+\n?)*)/m);
+  if (!pathsMatch) return { body, paths: null };
+
+  const pathLines = pathsMatch[1]!
+    .split('\n')
+    .map((l) => l.replace(/^\s*-\s+/, '').trim())
+    .filter(Boolean);
+
+  return { body, paths: pathLines.length > 0 ? pathLines : null };
+}
+
+/**
+ * Check whether a given file path matches any of the scope patterns.
+ * Uses simple glob matching (same approach as permission-manager.ts).
+ */
+function matchesPathScope(filePath: string, scopePatterns: string[]): boolean {
+  if (scopePatterns.length === 0) return true; // no scope = always inject
+  for (const pattern of scopePatterns) {
+    const regexStr = pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*\*/g, '__DSTAR__')
+      .replace(/\*/g, '[^/]*')
+      .replace(/__DSTAR__/g, '.*');
+    if (new RegExp(`^${regexStr}$`).test(filePath)) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve an @include path relative to the including file's directory.
+ * Returns the resolved absolute path, or null if invalid.
+ */
+function resolveIncludePath(includePath: string, fromDir: string): string | null {
+  const cleaned = includePath.trim();
+  if (cleaned.startsWith('~/')) {
+    return join(homedir(), cleaned.slice(2));
+  }
+  if (isAbsolute(cleaned)) {
+    return cleaned;
+  }
+  // Relative path — resolve from the including file's directory
+  return resolve(fromDir, cleaned);
+}
+
+/**
+ * Process @include directives in a markdown file's content.
+ * Recursively expands included files up to MAX_INCLUDE_DEPTH.
+ *
+ * @param content   Raw file content (may contain @include lines)
+ * @param fileDir   Directory of the file being processed (for relative paths)
+ * @param depth     Current recursion depth (starts at 0)
+ * @param visited   Set of already-included paths (prevents cycles)
+ * @returns         Content with all @include directives expanded
+ */
+function expandIncludes(
+  content: string,
+  fileDir: string,
+  depth: number,
+  visited: Set<string>,
+): string {
+  if (depth >= MAX_INCLUDE_DEPTH) return content;
+
+  return content.replace(/^@([^\n]+)$/gm, (_match, includePathRaw: string) => {
+    const includePath = resolveIncludePath(includePathRaw.trim(), fileDir);
+    if (!includePath) return `<!-- @include: invalid path "${includePathRaw}" -->`;
+    if (visited.has(includePath)) return `<!-- @include: skipped (cycle) "${includePath}" -->`;
+    if (!existsSync(includePath)) return `<!-- @include: not found "${includePath}" -->`;
+
+    try {
+      const includeContent = readFileSync(includePath, 'utf-8');
+      visited.add(includePath);
+      // Recursively expand includes in the included file
+      const expanded = expandIncludes(includeContent, dirname(includePath), depth + 1, visited);
+      return `<!-- @include: ${includePath} -->\n${expanded.trim()}`;
+    } catch {
+      return `<!-- @include: error reading "${includePath}" -->`;
+    }
+  });
+}
 
 export interface AgentsContext {
   instructions: string;
@@ -12,7 +127,7 @@ export interface AgentsContext {
 
 const MAX_BYTES = parseInt(process.env.AGENT_PROJECT_DOC_MAX_BYTES || String(32 * 1024));
 
-export function loadProjectContext(startDir?: string): AgentsContext {
+export function loadProjectContext(startDir?: string, currentFilePath?: string): AgentsContext {
   const cwd = startDir || process.cwd();
   const gitRoot = findGitRoot(cwd);
   const searchRoot = gitRoot || cwd;
@@ -21,6 +136,9 @@ export function loadProjectContext(startDir?: string): AgentsContext {
   const sources: string[] = [];
   const parts: string[] = [];
   let totalBytes = 0;
+
+  // Shared visited set for @include cycle prevention across all loaded files
+  const includeVisited = new Set<string>();
 
   for (const dir of dirs) {
     const candidates = [
@@ -34,9 +152,33 @@ export function loadProjectContext(startDir?: string): AgentsContext {
       try {
         const stat = statSync(filePath);
         if (totalBytes + stat.size > MAX_BYTES) break;
-        const content = readFileSync(filePath, 'utf-8').trim();
-        if (content) {
-          parts.push(`<!-- From: ${filePath} -->\n${content}`);
+        const rawContent = readFileSync(filePath, 'utf-8').trim();
+        if (!rawContent) { break; }
+
+        // ── @include expansion (Round 4: claude-code @include parity) ──────────
+        includeVisited.add(filePath);
+        const expandedContent = expandIncludes(rawContent, dir, 0, includeVisited);
+
+        // ── YAML frontmatter paths: scope filter (Round 4: claude-code parity) ──
+        const { body, paths: scopePaths } = parseFrontmatter(expandedContent);
+
+        // If the file has a paths: scope filter and we know the current file being edited,
+        // only inject this rule block if the current file matches one of the scope patterns.
+        if (scopePaths && currentFilePath) {
+          // Normalize to relative path for matching
+          const relPath = currentFilePath.startsWith('/') && cwd
+            ? currentFilePath.startsWith(cwd + '/')
+              ? currentFilePath.slice(cwd.length + 1)
+              : currentFilePath
+            : currentFilePath;
+          if (!matchesPathScope(relPath, scopePaths)) {
+            break; // Scope doesn't match — skip this file's instructions
+          }
+        }
+
+        const contentToInject = scopePaths ? body : expandedContent;
+        if (contentToInject.trim()) {
+          parts.push(`<!-- From: ${filePath} -->\n${contentToInject.trim()}`);
           sources.push(filePath);
           totalBytes += stat.size;
         }
@@ -200,8 +342,8 @@ You MUST follow these rules at all times:
    - Example: "Analyze project structure" AND "Audit dependencies" → run in parallel, not serial
 ---`;
 
-export function buildSystemPromptWithContext(basePrompt: string, startDir?: string): string {
-  const ctx = loadProjectContext(startDir);
+export function buildSystemPromptWithContext(basePrompt: string, startDir?: string, currentFilePath?: string): string {
+  const ctx = loadProjectContext(startDir, currentFilePath);
   const gitStatus = getGitStatus(startDir);
   const rules = loadRules(startDir);
 

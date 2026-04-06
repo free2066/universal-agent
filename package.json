@@ -1,6 +1,6 @@
 {
   "name": "universal-agent",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "🤖 A universal multi-domain AI Agent CLI - supports data analysis, programming, customer service and more",
   "type": "module",
   "bin": {

@@ -27,6 +27,8 @@ export interface InkReplExtra {
   initialPrompt?: string;
   continueSession?: boolean;
   resumeSessionId?: string;
+  /** When resuming, fork to a new session ID instead of reusing the original */
+  forkSession?: boolean;
   inferProviderEnvKey?: (msg: string) => string | undefined;
   notification?: boolean | string;
 }

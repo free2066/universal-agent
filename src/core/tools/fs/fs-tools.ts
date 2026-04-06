@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import { createInterface } from 'readline';
 import type { ToolRegistration } from '../../../models/types.js';
 import { mmrRerankGrepResults } from '../../memory/mmr.js';
+import { checkExtendedBashSecurity, formatBashSecurityViolations } from '../../../utils/bash-security.js';
 
 // ─── Path Safety Helper ──────────────────────────────────────────────────────
 /**
@@ -597,6 +598,23 @@ export const bashTool: ToolRegistration = {
       for (const { pat, label } of softBlock) {
         if (pat.test(command)) {
           return `__CONFIRM_REQUIRED__:${label}\n${command}`;
+        }
+      }
+
+      // ── Extended security checks (Round 4: claude-code bashSecurity.ts parity) ────────────
+      // Checks: IFS injection, Zsh dangerous cmds, /proc/environ, command substitution depth,
+      //         backslash-escaped operators, comment-quote desync, JQ injection, dangerous vars.
+      const extViolations = checkExtendedBashSecurity(command);
+      if (extViolations.length > 0) {
+        const hardViolations = extViolations.filter((v) => v.isHard);
+        const softViolations = extViolations.filter((v) => !v.isHard);
+        if (hardViolations.length > 0) {
+          const msgs = formatBashSecurityViolations(hardViolations);
+          return `Blocked in safe mode: command failed security checks.\n${msgs}`;
+        }
+        if (softViolations.length > 0) {
+          const msgs = formatBashSecurityViolations(softViolations);
+          return `__CONFIRM_REQUIRED__:security warning — ${softViolations[0]!.message}\n${command}\n\nAll warnings:\n${msgs}`;
         }
       }
     }
