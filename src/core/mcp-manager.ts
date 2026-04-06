@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { spawn } from 'child_process';
 import type { ToolDefinition, ToolRegistration } from '../models/types.js';
+import { registerElicitationHandler } from './mcp-elicitation.js';
 
 /**
  * AbortSignal.timeout() polyfill for Node.js < 17.3.
@@ -15,6 +16,16 @@ function timeoutSignal(ms: number): AbortSignal {
   return ctrl.signal;
 }
 
+// ── F14: MCPScope — 配置来源层级（claude-code ConfigScopeSchema 对标）──────────
+//
+// 优先级：local > project > user > global
+// local:   仅本机，来自 .mcp.local.json（gitignore 管理，不进 VCS）
+// project: 团队共享，来自 .mcp.json（进 VCS）
+// user:    用户全局，来自 ~/.uagent/mcp.json
+// global:  平台/企业下发（通常通过环境变量或系统配置）
+
+export type MCPScope = 'local' | 'project' | 'user' | 'global';
+
 export interface MCPServer {
   name: string;
   type: 'stdio' | 'sse' | 'http' | 'ws';
@@ -24,6 +35,11 @@ export interface MCPServer {
   env?: Record<string, string>;
   enabled: boolean;
   description?: string;  // human-readable note stored in config
+  /**
+   * F14: scope — 配置来源层级（local/project/user/global）
+   * 由 loadMCPConfig() 自动填充，手动配置文件无需指定。
+   */
+  scope?: MCPScope;
   /** OAuth config for servers that require authentication (Batch 3) */
   oauth?: {
     authorizationUrl: string;
@@ -36,6 +52,60 @@ export interface MCPServer {
 
 export interface MCPConfig {
   servers: Record<string, MCPServer>;
+}
+
+// ── E14: MCP Session 过期检测（claude-code McpSessionExpiredError -32001 对标）──
+
+/** MCP JSON-RPC error code for session expiry */
+const MCP_SESSION_EXPIRED_CODE = -32001;
+
+/**
+ * E14: 判断是否是 MCP session 过期错误（-32001 或 message pattern）
+ */
+function isMcpSessionExpiredError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as Record<string, unknown>;
+  if (e.code === MCP_SESSION_EXPIRED_CODE) return true;
+  const msg = String(e.message ?? '');
+  return /session.{0,20}(expired|invalid|not\s+found)|-32001/i.test(msg);
+}
+
+/**
+ * F14: loadMCPConfig — 按 scope 分层读取并合并 MCP 配置
+ *
+ * 读取顺序（低优先 → 高优先）：global → user → project → local
+ * 后读取的 scope 覆盖前面的同名服务器配置。
+ */
+export function loadMCPConfig(cwd = process.cwd()): Record<string, MCPServer> {
+  const configs: Array<{ data: Record<string, Omit<MCPServer, 'name'>>; scope: MCPScope }> = [];
+
+  const readJson = (p: string): Record<string, Omit<MCPServer, 'name'>> => {
+    try {
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as { servers?: Record<string, Omit<MCPServer, 'name'>> };
+      return raw.servers ?? {};
+    } catch { return {}; }
+  };
+
+  // User-global (~/.uagent/mcp.json)
+  const userPath = resolve(process.env.HOME ?? '~', '.uagent', 'mcp.json');
+  if (existsSync(userPath)) configs.push({ data: readJson(userPath), scope: 'user' });
+
+  // Project-level (.mcp.json — goes into VCS)
+  const projectPath = join(cwd, '.mcp.json');
+  if (existsSync(projectPath)) configs.push({ data: readJson(projectPath), scope: 'project' });
+
+  // Local-level (.mcp.local.json — gitignored)
+  const localPath = join(cwd, '.mcp.local.json');
+  if (existsSync(localPath)) configs.push({ data: readJson(localPath), scope: 'local' });
+
+  // Merge (lower scope first, higher scope overwrites)
+  const merged: Record<string, MCPServer> = {};
+  for (const { data, scope } of configs) {
+    for (const [name, cfg] of Object.entries(data)) {
+      merged[name] = { ...(merged[name] ?? {}), ...cfg, name, enabled: (cfg.enabled ?? true), scope };
+    }
+  }
+  return merged;
 }
 
 // ── JSON-RPC 2.0 types for MCP stdio protocol ─────────────────────────────────
@@ -135,11 +205,32 @@ class StdioMCPClient {
   }
 
   async callTool(toolName: string, toolArgs: Record<string, unknown>): Promise<string> {
+    try {
+      return await this._callToolInternal(toolName, toolArgs);
+    } catch (err) {
+      // E14: Session 过期重连 — 检测 -32001 错误，自动重新连接后重试一次
+      if (isMcpSessionExpiredError(err)) {
+        process.stderr.write(`[MCP:${this.server.name}] Session expired, reconnecting…\n`);
+        await this.reconnect();
+        return await this._callToolInternal(toolName, toolArgs);
+      }
+      throw err;
+    }
+  }
+
+  private async _callToolInternal(toolName: string, toolArgs: Record<string, unknown>): Promise<string> {
     if (!this.proc) throw new Error(`MCP server "${this.server.name}" is not running`);
     const res = await this.request('tools/call', { name: toolName, arguments: toolArgs });
     if (res.error) throw new Error(`MCP tool error: ${res.error.message}`);
     const content = (res.result as { content?: Array<{ type: string; text?: string }> })?.content ?? [];
     return content.map((c) => c.text ?? JSON.stringify(c)).join('\n');
+  }
+
+  /** E14: 关闭并重新初始化连接 */
+  async reconnect(): Promise<void> {
+    this.stop();
+    await new Promise((res) => setTimeout(res, 500)); // brief backoff
+    await this.start();
   }
 
   stop() {
@@ -204,25 +295,32 @@ export class MCPManager {
 
   constructor(projectDir?: string) {
     const dir = projectDir || process.cwd();
-    // Also check ~/.uagent/.mcp.json as global fallback
-    const localPath = join(dir, '.mcp.json');
-    const globalPath = join(process.env.HOME || '~', '.uagent', '.mcp.json');
+    // F14: 使用分层 loadMCPConfig 读取所有 scope 的配置
+    const scoped = loadMCPConfig(dir);
+    for (const [name, server] of Object.entries(scoped)) {
+      this.servers.set(name, server);
+    }
+    // 主配置写入路径：优先 .mcp.local.json，其次 .mcp.json
+    const localPath = join(dir, '.mcp.local.json');
+    const projectPath = join(dir, '.mcp.json');
+    const globalPath = resolve(process.env.HOME ?? '~', '.uagent', 'mcp.json');
     this.configPath = existsSync(localPath) ? localPath
       : existsSync(join(dir, '.mcprc')) ? join(dir, '.mcprc')
       : existsSync(globalPath) ? globalPath
-      : localPath; // default to local for writes
-    this.loadConfig();
+      : projectPath; // default write target
   }
 
   private loadConfig() {
+    // F14: loadConfig 已由构造函数中的 loadMCPConfig() 替代，此方法保留兼容性
     if (!existsSync(this.configPath)) return;
     try {
       const raw = JSON.parse(readFileSync(this.configPath, 'utf-8'));
-      // Defensive: raw must be an object with a servers map
       if (typeof raw !== 'object' || raw === null || typeof raw.servers !== 'object' || Array.isArray(raw.servers)) return;
       const typed = raw as MCPConfig;
       for (const [name, server] of Object.entries(typed.servers || {})) {
-        this.servers.set(name, { ...server, name, enabled: server.enabled ?? true });
+        if (!this.servers.has(name)) {
+          this.servers.set(name, { ...server, name, enabled: server.enabled ?? true });
+        }
       }
     } catch { /* ignore */ }
   }
@@ -489,6 +587,10 @@ export class MCPManager {
     const client = new StdioMCPClient(server);
     const toolDefs = await client.start();
     this.stdioClients.set(server.name, client);
+
+    // D14: 注册 Elicitation handler（MCP SDK 2025-03-26+ 支持）
+    // 如果 SDK 不支持，registerElicitationHandler 内部会静默忽略
+    registerElicitationHandler(client, (msg) => process.stderr.write(msg));
 
     return toolDefs.map((t) => {
       const toolDef: ToolDefinition = {

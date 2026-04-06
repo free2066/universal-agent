@@ -2428,9 +2428,9 @@ Begin with a scope summary then list findings. If none found, say so.`;
               if (decision.shouldCompact && h.length >= 4) {
                 const pct = Math.round(est / contextLength * 100);
                 appendSystem(`Context at ${pct}% — auto-compacting...`);
-                autoCompact(h, (msg) => appendSystem(msg)).then((compacted) => {
-                  if (compacted > 0) {
-                    appendSystem(`Auto-compact complete: ${compacted} turns compressed.`);
+                autoCompact(h, (msg) => appendSystem(msg)).then((result) => {
+                  if (result.wasCompacted) {
+                    appendSystem(`Auto-compact complete: ${result.compactedTurns} turns compressed.`);
                   }
                 }).catch(() => { /* non-fatal */ });
               }

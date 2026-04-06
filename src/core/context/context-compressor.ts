@@ -421,16 +421,126 @@ export interface PostCompactContext {
   reFireSessionStartHooks?: boolean;
 }
 
+// ── C14: CompactionResult — 结构化压缩返回值（claude-code CompactionResult 对标）─
+//
+// 比原来只返回 number（compactedTurns）提供更多诊断信息：
+//   - wasCompacted: 是否实际发生了压缩
+//   - tokensFreed: 释放了多少 token（用于日志和测试断言）
+//   - isRecompactionInChain: 是否是链式快速重压缩（用于警告用户异常情况）
+//   - compactionPath: 走了哪条压缩路径
+
+export interface CompactionResult {
+  /** 是否实际发生了 LLM 压缩 */
+  wasCompacted: boolean;
+  /** 被压缩的历史轮数 */
+  compactedTurns: number;
+  /** 压缩前估算 token 数 */
+  preTokens: number;
+  /** 压缩后估算 token 数 */
+  postTokens: number;
+  /** 释放的 token 数（preTokens - postTokens） */
+  tokensFreed: number;
+  /** 是否是链式快速重压缩（上次压缩后很快又触发了压缩，可能有异常） */
+  isRecompactionInChain: boolean;
+  /** 走了哪条压缩路径 */
+  compactionPath: 'llm_full' | 'skipped';
+}
+
+// ── A14: SnipResult — HistorySnip 截断结果（claude-code snipCompact.ts 对标）─────
+//
+// claude-code query.ts L401-410 在 microcompact 之后、autoCompact 之前运行
+// snipCompactIfNeeded，选择性删除旧 API 轮次历史消息，并将 snipTokensFreed
+// 传给 autoCompactIfNeeded 修正 blocking limit 判断。
+// 这是一个零 LLM 成本的轻量级截断步骤。
+
+export interface SnipResult {
+  /** 截断后的消息列表 */
+  messages: Message[];
+  /** 释放的 token 数（估算） */
+  tokensFreed: number;
+  /** 可选的截断边界标记消息（注入到历史最前） */
+  boundaryMessage?: Message;
+}
+
+/**
+ * A14: 在历史底部找到安全的 snip 分割点。
+ * 从末尾数 minKeepTurns 轮（每次 user 消息计一轮），找到分割索引。
+ * 同时确保分割点不会切断 tool_use/tool_result 配对（防止 API invariants）。
+ */
+function findSnipBoundary(history: Message[], minKeepTurns: number): number {
+  let turns = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]?.role === 'user') turns++;
+    if (turns >= minKeepTurns) {
+      // 找到安全的分割点（不切断 tool_use / tool_result 配对）
+      return findSafeSplitPoint(history, i);
+    }
+  }
+  return 0;
+}
+
+/**
+ * A14: snipCompactIfNeeded — 轻量级历史截断（claude-code snipCompactIfNeeded 对标）
+ *
+ * 在 warning 或更高状态时删除旧轮次，降低 LLM autoCompact 的触发频率（避免 5-30s 等待）。
+ * 保留最近 MIN_KEEP_TURNS=10 轮（user 消息计轮），保留所有 system 消息。
+ * 返回 SnipResult，caller 用 tokensFreed 决定是否跳过 autoCompact。
+ */
+export function snipCompactIfNeeded(
+  history: Message[],
+  model = modelManager.getCurrentModel('main'),
+): SnipResult {
+  const state = calculateTokenWarningState(estimateHistoryTokens(history), model);
+
+  // 仅在 warning 或更高状态时触发（节省开销）
+  if (state === 'ok') return { messages: history, tokensFreed: 0 };
+
+  const MIN_KEEP_TURNS = 10;
+  const originalTokens = estimateHistoryTokens(history);
+
+  // 找到安全的 snip 边界（保留最近 MIN_KEEP_TURNS 轮消息）
+  const keepFromIdx = findSnipBoundary(history, MIN_KEEP_TURNS);
+  if (keepFromIdx <= 0) return { messages: history, tokensFreed: 0 };
+
+  // 被截断的部分
+  const snippedPart = history.slice(0, keepFromIdx);
+  const keptPart = history.slice(keepFromIdx);
+  const snippedTokens = estimateHistoryTokens(snippedPart);
+
+  // 若截断量很小（< 1000 tokens），不值得做
+  if (snippedTokens < 1000) return { messages: history, tokensFreed: 0 };
+
+  // 插入 snip boundary 标记（供后续逻辑和测试识别）
+  const boundaryMessage: Message = {
+    role: 'system' as const,
+    content: `[SNIP BOUNDARY ${new Date().toISOString()}] ${snippedPart.length} old messages removed, ~${snippedTokens} tokens freed`,
+    ...({ type: 'snip_boundary' } as Record<string, unknown>),
+  };
+
+  const newMessages = [boundaryMessage, ...keptPart];
+  const newTokens = estimateHistoryTokens(newMessages);
+
+  return {
+    messages: newMessages,
+    tokensFreed: originalTokens - newTokens,
+    boundaryMessage,
+  };
+}
+
 export async function autoCompact(
   history: Message[],
   onProgress?: (msg: string) => void,
   postCompactCtx?: PostCompactContext,
-): Promise<number> {
+): Promise<CompactionResult> {
+  const _noCompact: CompactionResult = {
+    wasCompacted: false, compactedTurns: 0, preTokens: 0, postTokens: 0,
+    tokensFreed: 0, isRecompactionInChain: false, compactionPath: 'skipped',
+  };
   // Environment kill switch
-  if (AUTO_COMPACT_DISABLED) return 0;
+  if (AUTO_COMPACT_DISABLED) return _noCompact;
 
   // Circuit breaker — stop after MAX_CONSECUTIVE_FAILURES failures
-  if (circuitOpen) return 0;
+  if (circuitOpen) return _noCompact;
 
   // ── Round 7: Time-based microcompact (Layer 3 enhancement) ────────────────
   // Before checking full-compact threshold, try time-based microcompact.
@@ -439,20 +549,28 @@ export async function autoCompact(
   const _now = Date.now();
   await runTimeBasedMicrocompact(history, _now, onProgress);
   // Anti-recursion guard
-  if (isCompacting) return 0;
+  if (isCompacting) return _noCompact;
 
   const decision = shouldCompact(history);
-  if (!decision.shouldCompact) return 0;
+  if (!decision.shouldCompact) return _noCompact;
 
   const targetSplit = history.length - KEEP_LAST_TURNS;
-  if (targetSplit <= 0) return 0;
+  if (targetSplit <= 0) return _noCompact;
 
   const safeSplit = findSafeSplitPoint(history, targetSplit);
-  if (safeSplit <= 0) return 0;
+  if (safeSplit <= 0) return _noCompact;
 
   const toCompact = history.slice(0, safeSplit);
   const toKeep = history.slice(safeSplit);
-  if (toCompact.length === 0) return 0;
+  if (toCompact.length === 0) return _noCompact;
+
+  // C14: 检测是否是链式快速重压缩（compact_boundary 最近出现超过 1 次）
+  const recentBoundaries = history.filter(
+    (m) => (m as unknown as { type?: string }).type === 'compact_boundary',
+  );
+  const isRecompactionInChain = recentBoundaries.length >= 2;
+
+  const preTokens = decision.estimatedTokens;
 
   // Emit pre_compact hook (Batch 2)
   try {
@@ -514,7 +632,7 @@ export async function autoCompact(
         `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
-    return 0;
+    return _noCompact;
   } finally {
     isCompacting = false;
   }
@@ -529,7 +647,7 @@ export async function autoCompact(
   // D12: Boundary Marker 持久化（claude-code CompactionResult.boundaryMarker 对标）
   // 在 history 中插入结构化边界标记，记录压缩前后的元数据。
   // 重启后可通过 getMessagesAfterCompactBoundary() 定位最近一次压缩边界。
-  const preTokens = decision.estimatedTokens;
+  // C14: preTokens 已在函数顶部通过 decision.estimatedTokens 定义
   const boundaryMarker: Message = {
     role: 'system' as const,
     content: `[COMPACT BOUNDARY ${new Date().toISOString()}] turns=${toCompact.length} preTokens=${preTokens} warningState=${decision.warningState}`,
@@ -621,7 +739,17 @@ export async function autoCompact(
     }
   } catch { /* file recovery is non-fatal */ }
 
-  return toCompact.length;
+  // C14: 返回 CompactionResult 结构化结果
+  const postTokens = estimateHistoryTokens(history);
+  return {
+    wasCompacted: true,
+    compactedTurns: toCompact.length,
+    preTokens,
+    postTokens,
+    tokensFreed: preTokens - postTokens,
+    isRecompactionInChain,
+    compactionPath: 'llm_full',
+  };
 }
 
 // ── Layer 7: Reactive Compact (emergency compaction on 413 / context overflow) ──

@@ -774,7 +774,136 @@ export async function handlePlan(input: string, ctx: SlashContext): Promise<true
   return done(rl);
 }
 
-// ── H13: /upgrade — CLI 自动升级（claude-code /upgrade 命令对标） ──────────────
+// ── J14: /ide + /stats 命令（claude-code parity） ─────────────────────────────
+
+/**
+ * J14: /ide — IDE 集成状态（claude-code /ide 命令对标）
+ * 显示当前 IDE 环境检测结果、LSP 工具状态和工作目录信息。
+ */
+export async function handleIde(ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  rl.pause();
+  process.stdout.write('\n');
+  process.stdout.write(chalk.bold('🖥️  IDE Integration Status\n'));
+  process.stdout.write(chalk.gray('─'.repeat(48) + '\n'));
+
+  // 检测 IDE 环境
+  const isVSCode = !!(process.env.VSCODE_PID || process.env.TERM_PROGRAM === 'vscode');
+  const isCursor = !!(process.env.CURSOR_CHANNEL || process.env.CURSOR_TRACE_FILE);
+  const isJetBrains = !!(process.env.IDEA_INITIAL_DIRECTORY || process.env.JETBRAINS_REMOTE_DEV_LAUNCHER_PORT);
+  const isWindsurf = !!(process.env.WINDSURF_ENABLED);
+  const termProgram = process.env.TERM_PROGRAM ?? process.env.TERMINAL_EMULATOR ?? 'unknown';
+
+  let editorName: string;
+  if (isCursor) editorName = chalk.green('Cursor');
+  else if (isVSCode) editorName = chalk.green('VSCode');
+  else if (isJetBrains) editorName = chalk.green('JetBrains IDE');
+  else if (isWindsurf) editorName = chalk.green('Windsurf');
+  else editorName = chalk.gray('Not detected');
+
+  process.stdout.write(`  Editor:      ${editorName}\n`);
+  process.stdout.write(`  Terminal:    ${chalk.gray(termProgram)}\n`);
+  process.stdout.write(`  Shell:       ${chalk.gray(process.env.SHELL ?? 'unknown')}\n`);
+  process.stdout.write(`  CWD:         ${chalk.gray(process.cwd())}\n`);
+  process.stdout.write(`  Node.js:     ${chalk.gray(process.version)}\n`);
+  process.stdout.write('\n');
+
+  // LSP 工具状态
+  const lspEnabled = process.env.ENABLE_LSP_TOOL === 'true';
+  process.stdout.write(`  LSP Tool:    ${lspEnabled ? chalk.green('Enabled') : chalk.gray('Disabled')}${!lspEnabled ? chalk.gray(' (set ENABLE_LSP_TOOL=true to enable)') : ''}\n`);
+
+  // 代理/网络状态（简单检测）
+  const httpProxy = process.env.HTTP_PROXY ?? process.env.http_proxy;
+  const httpsProxy = process.env.HTTPS_PROXY ?? process.env.https_proxy;
+  if (httpProxy || httpsProxy) {
+    process.stdout.write(`  HTTP Proxy:  ${chalk.gray(httpProxy ?? httpsProxy ?? '')}\n`);
+  }
+
+  // Git 检测
+  try {
+    const gitVersion = execSync('git --version', { encoding: 'utf-8', timeout: 2000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    process.stdout.write(`  Git:         ${chalk.green(gitVersion.replace('git version ', ''))}\n`);
+  } catch {
+    process.stdout.write(`  Git:         ${chalk.gray('Not found in PATH')}\n`);
+  }
+
+  process.stdout.write('\n');
+  rl.resume();
+  return done(rl);
+}
+
+/**
+ * J14: /stats — 会话使用统计（claude-code /stats 命令对标）
+ * 显示当前会话的 token 使用量、消息数量和模型信息。
+ */
+export async function handleStats(ctx: SlashContext): Promise<true> {
+  const { rl, agent } = ctx;
+  rl.pause();
+  process.stdout.write('\n');
+  process.stdout.write(chalk.bold('📊  Session Statistics\n'));
+  process.stdout.write(chalk.gray('─'.repeat(48) + '\n'));
+
+  const history = agent.getHistory();
+  const currentModel = modelManager.getCurrentModel('main');
+
+  // 消息统计
+  const userMsgs = history.filter((m) => m.role === 'user').length;
+  const assistantMsgs = history.filter((m) => m.role === 'assistant').length;
+  const toolMsgs = history.filter((m) => m.role === 'tool').length;
+
+  process.stdout.write(`  Messages:    ${chalk.bold(String(history.length))} total (${userMsgs} user, ${assistantMsgs} assistant, ${toolMsgs} tool)\n`);
+  process.stdout.write(`  Model:       ${chalk.cyan(currentModel)}\n`);
+
+  // Token 使用（从最后一条带 usage 的消息读取）
+  type UsageRecord = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  const lastWithUsage = [...history].reverse().find((m) => m.usage);
+  if (lastWithUsage?.usage) {
+    const u = lastWithUsage.usage as UsageRecord;
+    const fmt = (n: number) => n.toLocaleString('en-US');
+    process.stdout.write(`\n  Last turn token usage:\n`);
+    process.stdout.write(`    Input tokens:       ${chalk.bold(fmt(u.input_tokens ?? 0))}\n`);
+    process.stdout.write(`    Output tokens:      ${chalk.bold(fmt(u.output_tokens ?? 0))}\n`);
+    if ((u.cache_read_input_tokens ?? 0) > 0) {
+      process.stdout.write(`    Cache read:         ${chalk.gray(fmt(u.cache_read_input_tokens ?? 0))}\n`);
+    }
+    if ((u.cache_creation_input_tokens ?? 0) > 0) {
+      process.stdout.write(`    Cache write:        ${chalk.gray(fmt(u.cache_creation_input_tokens ?? 0))}\n`);
+    }
+  }
+
+  // 估算总 context token 数
+  try {
+    const { estimateHistoryTokens } = await import('../../../core/context/context-compressor.js');
+    const estimated = estimateHistoryTokens(history as import('../../../models/types.js').Message[]);
+    const profiles = modelManager.listProfiles();
+    const prof = profiles.find((p) => p.name === currentModel);
+    const ctxLen = prof?.contextLength ?? 128_000;
+    const pct = ((estimated / ctxLen) * 100).toFixed(1);
+
+    process.stdout.write(`\n  Estimated context usage:\n`);
+    process.stdout.write(`    ~${estimated.toLocaleString('en-US')} tokens / ${ctxLen.toLocaleString('en-US')} (${pct}%)\n`);
+
+    // 进度条（20格）
+    const filled = Math.round((estimated / ctxLen) * 20);
+    const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
+    const barColor = parseFloat(pct) > 75 ? chalk.red : parseFloat(pct) > 50 ? chalk.yellow : chalk.green;
+    process.stdout.write(`    ${barColor('[' + bar + ']')} ${pct}%\n`);
+  } catch { /* non-fatal */ }
+
+  // Session 运行时间（近似）
+  const uptimeSec = Math.floor(process.uptime());
+  const uptimeStr = uptimeSec >= 3600
+    ? `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`
+    : uptimeSec >= 60
+      ? `${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s`
+      : `${uptimeSec}s`;
+  process.stdout.write(`\n  Session uptime: ${chalk.gray(uptimeStr)}\n`);
+
+  process.stdout.write('\n');
+  rl.resume();
+  return done(rl);
+}
+
 
 export async function handleUpgrade(ctx: SlashContext): Promise<true> {
   const { rl } = ctx;

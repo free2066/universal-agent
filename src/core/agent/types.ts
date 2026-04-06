@@ -120,10 +120,35 @@ export type TerminalReason =
   | 'pending_confirmation'; // 等待用户确认危险操作
 
 /**
+ * B14: ContinueReason — 每次循环继续的原因（claude-code Continue type 对标）
+ * 用于测试层断言哪条恢复路径被触发，也便于日志追踪。
+ */
+export type ContinueReason =
+  | 'next_turn'                  // 正常工具循环进入下一轮
+  | 'reactive_compact_retry'     // reactive compact 后重试
+  | 'max_output_tokens_recovery' // max_output_tokens 注入 recovery 消息后重试
+  | 'ptl_retry'                  // prompt_too_long 截断后重试
+  | 'unattended_retry'           // unattended-retry 等待超时后重试
+  | 'context_overflow_retry';    // context overflow reactive compact 后重试
+
+/**
+ * B14: ContinueTransition — 循环继续的元数据（claude-code State.transition 对标）
+ */
+export interface ContinueTransition {
+  reason: ContinueReason;
+  /** 针对同类型重试的计数（如第几次 ptl_retry） */
+  attempt?: number;
+  /** 本次 continue 前 compact/snip 释放的 token 数 */
+  tokensFreed?: number;
+}
+
+/**
  * B13: StreamLoopResult — runStreamLoop() 返回值类型（claude-code Terminal 对标）
  */
 export interface StreamLoopResult {
   reason: TerminalReason;
   iterations: number;
   tokensEstimated?: number;
+  /** B14: 最后一次 continue 的原因（测试可观测性）*/
+  lastTransition?: ContinueTransition;
 }

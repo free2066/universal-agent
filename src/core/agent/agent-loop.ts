@@ -12,7 +12,7 @@ import type { ToolRegistry } from '../tool-registry.js';
 import type { DomainRouter } from '../domain-router.js';
 import type { MCPManager } from '../mcp-manager.js';
 import type { ModelFallbackChain } from '../model-fallback.js';
-import type { AgentEvents, PendingConfirmation, StreamLoopResult, TerminalReason } from './types.js';
+import type { AgentEvents, ContinueTransition, PendingConfirmation, StreamLoopResult, TerminalReason } from './types.js';
 import {
   PARALLELIZABLE_TOOLS,
   DEFAULT_MAX_ITERATIONS,
@@ -24,7 +24,7 @@ import {
 import { modelManager } from '../../models/model-manager.js';
 import { buildSystemPromptWithContext } from '../context/context-loader.js';
 import { subagentSystem } from '../subagent-system.js';
-import { autoCompact, reactiveCompact, shouldCompact, calculateTokenWarningState, estimateHistoryTokens } from '../context/context-compressor.js';
+import { autoCompact, reactiveCompact, shouldCompact, calculateTokenWarningState, estimateHistoryTokens, snipCompactIfNeeded } from '../context/context-compressor.js';
 import {
   updateSessionMemory,
   trySessionMemoryCompaction,
@@ -451,9 +451,21 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     reFireSessionStartHooks: false,
   };
 
+  // A14: HistorySnip — autoCompact 之前先做轻量级历史截断
+  // 对标 claude-code query.ts L401-410 snipCompactIfNeeded
+  // 在 warning/error 状态下删除旧轮次，减少 LLM compact 的频率（降低 5-30s 等待）
+  const _snipResult = snipCompactIfNeeded(history, _currentModel);
+  if (_snipResult.tokensFreed > 0) {
+    history.splice(0, history.length, ..._snipResult.messages);
+    onChunk(`\n  HistorySnip: freed ~${_snipResult.tokensFreed} tokens (${_snipResult.messages.length} messages remain)\n`);
+  }
+
   const compacted = await autoCompact(history, onChunk, _postCompactCtx);
-  if (compacted > 0) {
-    await triggerHook(createHookEvent('agent', 'compact', { compacted }));
+  if (compacted.wasCompacted) {
+    await triggerHook(createHookEvent('agent', 'compact', { compacted: compacted.compactedTurns }));
+    if (compacted.isRecompactionInChain) {
+      onChunk(`  Warning: rapid re-compaction detected (chain compaction).\n`);
+    }
   }
 
   // session:start fires only on the first turn
@@ -470,6 +482,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
 
   // B13: 记录终止原因，默认 'completed'
   let _terminalReason: TerminalReason = 'completed';
+  // B14: 追踪最后一次 continue 的原因（测试可观测性，对标 claude-code State.transition）
+  let _lastTransition: ContinueTransition | undefined;
 
   // ── Token Budget Tracker (Round 5: claude-code tokenBudget.ts parity) ────────
   // Tracks per-turn token usage to detect diminishing returns and enforce budget.
@@ -653,6 +667,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               events?.onRecovered?.('prompt_too_long');
               onChunk(`\n  Prompt too long — truncating oldest ${removeCount} message(s) and retrying (attempt ${ptlCount + 1}/${MAX_PTL_RETRIES})…\n`);
               history.push(createTombstone(history.length) as unknown as Message);
+              // B14: 记录 continue 原因
+              _lastTransition = { reason: 'ptl_retry', attempt: ptlCount + 1 };
               continue;
             }
           }
@@ -674,6 +690,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
             // A13: 恢复成功 — 不向用户显示错误，继续正常流
             events?.onRecovered?.('context_overflow');
             onChunk('  Retrying with compacted context…\n');
+            // B14: 记录 continue 原因
+            _lastTransition = { reason: 'context_overflow_retry' };
             continue;
           }
         }
@@ -1120,6 +1138,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           history.push({ role: 'user', content: '<reminder>Update your TodoWrite list.</reminder>' });
           roundsWithoutTodo = 0;
         }
+        // B14: 记录正常工具轮 continue 原因
+        _lastTransition = { reason: 'next_turn' };
       }
     } // end inner while
 
@@ -1169,8 +1189,10 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     reason: _terminalReason,
     iterations: iteration,
     tokensEstimated: estimateHistoryTokens(history),
+    // B14: 最后一次 continue 的追踪（测试可观测性）
+    lastTransition: _lastTransition,
   };
   events?.onTerminal?.(_result);
-  log.debug('runStream completed', { reason: _terminalReason, iterations: iteration });
+  log.debug('runStream completed', { reason: _terminalReason, iterations: iteration, lastTransition: _lastTransition });
   return _result;
 }

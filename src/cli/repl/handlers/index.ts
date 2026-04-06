@@ -33,6 +33,7 @@ import {
   handleCommit, handleSecurityReview,
   handleDiff, handleEffort, handleConfig, handleRewind,
   handlePlan, handleUpgrade,
+  handleIde, handleStats,
 } from './agent-handlers.js';
 
 // Auth handlers (F13: /login)
@@ -95,6 +96,10 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
   if (input === '/login') return handleLogin(ctx);
   if (input === '/plan' || input.startsWith('/plan ')) return handlePlan(input, ctx);
   if (input === '/upgrade') return handleUpgrade(ctx);
+
+  // ── J14: /ide + /stats（Round 14 claude-code parity） ─────────────────────
+  if (input === '/ide') return handleIde(ctx);
+  if (input === '/stats') return handleStats(ctx);
 
   // ── Memory / knowledge commands ────────────────────────────────────────────
   if (input.startsWith('/memory')) return handleMemory(input, ctx);
