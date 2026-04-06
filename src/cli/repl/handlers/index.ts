@@ -31,6 +31,7 @@ import {
   handleModel, handleModels, handleDomain, handleAgents,
   handleContext, handleCompactOrTokens, handleDoctor,
   handleCommit, handleSecurityReview,
+  handleDiff, handleEffort, handleConfig, handleRewind,
 } from './agent-handlers.js';
 
 // Memory handlers
@@ -79,6 +80,12 @@ export async function handleSlash(input: string, ctx: SlashContext): Promise<boo
   if (input === '/doctor') return handleDoctor(ctx);
   if (input.startsWith('/commit')) return handleCommit(input, ctx);
   if (input.startsWith('/security-review')) return handleSecurityReview(input, ctx);
+
+  // ── J12: New commands (claude-code parity) ───────────────────────────────
+  if (input === '/diff') return handleDiff(ctx);
+  if (input.startsWith('/effort')) return handleEffort(input, ctx);
+  if (input.startsWith('/config')) return handleConfig(input, ctx);
+  if (input.startsWith('/rewind')) return handleRewind(input, ctx);
 
   // ── Memory / knowledge commands ────────────────────────────────────────────
   if (input.startsWith('/memory')) return handleMemory(input, ctx);

@@ -134,6 +134,47 @@ export interface CompactDecision {
   estimatedTokens: number;
   contextLength: number;
   threshold: number;
+  warningState: TokenWarningState;
+}
+
+// ── A12: 四档阈值系统（claude-code autoCompact.ts 对标）──────────────────────────
+//
+// claude-code 使用绝对 buffer 减法而非百分比阈值，提供更细粒度的4档控制：
+//   ok → warning → error（触发 autoCompact）→ blocking（直接停止，不调用 LLM）
+// 每档有独立缓冲区，为 LLM 输出 token 留出 OUTPUT_RESERVE_TOKENS 空间。
+//
+// 与现有百分比 COMPACT_THRESHOLD 并存：两者满足其一即触发压缩。
+
+const OUTPUT_RESERVE_TOKENS = 20_000;   // 给 LLM 生成摘要的输出预留
+const AUTOCOMPACT_BUFFER_TOKENS = 13_000; // autoCompact 触发缓冲
+const WARNING_BUFFER_TOKENS = 20_000;   // 警告阈值缓冲
+const BLOCKING_BUFFER_TOKENS = 3_000;   // blocking 阈值：此时停止请求避免 PTL
+
+export type TokenWarningState = 'ok' | 'warning' | 'error' | 'blocking';
+
+/**
+ * A12: 计算当前 token 使用状态（四档）。
+ * 对标 claude-code 的 calculateTokenWarningState()。
+ *
+ * @returns 'ok'      — context 使用正常，无需压缩
+ *          'warning' — 接近阈值，UI 可以用颜色提示用户
+ *          'error'   — 超过 autoCompact 阈值，应立即触发压缩
+ *          'blocking'— context 已满（仅剩 3K buffer），应停止新 LLM 调用
+ */
+export function calculateTokenWarningState(
+  estimatedTokens: number,
+  model = modelManager.getCurrentModel('main'),
+): TokenWarningState {
+  const profile = [...modelManager.listProfiles()].find(
+    (p) => p.name === model || p.modelName === model,
+  );
+  const contextWindow = profile?.contextLength ?? 128_000;
+  const effective = contextWindow - OUTPUT_RESERVE_TOKENS;
+
+  if (estimatedTokens >= effective - BLOCKING_BUFFER_TOKENS) return 'blocking';
+  if (estimatedTokens >= effective - AUTOCOMPACT_BUFFER_TOKENS) return 'error';
+  if (estimatedTokens >= effective - WARNING_BUFFER_TOKENS) return 'warning';
+  return 'ok';
 }
 
 export function shouldCompact(
@@ -146,12 +187,17 @@ export function shouldCompact(
   const contextLength = profile?.contextLength ?? 128000;
   const threshold = Math.floor(contextLength * COMPACT_THRESHOLD);
   const estimatedTokens = estimateHistoryTokens(history);
+  const warningState = calculateTokenWarningState(estimatedTokens, model);
+
+  // 触发条件：百分比阈值（向后兼容）OR 四档阈值达到 error/blocking
+  const shouldCompactByState = warningState === 'error' || warningState === 'blocking';
 
   return {
-    shouldCompact: estimatedTokens > threshold,
+    shouldCompact: estimatedTokens > threshold || shouldCompactByState,
     estimatedTokens,
     contextLength,
     threshold,
+    warningState,
   };
 }
 
@@ -160,13 +206,18 @@ export function shouldCompact(
 /**
  * System prompt for 9-chapter structured summary.
  * Inspired by Claude Code's autoCompact prompt structure (kstack #15375).
+ *
+ * B12: 引入 <analysis> 草稿环节（claude-code prompt.ts 对标）
+ * 要求 LLM 先在 <analysis> 标签内思考推导，再输出 <summary>。
+ * 减少直接输出摘要时的幻觉风险（先思考后总结）。
  */
 const COMPACT_SYSTEM =
   'You are a conversation summarizer for an AI coding assistant session. ' +
   'Given a list of conversation turns, produce a structured summary using EXACTLY these 9 chapters. ' +
   'Be dense, factual, and preserve ALL important decisions, file edits, tool results, and conclusions. ' +
   'CRITICAL: Respond with TEXT ONLY. Do NOT call any tools. Tool calls will be REJECTED.\n\n' +
-  'Output format:\n' +
+  'First, think through what is most important to preserve in <analysis> tags.\n' +
+  'Then write your final summary inside <summary> tags:\n\n' +
   '<summary>\n' +
   '## 1. Primary Request and Intent\n' +
   '[What the user originally asked for and the overall goal]\n\n' +
@@ -187,6 +238,51 @@ const COMPACT_SYSTEM =
   '## 9. Optional Next Step\n' +
   '[What should happen next, if clear from context]\n' +
   '</summary>';
+
+/**
+ * B12: 从 LLM 响应中提取 <summary> 块内容。
+ * 如果 LLM 遵循指令，内容在 <summary>...</summary> 中。
+ * fallback: 若无标签则返回原始响应（向后兼容）。
+ */
+function parseCompactSummary(raw: string): string {
+  const match = raw.match(/<summary>([\s\S]*?)<\/summary>/);
+  return match ? match[1]!.trim() : raw.trim();
+};
+
+// ── C12: Image handling + PTL retry（claude-code compact.ts 对标）──────────────
+//
+// 含图片（base64）的历史做 compact 时极易触发 prompt_too_long（PTL）。
+// stripImages() 在压缩前将图片 content block 替换为 '[image]' 占位文本，
+// 显著减少 compact prompt 的 token 占用。
+// PTL 重试：最多 3 次，每次截断最老 1/4 历史。
+
+const MAX_PTL_RETRIES = 3;
+
+/**
+ * C12: 从消息列表中剥离图片内容块，替换为轻量文本占位符。
+ * 对标 claude-code compact.ts stripImagesFromMessages()。
+ */
+function stripImages(msgs: Message[]): Message[] {
+  return msgs.map((msg) => {
+    if (typeof msg.content === 'string') return msg;
+    if (!Array.isArray(msg.content)) return msg;
+    // ContentBlock = string | ImageBlock | ImageUrlBlock
+    // Replace image-type blocks with a plain string placeholder (valid ContentBlock)
+    const stripped: import('../../models/types.js').ContentBlock[] = (
+      msg.content as import('../../models/types.js').ContentBlock[]
+    ).map((block) => {
+      if (typeof block === 'string') return block;
+      if (block.type === 'image' || block.type === 'image_url') return '[image]';
+      return block;
+    });
+    return { ...msg, content: stripped };
+  });
+}
+
+function isPtlError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('prompt_too_long') || msg.includes('413') || msg.includes('context_length_exceeded');
+}
 
 /** Max chars to include from a single tool result in the compaction prompt */
 const MAX_TOOL_RESULT_CHARS = 1500;
@@ -344,20 +440,41 @@ export async function autoCompact(
     ` > threshold ${decision.threshold.toLocaleString()} — summarizing ${toCompact.length} turns…\n`,
   );
 
-  const serialized = serializeTurns(toCompact);
-  const summaryPrompt = 'Please summarize the following conversation turns using the 9-chapter format:\n\n' + serialized;
+  // ── C12: 压缩前剥离图片，避免 base64 撑爆 compact prompt ──────────────────────
+  const strippedToCompact = stripImages(toCompact);
+
+  const serialized = serializeTurns(strippedToCompact);
 
   let summary = '';
   isCompacting = true;
+  let ptlRetries = 0;
+  let currentMsgs = strippedToCompact;
   try {
-    const client = modelManager.getClient('quick');
-    const response = await client.chat({
-      systemPrompt: COMPACT_SYSTEM,
-      messages: [{ role: 'user', content: summaryPrompt }],
-      tools: [],
-    });
-    summary = response.content;
-    consecutiveFailures = 0; // Reset on success
+    while (ptlRetries <= MAX_PTL_RETRIES) {
+      try {
+        const client = modelManager.getClient('quick');
+        const serializedRetry = ptlRetries === 0 ? serialized : serializeTurns(currentMsgs);
+        const response = await client.chat({
+          systemPrompt: COMPACT_SYSTEM,
+          messages: [{ role: 'user', content: 'Please summarize the following conversation turns using the 9-chapter format:\n\n' + serializedRetry }],
+          tools: [],
+        });
+        // B12: 提取 <summary> 块（过滤 <analysis> 草稿）
+        summary = parseCompactSummary(response.content);
+        consecutiveFailures = 0; // Reset on success
+        break;
+      } catch (err) {
+        // C12: PTL 重试 — 截断最老 1/4 历史
+        if (isPtlError(err) && ptlRetries < MAX_PTL_RETRIES) {
+          const trimCount = Math.max(1, Math.floor(currentMsgs.length / 4));
+          currentMsgs = currentMsgs.slice(trimCount);
+          ptlRetries++;
+          onProgress?.(`\n  Compact PTL retry ${ptlRetries}/${MAX_PTL_RETRIES}: trimmed ${trimCount} oldest msgs\n`);
+          continue;
+        }
+        throw err;
+      }
+    }
   } catch (err) {
     consecutiveFailures++;
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -380,10 +497,23 @@ export async function autoCompact(
   const summaryMessage: Message = {
     role: 'user',
     content: `[Context summary — ${toCompact.length} earlier turns compressed using 9-chapter structure]\n\n` + summary,
+    // B12: 标记为 compact summary，供后续逻辑识别
+    ...({ isCompactSummary: true } as Record<string, unknown>),
   };
 
-  history.splice(0, history.length, summaryMessage, ...toKeep);
-  onProgress?.(`\n✅  Compacted ${toCompact.length} turns → 1 structured summary (9 chapters).\n`);
+  // D12: Boundary Marker 持久化（claude-code CompactionResult.boundaryMarker 对标）
+  // 在 history 中插入结构化边界标记，记录压缩前后的元数据。
+  // 重启后可通过 getMessagesAfterCompactBoundary() 定位最近一次压缩边界。
+  const preTokens = decision.estimatedTokens;
+  const boundaryMarker: Message = {
+    role: 'system' as const,
+    content: `[COMPACT BOUNDARY ${new Date().toISOString()}] turns=${toCompact.length} preTokens=${preTokens} warningState=${decision.warningState}`,
+    // Attach type metadata without breaking Message type compatibility
+    ...({ type: 'compact_boundary' } as Record<string, unknown>),
+  };
+
+  history.splice(0, history.length, boundaryMarker, summaryMessage, ...toKeep);
+  onProgress?.(`\n  Compacted ${toCompact.length} turns → 1 structured summary (9 chapters).\n`);
 
   // Emit post_compact hook (Batch 2)
   try {
@@ -457,10 +587,10 @@ export async function autoCompact(
             `[Post-Compact File Recovery — restoring ${recoveryParts.length} recently read files]\n\n` +
             recoveryParts.join('\n\n'),
         };
-        // Inject after the summary, before the kept tail
-        history.splice(1, 0, recoveryMsg);
+        // Inject after boundary marker + summary (index 2), before the kept tail
+        history.splice(2, 0, recoveryMsg);
         onProgress?.(
-          `\n📂 Post-compact file recovery: restored ${recoveryParts.length} file(s) to context.\n`
+          `\n  Post-compact file recovery: restored ${recoveryParts.length} file(s) to context.\n`
         );
       }
     }

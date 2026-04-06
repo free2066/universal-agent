@@ -139,6 +139,31 @@ export class AgentCore {
     resetSessionMemory();
   }
 
+  /**
+   * J12: rewindHistory — 回滚对话历史 n 轮。
+   * 一轮 = 最多一对 user + assistant 消息（从尾部向前移除）。
+   * 对标 claude-code /rewind 命令的历史回退功能。
+   * @param turns  要回滚的轮数（默认 1）
+   * @returns      实际移除的消息数量
+   */
+  rewindHistory(turns = 1): number {
+    if (turns <= 0 || this.history.length === 0) return 0;
+    let removed = 0;
+    let turnsLeft = turns;
+    // Remove from the tail, treating each user message as the start of a turn
+    while (turnsLeft > 0 && this.history.length > 0) {
+      // Pop the last message
+      this.history.pop();
+      removed++;
+      // If the new tail is a user message, we've completed one turn boundary
+      const tail = this.history[this.history.length - 1];
+      if (!tail || tail.role === 'user') {
+        turnsLeft--;
+      }
+    }
+    return removed;
+  }
+
   getHistory(): Message[] {
     return [...this.history];
   }

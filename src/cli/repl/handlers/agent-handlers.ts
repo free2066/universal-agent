@@ -8,6 +8,7 @@ import { done } from './shared.js';
 import { modelManager } from '../../../models/model-manager.js';
 import { subagentSystem } from '../../../core/subagent-system.js';
 import { updateStatusBar, printStatusBar } from '../../statusbar.js';
+import { execSync, execFileSync } from 'child_process';
 
 export async function handleModel(input: string, ctx: SlashContext): Promise<true> {
   const { agent, rl, options, getModelDisplayName, makePrompt } = ctx;
@@ -578,3 +579,161 @@ Start with a brief scope summary, then list all findings. If no vulnerabilities 
   return done(rl);
 }
 
+// ── J12: New commands (claude-code parity) ────────────────────────────────────
+
+/**
+ * /diff — 显示当前工作目录的 git diff
+ * 对标 claude-code /diff 命令。
+ */
+export async function handleDiff(ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  rl.pause();
+  process.stdout.write('\n');
+  try {
+    const stat = execSync('git diff --stat', {
+      cwd: process.cwd(), encoding: 'utf-8',
+      timeout: 10_000, maxBuffer: 512 * 1024,
+    }).trim();
+    const diff = execSync('git diff', {
+      cwd: process.cwd(), encoding: 'utf-8',
+      timeout: 10_000, maxBuffer: 512 * 1024,
+    }).trim();
+    if (!stat && !diff) {
+      process.stdout.write(chalk.gray('(no uncommitted changes)\n'));
+    } else {
+      if (stat) process.stdout.write(chalk.cyan(stat) + '\n\n');
+      if (diff) process.stdout.write(diff + '\n');
+    }
+  } catch {
+    process.stdout.write(chalk.yellow('(not a git repository or git not available)\n'));
+  }
+  process.stdout.write('\n');
+  rl.resume();
+  return done(rl);
+}
+
+/**
+ * /effort [low|medium|high|max] — 调节 thinking 力度
+ * 对标 claude-code /effort 命令。
+ * Mapping: low=0 / medium=8K / high=32K / max=100K thinking budget tokens
+ */
+export async function handleEffort(input: string, ctx: SlashContext): Promise<true> {
+  const { rl, agent } = ctx;
+  const level = input.slice('/effort'.length).trim().toLowerCase();
+  const LEVELS: Record<string, string> = {
+    low: 'low', medium: 'medium', high: 'high', max: 'max',
+    '0': 'low', '1': 'medium', '2': 'high', '3': 'max',
+    '': 'medium', // /effort with no arg shows current
+  };
+
+  rl.pause();
+  process.stdout.write('\n');
+
+  if (level === '' || !(level in LEVELS)) {
+    if (level !== '') {
+      process.stdout.write(chalk.yellow(`Unknown effort level: "${level}". Valid: low, medium, high, max\n`));
+    } else {
+      // Show current level
+      const currentLevel = (agent as unknown as { _thinkingLevel?: string })._thinkingLevel ?? 'medium';
+      process.stdout.write(`Current thinking effort: ${chalk.cyan(currentLevel)}\n`);
+      process.stdout.write(chalk.gray('  low    = disabled (0 thinking tokens)\n'));
+      process.stdout.write(chalk.gray('  medium = light thinking (8K tokens)\n'));
+      process.stdout.write(chalk.gray('  high   = deep thinking (32K tokens)\n'));
+      process.stdout.write(chalk.gray('  max    = unlimited thinking\n'));
+    }
+  } else {
+    const mapped = LEVELS[level]!;
+    // Map to ThinkingLevel (matches setThinkingLevel in agent/index.ts)
+    const thinkingLevelMap: Record<string, import('../../../models/types.js').ThinkingLevel | undefined> = {
+      low: undefined, medium: 'low', high: 'medium', max: 'high',
+    };
+    agent.setThinkingLevel(thinkingLevelMap[mapped]);
+    process.stdout.write(`Thinking effort set to: ${chalk.green(mapped)}\n`);
+    printStatusBar();
+  }
+
+  process.stdout.write('\n');
+  rl.resume();
+  return done(rl);
+}
+
+/**
+ * /config [key] [value] — 查看或修改 .uagent 配置项
+ * 对标 claude-code /config 命令。
+ */
+export async function handleConfig(input: string, ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
+  const parts = input.trim().split(/\s+/).filter(Boolean);
+  // parts[0] = '/config', parts[1] = key (optional), parts[2+] = value (optional)
+
+  rl.pause();
+  process.stdout.write('\n');
+
+  try {
+    const { loadConfig, setConfigValue } = await import('../../config-store.js');
+
+    if (parts.length === 1) {
+      // /config — list all settings
+      const cfg = loadConfig();
+      process.stdout.write(chalk.cyan('Current configuration:\n'));
+      process.stdout.write(JSON.stringify(cfg, null, 2) + '\n');
+    } else if (parts.length === 2) {
+      // /config key — show single value
+      const cfg = loadConfig();
+      const key = parts[1]!;
+      const val = (cfg as Record<string, unknown>)[key];
+      if (val === undefined) {
+        process.stdout.write(chalk.yellow(`Key "${key}" not found in config.\n`));
+      } else {
+        process.stdout.write(`${chalk.cyan(key)}: ${JSON.stringify(val)}\n`);
+      }
+    } else {
+      // /config key value — set value
+      const key = parts[1]!;
+      const rawVal = parts.slice(2).join(' ');
+      // Try to parse as JSON (handles booleans, numbers), fallback to string
+      let value: unknown;
+      try { value = JSON.parse(rawVal); } catch { value = rawVal; }
+      setConfigValue(key, value as never);
+      process.stdout.write(`${chalk.green('✓')} Set ${chalk.cyan(key)} = ${JSON.stringify(value)}\n`);
+    }
+  } catch (err) {
+    process.stdout.write(chalk.red(`Config error: ${err instanceof Error ? err.message : String(err)}\n`));
+  }
+
+  process.stdout.write('\n');
+  rl.resume();
+  return done(rl);
+}
+
+/**
+ * /rewind [n] — 回滚对话历史 n 轮（默认 1 轮）
+ * 对标 claude-code /rewind 命令。
+ */
+export async function handleRewind(input: string, ctx: SlashContext): Promise<true> {
+  const { rl, agent } = ctx;
+  const nStr = input.slice('/rewind'.length).trim();
+  const n = nStr ? parseInt(nStr, 10) : 1;
+
+  rl.pause();
+  process.stdout.write('\n');
+
+  if (isNaN(n) || n <= 0) {
+    process.stdout.write(chalk.yellow(`Invalid argument: "${nStr}". Usage: /rewind [n] where n > 0\n`));
+  } else {
+    const histBefore = agent.getHistory().length;
+    const removed = agent.rewindHistory(n);
+    const histAfter = agent.getHistory().length;
+    if (removed === 0) {
+      process.stdout.write(chalk.yellow('Nothing to rewind — history is empty.\n'));
+    } else {
+      process.stdout.write(
+        `${chalk.green('✓')} Rewound ${removed} message(s) (${histBefore} → ${histAfter} in history).\n`,
+      );
+    }
+  }
+
+  process.stdout.write('\n');
+  rl.resume();
+  return done(rl);
+}

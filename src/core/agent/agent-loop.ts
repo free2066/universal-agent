@@ -24,7 +24,7 @@ import {
 import { modelManager } from '../../models/model-manager.js';
 import { buildSystemPromptWithContext } from '../context/context-loader.js';
 import { subagentSystem } from '../subagent-system.js';
-import { autoCompact, reactiveCompact } from '../context/context-compressor.js';
+import { autoCompact, reactiveCompact, shouldCompact, calculateTokenWarningState, estimateHistoryTokens } from '../context/context-compressor.js';
 import {
   updateSessionMemory,
   trySessionMemoryCompaction,
@@ -401,6 +401,42 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
   }
 
   // ── Layer 5: Auto-compact ───────────────────────────────────────────────────
+  // G12: applyToolResultBudget — 在 autoCompact 前先按预算截断工具结果
+  // 防止超大工具结果（如读取 200KB 文件）一次性消耗大量 context。
+  // 预算 = 40% of context window，从最新消息向前遍历，超出预算部分截断。
+  const _currentModel = modelManager.getCurrentModel('main');
+  {
+    const _profile = [...modelManager.listProfiles()].find(
+      (p) => p.name === _currentModel || p.modelName === _currentModel,
+    );
+    const _ctxWindow = _profile?.contextLength ?? 128_000;
+    const TOOL_RESULT_BUDGET_TOKENS = Math.floor(_ctxWindow * 0.4);
+    let _toolBudgetUsed = 0;
+    for (let _i = history.length - 1; _i >= 0; _i--) {
+      const _msg = history[_i]!;
+      if (_msg.role !== 'tool') continue;
+      const _content = typeof _msg.content === 'string' ? _msg.content : JSON.stringify(_msg.content);
+      const _tokens = Math.ceil(_content.length / 4);
+      if (_toolBudgetUsed + _tokens > TOOL_RESULT_BUDGET_TOKENS) {
+        const _allowedChars = Math.max(200, (TOOL_RESULT_BUDGET_TOKENS - _toolBudgetUsed) * 4);
+        if (_content.length > _allowedChars) {
+          // Tool messages always have string content — safe to cast via unknown
+          (_msg as unknown as { content: string }).content =
+            _content.slice(0, _allowedChars) +
+            `\n...[truncated by token budget, ${_content.length - _allowedChars} chars omitted]`;
+        }
+      }
+      _toolBudgetUsed += _tokens;
+    }
+  }
+
+  // G12: A12 blocking 拦截 — context 已满时直接停止，不发起新 LLM 调用
+  const _warningState = calculateTokenWarningState(estimateHistoryTokens(history), _currentModel);
+  if (_warningState === 'blocking') {
+    onChunk('\n[SYSTEM] Context window critical — stopping to prevent prompt_too_long error.\n');
+    return;
+  }
+
   const compacted = await autoCompact(history, onChunk);
   if (compacted > 0) {
     await triggerHook(createHookEvent('agent', 'compact', { compacted }));

@@ -1,5 +1,8 @@
 import type { ToolDefinition, ToolRegistration, ParameterSchema } from '../models/types.js';
 import { createLogger } from './logger.js';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 const log = createLogger('tool-registry');
 
@@ -76,7 +79,19 @@ function checkType(
   return null;
 }
 
-// ── Conditional Tool Registration ─────────────────────────────────────────────
+// ── E12: ValidationResult 语义验证结果类型（claude-code Tool.ts 对标）─────────────────
+//
+// 工具可声明可选的 validate() 方法，进行 JSON schema 之外的语义层验证。
+// errorCode 让 LLM 能读懂失败原因，从而自我纠正进一步调用。
+
+export type ValidationResult =
+  | { result: true }
+  | { result: false; message: string; errorCode?: string };
+
+// Extend ToolRegistration with E12 + F12 fields
+// （这些字段在 types.ts 中的 ToolRegistration interface 添加）
+
+
 //
 // Inspired by kstack article #15309 "Conditional Skill Activation":
 // Tools can declare a trigger predicate — they are only added to the registry
@@ -214,7 +229,48 @@ export class ToolRegistry {
       }
     }
 
-    return tool.handler(args);
+    // E12: Semantic validation (claude-code Tool.validateInput parity)
+    // Runs after schema validation; provides domain-specific checks with errorCode
+    // that give the LLM actionable feedback to self-correct on the next call.
+    const registration = tool as ToolRegistration & {
+      validate?: (a: Record<string, unknown>) => Promise<ValidationResult> | ValidationResult;
+      maxResultSizeBytes?: number;
+    };
+    if (registration.validate) {
+      try {
+        const vr = await registration.validate(args);
+        if (!vr.result) {
+          const code = vr.errorCode ? ` [${vr.errorCode}]` : '';
+          throw new Error(`Tool "${name}" validation failed${code}: ${vr.message}`);
+        }
+      } catch (err) {
+        // Re-throw validation errors; catch only to add tool name context
+        throw err;
+      }
+    }
+
+    const result = await tool.handler(args);
+
+    // F12: Auto-persist large tool results (claude-code maxResultSizeChars parity)
+    // If the result exceeds maxResultSizeBytes, write to a temp file and return
+    // a compact reference. Prevents oversized results from consuming context tokens.
+    const maxBytes = registration.maxResultSizeBytes ?? 50_000; // 50KB default
+    const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+    if (Buffer.byteLength(resultStr, 'utf-8') > maxBytes) {
+      try {
+        const tmpDir = mkdtempSync(join(tmpdir(), 'uagent-result-'));
+        const outPath = join(tmpDir, `${name}-result.txt`);
+        writeFileSync(outPath, resultStr, 'utf-8');
+        const lines = resultStr.split('\n').length;
+        const kb = Math.round(Buffer.byteLength(resultStr, 'utf-8') / 1024);
+        return (
+          `Result too large (${lines} lines, ${kb}KB) — full output saved to: ${outPath}\n` +
+          `First 200 lines:\n${resultStr.split('\n').slice(0, 200).join('\n')}`
+        );
+      } catch { /* non-fatal: fall through to return original result */ }
+    }
+
+    return result;
   }
 
   list(): string[] {
