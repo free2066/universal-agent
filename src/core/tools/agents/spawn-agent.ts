@@ -414,12 +414,25 @@ async function spawnAndRun(
 
   // ── Spawn a fully isolated AgentCore, injecting depth+1 ──────────────────
   const { AgentCore } = await import('../../agent.js');
+
+  // C19: Export parent's session grants to propagate to child agent
+  // Mirrors claude-code forkedAgent.ts canUseTool context inheritance:
+  //   parent's "Allow for this session" approvals should apply to subagents
+  //   without requiring the user to re-approve the same operations.
+  let _inheritedSessionGrants: string[] | undefined;
+  try {
+    const { getPermissionManager } = await import('../../agent/permission-manager.js');
+    _inheritedSessionGrants = getPermissionManager(process.cwd()).exportSessionGrants();
+  } catch { /* non-fatal: permission manager unavailable */ }
+
   const agent = new AgentCore({
     domain: (opts.domain as 'auto' | 'data' | 'dev' | 'service') ?? 'auto',
     model,
     stream: false,
     verbose: false,
-  });
+    // C19: Inherit parent session grants
+    ...(_inheritedSessionGrants?.length ? { inheritedSessionGrants: _inheritedSessionGrants } : {}),
+  } as import('../../agent.js').AgentOptions);
 
   // ── Shared prompt cache (kstack article #15343) ───────────────────────────
   // If the parent passes its pre-built systemPrompt, inject it directly into

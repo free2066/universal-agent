@@ -240,6 +240,16 @@ export class PermissionManager {
   private _userSettings: PermissionSettings | null = null;
   private _projectSettings: PermissionSettings | null = null;
   private _localSettings: PermissionSettings | null = null;
+  /**
+   * C19 (claude-code forkedAgent.ts canUseTool parity): Session-only runtime grants.
+   * Patterns added here are allowed for the lifetime of this session without
+   * persisting to any settings file. Exported to child agents via inheritedSessionGrants.
+   *
+   * Why needed: When user approves "Allow for this session", we can't write to
+   * disk because that would affect future sessions. These in-memory grants are
+   * propagated to subagents so they inherit parent session approvals.
+   */
+  private _sessionGrants: Set<string> = new Set();
 
   constructor(cwd: string = process.cwd()) {
     this.cwd = cwd;
@@ -420,6 +430,12 @@ export class PermissionManager {
       if (matchesPattern(pattern, toolName, normalizedArgs)) return 'allow';
     }
 
+    // 3b. C19: Check session-only grants (inherited from parent agent or added during this session)
+    // These are NOT persisted to disk — they exist only for the lifetime of this PermissionManager.
+    for (const pattern of this._sessionGrants) {
+      if (matchesPattern(pattern, toolName, normalizedArgs)) return 'allow';
+    }
+
     // 4. ApprovalMode fallback
     if (approvalMode === 'yolo') return 'allow';
 
@@ -518,6 +534,39 @@ export class PermissionManager {
       (settings as unknown as Record<string, unknown>)[key] = list;
       saveSettingsFile(settingsPath, settings);
       this.invalidate();
+    }
+  }
+
+  /**
+   * C19: Add a session-only allow grant (not persisted to disk).
+   * Used when user approves "Allow for this session" — grants survive for the
+   * duration of this PermissionManager instance but are not written to any file.
+   *
+   * Subagents receive these via inheritedSessionGrants in AgentOptions.
+   */
+  addSessionGrant(pattern: string): void {
+    this._sessionGrants.add(pattern);
+  }
+
+  /**
+   * C19: Export all session-only grants for propagation to child agents.
+   * Call this when spawning a subagent to give it the parent's session approvals.
+   * Mirrors claude-code forkedAgent.ts canUseTool context inheritance.
+   */
+  exportSessionGrants(): string[] {
+    return Array.from(this._sessionGrants);
+  }
+
+  /**
+   * C19: Import session grants from a parent agent.
+   * Called during PermissionManager initialization when inheritedSessionGrants
+   * is provided in AgentOptions.
+   *
+   * These grants are treated as session-level (not written to disk, not reloaded).
+   */
+  importSessionGrants(grants: readonly string[]): void {
+    for (const pattern of grants) {
+      this._sessionGrants.add(pattern);
     }
   }
 

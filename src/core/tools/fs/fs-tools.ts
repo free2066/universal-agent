@@ -81,6 +81,13 @@ export const readFileTool: ToolRegistration = {
       required: ['file_path'],
     },
   },
+  // F19 (claude-code Tool.backfillObservableInput parity): Expand relative file_path to
+  // absolute before hooks/permissions see it, so allowlists like "Read(/abs/path)" work.
+  backfillObservableInput(input) {
+    if (typeof input['file_path'] === 'string' && !input['file_path'].startsWith('/')) {
+      input['file_path'] = resolve(process.cwd(), input['file_path']);
+    }
+  },
   handler: async (args) => {
     // Read is a first-class tool intentionally allowed to read from any path.
     // safeResolvePath() is NOT applied here — see path-security.ts.
@@ -229,6 +236,12 @@ export const writeFileTool: ToolRegistration = {
       },
       required: ['file_path', 'content'],
     },
+  },
+  // F19: Expand relative file_path to absolute before hooks/permissions see it
+  backfillObservableInput(input) {
+    if (typeof input['file_path'] === 'string' && !input['file_path'].startsWith('/')) {
+      input['file_path'] = resolve(process.cwd(), input['file_path']);
+    }
   },
   handler: async (args) => {
     // Write is a first-class tool intentionally allowed to write to any path.
@@ -478,6 +491,12 @@ export const editFileTool: ToolRegistration = {
       required: ['file_path', 'old_string', 'new_string'],
     },
   },
+  // F19: Expand relative file_path to absolute before hooks/permissions see it
+  backfillObservableInput(input) {
+    if (typeof input['file_path'] === 'string' && !input['file_path'].startsWith('/')) {
+      input['file_path'] = resolve(process.cwd(), input['file_path']);
+    }
+  },
   handler: async (args) => {
     let filePath: string;
     try {
@@ -567,6 +586,13 @@ export const bashTool: ToolRegistration = {
       },
       required: ['command'],
     },
+  },
+  // F19: Expand relative cwd to absolute before hooks/permissions see it
+  // Allows hook allowlists like "Bash(command=/cwd/path)" to match correctly.
+  backfillObservableInput(input) {
+    if (typeof input['cwd'] === 'string' && !input['cwd'].startsWith('/')) {
+      input['cwd'] = resolve(process.cwd(), input['cwd']);
+    }
   },
   handler: async (args) => {
     const command = args.command as string;

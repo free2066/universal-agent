@@ -82,6 +82,14 @@ export class AnthropicClient implements LLMClient {
       const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
       const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
+      // A19: Combine inference timeout signal with caller's AbortSignal (user Ctrl+C)
+      // Use AbortSignal.any() if available (Node 20.3+), otherwise prefer caller signal
+      const combinedSignal = options.signal
+        ? (typeof AbortSignal.any === 'function'
+          ? AbortSignal.any([_signal, options.signal])
+          : options.signal)
+        : _signal;
+
       const stream = this.client.messages.stream({
         model: this.model,
         max_tokens: effectiveMax,
@@ -98,7 +106,7 @@ export class AnthropicClient implements LLMClient {
             input_schema: t.parameters as Anthropic.Tool['input_schema'],
           })),
         } : {}),
-      } as Parameters<typeof this.client.messages.stream>[0]);
+      } as Parameters<typeof this.client.messages.stream>[0], { signal: combinedSignal });
 
       let textContent = '';
       const toolUseBlocks: Array<{ id: string; name: string; inputJson: string }> = [];

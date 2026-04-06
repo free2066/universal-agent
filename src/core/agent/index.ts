@@ -81,6 +81,16 @@ export class AgentCore {
 
     this._disabledTools = options.disabledTools;
     registerAllTools(this.registry, this.router, options.domain, options.disabledTools);
+
+    // C19: Import inherited session grants from parent agent (synchronous path)
+    // Allows parent's "Allow for this session" approvals to propagate to subagents.
+    // Uses dynamic import with .then() since constructor cannot be async.
+    const _inheritedGrants = (options as import('./types.js').AgentOptions).inheritedSessionGrants;
+    if (_inheritedGrants?.length) {
+      import('./permission-manager.js').then(({ getPermissionManager }) => {
+        getPermissionManager(process.cwd()).importSessionGrants(_inheritedGrants);
+      }).catch(() => { /* non-fatal */ });
+    }
   }
 
   async initMCP(): Promise<void> {

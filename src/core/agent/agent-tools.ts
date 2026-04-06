@@ -53,6 +53,7 @@ import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool
 import { backgroundRunTool, checkBackgroundTool, killBashTool } from '../tools/productivity/background-tools.js';
 import { todoWriteTool, todoReadTool } from '../tools/productivity/todo-tool.js';
 import { toolSearchToolRegistration } from '../tools/tool-search-tool.js';
+import { sleepTool } from '../tools/utils/sleep-tool.js';
 import { ListMcpResourcesRegistration, ReadMcpResourceRegistration } from '../tools/mcp/mcp-resource-tools.js';
 import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
 import { askUserQuestionTool } from '../tools/productivity/ask-user-question-tool.js';
@@ -163,6 +164,9 @@ export function registerAllTools(
 
   // AskUserQuestion — interactive structured prompting (Round 5: claude-code parity)
   reg(askUserQuestionTool);
+
+  // D19: SleepTool — non-blocking wait (claude-code SleepTool parity)
+  reg(sleepTool);
 
   // s05 — on-demand skill loading
   reg(loadSkillTool);

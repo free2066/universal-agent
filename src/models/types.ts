@@ -141,6 +141,13 @@ export interface ChatOptions {
    * @param toolCallId  Optional ID from the LLM stream
    */
   onToolCallDelta?: (index: number, toolName: string, deltaArgs: string, toolCallId?: string) => void;
+  /**
+   * A19 (claude-code toolUseContext.abortController.signal parity):
+   * AbortSignal to cancel the LLM HTTP request mid-flight.
+   * When the user presses Ctrl+C, the signal is aborted and the HTTP fetch is
+   * cancelled immediately without waiting for the response to complete.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -268,6 +275,24 @@ export interface DomainPlugin {
 export interface ToolRegistration {
   definition: ToolDefinition;
   handler: ToolHandler;
+  /**
+   * F19 (claude-code Tool.backfillObservableInput parity): Called on a COPY of the tool
+   * input before observers see it (hooks, permission checks, canUseTool).
+   *
+   * Mutate the copy in place to add legacy/derived fields (e.g. expand relative paths
+   * to absolute paths so hook allowlists can match them).
+   *
+   * The original API-bound input is NEVER mutated — this preserves prompt cache stability.
+   * Must be idempotent (calling twice with the same input produces the same result).
+   *
+   * Example (FileReadTool):
+   *   backfillObservableInput(input) {
+   *     if (typeof input.path === 'string' && !isAbsolute(input.path)) {
+   *       input.path = resolve(getCwd(), input.path);
+   *     }
+   *   }
+   */
+  backfillObservableInput?: (input: Record<string, unknown>) => void;
   /**
    * D18 (claude-code Tool.validateInput parity): Optional semantic validation.
    * Called AFTER JSON schema validation, BEFORE tool handler execution.

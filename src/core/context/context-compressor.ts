@@ -453,6 +453,38 @@ export interface CompactionResult {
   isRecompactionInChain: boolean;
   /** 走了哪条压缩路径 */
   compactionPath: 'llm_full' | 'skipped';
+  /**
+   * B19 (claude-code CompactionResult.boundaryMarker parity): UUID of the
+   * compact boundary message inserted into history after this compaction.
+   * Null if no compaction occurred.
+   * Used by getMessagesAfterCompactBoundary() for precise re-compaction positioning.
+   */
+  boundaryUuid?: string;
+}
+
+/**
+ * B19 (claude-code getMessagesAfterCompactBoundary parity):
+ * Scan history for the last compact_boundary message and return all messages after it.
+ * Used when re-compacting to identify only NEW messages since the last compact.
+ *
+ * Returns the full history if no boundary is found (first compaction).
+ */
+export function getMessagesAfterCompactBoundary(history: Message[]): Message[] {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i] as Message & { type?: string };
+    if (msg.type === 'compact_boundary') {
+      return history.slice(i + 1);
+    }
+  }
+  return history;
+}
+
+/**
+ * B19: isCompactBoundaryMessage — type guard for compact boundary messages.
+ * Mirrors claude-code isCompactBoundaryMessage() in messages.ts.
+ */
+export function isCompactBoundaryMessage(msg: Message): boolean {
+  return (msg as Message & { type?: string }).type === 'compact_boundary';
 }
 
 // ── A14: SnipResult — HistorySnip 截断结果（claude-code snipCompact.ts 对标）─────
@@ -658,11 +690,13 @@ export async function autoCompact(
   // 在 history 中插入结构化边界标记，记录压缩前后的元数据。
   // 重启后可通过 getMessagesAfterCompactBoundary() 定位最近一次压缩边界。
   // C14: preTokens 已在函数顶部通过 decision.estimatedTokens 定义
+  // B19: 为边界标记分配 UUID，供 CompactionResult.boundaryUuid 使用
+  const _boundaryUuid = `compact-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const boundaryMarker: Message = {
     role: 'system' as const,
     content: `[COMPACT BOUNDARY ${new Date().toISOString()}] turns=${toCompact.length} preTokens=${preTokens} warningState=${decision.warningState}`,
     // Attach type metadata without breaking Message type compatibility
-    ...({ type: 'compact_boundary' } as Record<string, unknown>),
+    ...({ type: 'compact_boundary', uuid: _boundaryUuid } as Record<string, unknown>),
   };
 
   history.splice(0, history.length, boundaryMarker, summaryMessage, ...toKeep);
@@ -759,6 +793,7 @@ export async function autoCompact(
     tokensFreed: preTokens - postTokens,
     isRecompactionInChain,
     compactionPath: 'llm_full',
+    boundaryUuid: _boundaryUuid, // B19: expose boundary UUID for caller tracking
   };
 
   // F15: runPostCompactCleanup — 压缩后 5 类缓存清理（claude-code postCompactCleanup.ts 对标）

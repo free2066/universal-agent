@@ -91,6 +91,14 @@ export interface AgentOptions {
    * and merged here. Priority: CLI --tools > project config > global config.
    */
   disabledTools?: Record<string, boolean>;
+  /**
+   * C19 (claude-code forkedAgent.ts canUseTool parity): Session grants inherited from parent agent.
+   * When spawning a subagent, the parent's PermissionManager.exportSessionGrants() result is
+   * passed here so the child inherits "Allow for this session" approvals without re-prompting.
+   *
+   * These grants are loaded into the child's PermissionManager.importSessionGrants() during init.
+   */
+  inheritedSessionGrants?: string[];
 }
 
 /** Pending dangerous command waiting for user confirmation (kstack article #15313). */

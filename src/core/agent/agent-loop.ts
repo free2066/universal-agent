@@ -555,6 +555,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   // Two things happen in parallel: previous iteration generates summary, next iteration awaits.
   let _pendingToolUseSummaryPromise: Promise<string | null> | undefined;
 
+  // A19: Extract abortSignal from opts for use throughout the loop
+  const _abortSignal = opts.abortSignal;
+
   // Outer unattended-retry loop
   let _unattendedDone = false;
   // B13: _earlyExit — 在嵌套循环中（工具执行）需要提前终止函数时使用
@@ -565,7 +568,29 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     while (iteration < MAX_ITERATIONS) {
       iteration++;
 
-      // ── B18: Await pendingToolUseSummary Promise (claude-code State.pendingToolUseSummary parity) ──
+      // ── A19: AbortSignal check — detect cancellation at the start of each iteration ──
+      // Mirrors claude-code query.ts signal.aborted checks at iteration boundaries.
+      // Exits cleanly with 'aborted' reason rather than throwing an error.
+      if (_abortSignal?.aborted) {
+        _terminalReason = 'aborted';
+        _earlyExit = true;
+        break;
+      }
+
+      // ── H19: formatInterruptReason — structured reason for aborted tool operations ──
+      // Mirrors claude-code interruptSignalReason() in query.ts.
+      // Allows downstream observers (tests, UI) to distinguish user cancel vs timeout.
+      const _formatInterruptReason = (signal: AbortSignal | undefined): string => {
+        if (!signal?.aborted) return 'Operation aborted';
+        const reason = signal.reason;
+        if (reason === 'user_interrupt' || (typeof reason === 'string' && /interrupt|cancel/i.test(reason))) {
+          return 'User cancelled operation';
+        }
+        if (reason === 'timeout' || (typeof reason === 'string' && /timeout/i.test(reason))) {
+          return 'Operation timed out';
+        }
+        return typeof reason === 'string' ? `Operation aborted: ${reason}` : 'Operation aborted';
+      };
       // Summary was fire-and-forget fired at end of previous iteration.
       // Await it NOW (before LLM call) and inject as user message if available.
       if (_pendingToolUseSummaryPromise) {
@@ -673,6 +698,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           // Round 7: ultrathink keyword overrides thinkingLevel to max budget
           thinkingLevel: _ultrathinkActive ? 'max' as const : thinkingLevel,
           onToolCallDelta,
+          // A19: Propagate AbortSignal to LLM call (claude-code toolUseContext.abortController.signal parity)
+          // Allows HTTP fetch to be cancelled when user interrupts with Ctrl+C
+          signal: _abortSignal,
         };
         response = fallbackChain
           ? await withApiRateLimitRetry(
@@ -997,7 +1025,21 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           // Check permission rules before hooks. In yolo mode, bypass entirely.
           // In autoEdit mode, write tools that are not in alwaysAllow still prompt.
           const permMgr = getPermissionManager(process.cwd());
-          const permDecision = permMgr.decide(call.name, call.arguments as Record<string, unknown>, approvalMode);
+
+          // F19: backfillObservableInput — expand relative paths BEFORE permission check and hooks.
+          // Mirrors claude-code Tool.backfillObservableInput():
+          //   "Called on copies of tool_use input before observers see it.
+          //    The original API-bound input is never mutated (preserves prompt cache)."
+          let _observableArgs = call.arguments as Record<string, unknown>;
+          try {
+            const _toolReg = registry.getRegistration(call.name);
+            if (_toolReg?.backfillObservableInput) {
+              _observableArgs = { ..._observableArgs };
+              _toolReg.backfillObservableInput(_observableArgs);
+            }
+          } catch { /* backfill failure is non-fatal */ }
+
+          const permDecision = permMgr.decide(call.name, _observableArgs, approvalMode);
           if (permDecision === 'deny') {
             await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: 'Denied by permission rule', success: false }));
             events?.onToolEnd?.(call.name, false, Date.now() - toolStartMs);
