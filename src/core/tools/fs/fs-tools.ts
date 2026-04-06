@@ -651,6 +651,20 @@ export const bashTool: ToolRegistration = {
         }
       }
 
+      // ── B17: isDangerousRemovalPath check — rm targeting root-level paths ────
+      // Extract path arguments from `rm` commands and check against dangerous paths list.
+      // This catches: rm -rf ~, rm -rf /Users, rm -rf /opt/myapp/../../../
+      const rmPathMatch = command.match(/\brm\s+(?:-\S+\s+)*([~/][\S]*)/);
+      if (rmPathMatch) {
+        const rmTarget = rmPathMatch[1]!;
+        try {
+          const { isDangerousRemovalPath } = await import('../../../utils/path-security.js');
+          if (isDangerousRemovalPath(rmTarget)) {
+            return `__CONFIRM_REQUIRED__:dangerous removal target — "${rmTarget}" is a protected system path\n${command}`;
+          }
+        } catch { /* non-fatal: path-security import failure does not block the command */ }
+      }
+
       // ── Extended security checks (Round 4: claude-code bashSecurity.ts parity) ────────────
       // Checks: IFS injection, Zsh dangerous cmds, /proc/environ, command substitution depth,
       //         backslash-escaped operators, comment-quote desync, JQ injection, dangerous vars.

@@ -131,7 +131,15 @@ export type HookEvent =
   // ── Round 8: Tool lifecycle split (PreToolUse/PostToolUse/PostToolUseFailure parity) ──
   | 'tool_pre_use'         // Before tool execution (modifiable: toolArgs)
   | 'tool_post_use'        // After tool execution (observable: toolResult)
-  | 'tool_use_failure';    // Tool execution failed (PostToolUseFailure parity)
+  | 'tool_use_failure'     // Tool execution failed (PostToolUseFailure parity)
+  // ── Round 17: Additional events (claude-code coreTypes.ts parity) ────────────
+  | 'user_prompt_submit'   // Before each user message is sent to LLM (can inject additionalContext)
+  | 'permission_request'   // When a tool operation awaits user permission (PermissionRequest parity)
+  | 'permission_denied'    // When a tool operation is denied (PermissionDenied parity)
+  | 'setup'                // Agent setup/initialization hook (Setup parity)
+  | 'elicitation'          // MCP server requested elicitation from user (Elicitation parity)
+  | 'elicitation_result'   // Elicitation result available (ElicitationResult parity)
+  | 'config_change';       // Agent configuration was changed at runtime (ConfigChange parity)
 
 export type HookType = 'shell' | 'inject' | 'block' | 'module' | 'http' | 'agent';
 
@@ -265,6 +273,24 @@ export interface HookContext {
   toolResult?: string;
   /** tool_use_failure: 错误信息 */
   toolError?: string;
+  // ── Round 17: New hook event fields ────────────────────────────────────────
+  /**
+   * user_prompt_submit: 用户原始输入的完整文本
+   * hook 可通过 additionalContext 注入额外内容
+   */
+  userPrompt?: string;
+  /** permission_request / permission_denied: 工具名称和操作信息 */
+  permissionToolName?: string;
+  permissionOperation?: string;
+  /** setup: 初始化信息 */
+  sessionId?: string;
+  /** elicitation: MCP 服务器请求信息 */
+  elicitationPrompt?: string;
+  elicitationServerName?: string;
+  /** config_change: 变更的配置键和新旧值 */
+  configKey?: string;
+  configOldValue?: unknown;
+  configNewValue?: unknown;
 }
 
 export interface HookResult {
@@ -289,6 +315,13 @@ export interface HookResult {
   /** Human-readable reason for blocking (displayed to user) */
   blockReason?: string;
   /**
+   * H17 (claude-code parity): Stop hook stopReason field.
+   * When continue is false, this message is shown to the user as the stop reason.
+   * Claude-code uses stopReason; blockReason is the legacy field (both are supported).
+   * Set via JSON stdout: { "hookSpecificOutput": { "stopReason": "Deployment blocked by policy" } }
+   */
+  stopReason?: string;
+  /**
    * Four-level permission decision (claude-code parity).
    * Used to merge decisions from multiple hooks with clear priority:
    *   deny > ask > allow > passthrough
@@ -296,6 +329,18 @@ export interface HookResult {
    * Set via JSON stdout: { "hookSpecificOutput": { "permissionDecision": "deny" } }
    */
   permissionDecision?: 'allow' | 'ask' | 'deny' | 'passthrough';
+  /**
+   * H17 (claude-code parity): PostToolUse hook can modify MCP tool output.
+   * Only effective for MCP tools (tool name starts with 'mcp_' or has MCP origin).
+   * Set via JSON stdout: { "hookSpecificOutput": { "updatedMCPToolOutput": "..." } }
+   */
+  updatedMCPToolOutput?: unknown;
+  /**
+   * R17: User prompt submit hook can inject additional context.
+   * Appended to the current user message before sending to LLM.
+   * Set via JSON stdout: { "hookSpecificOutput": { "additionalContext": "..." } }
+   */
+  additionalContext?: string;
 }
 
 // ── HookRunner ────────────────────────────────────────────────────────────────
@@ -662,13 +707,34 @@ export class HookRunner {
               permissionDecision,
             };
           }
+          // H17: updatedMCPToolOutput — PostToolUse hook can modify MCP tool output
+          // JSON: { "hookSpecificOutput": { "updatedMCPToolOutput": "..." } }
+          if (hookSpecific?.['updatedMCPToolOutput'] !== undefined) {
+            return {
+              proceed: true,
+              updatedMCPToolOutput: hookSpecific['updatedMCPToolOutput'],
+              permissionDecision,
+            };
+          }
+          // H17: additionalContext — UserPromptSubmit hook injects text into user message
+          // JSON: { "hookSpecificOutput": { "additionalContext": "..." } }
+          const additionalContext = (hookSpecific?.['additionalContext'] ?? json['additionalContext']) as string | undefined;
+          // H17: stopReason — Stop hook human-readable stop message (claude-code parity)
+          // JSON: { "continue": false, "stopReason": "..." } or { "hookSpecificOutput": { "stopReason": "..." } }
+          const stopReason = (hookSpecific?.['stopReason'] ?? json['stopReason']) as string | undefined;
+          if (stopReason && (json['continue'] === false || json['proceed'] === false)) {
+            return { proceed: false, blocked: true, blockReason: stopReason, stopReason };
+          }
           // injection: { "injection": "text to append" }
           if (json['injection']) {
-            return { proceed: true, injection: String(json['injection']), permissionDecision };
+            return { proceed: true, injection: String(json['injection']), permissionDecision, additionalContext };
           }
           // Permission-only response (no other action)
           if (permissionDecision && permissionDecision !== 'passthrough') {
-            return { proceed: true, permissionDecision };
+            return { proceed: true, permissionDecision, additionalContext };
+          }
+          if (additionalContext) {
+            return { proceed: true, additionalContext };
           }
           // Plain JSON with no recognized fields → treat as injection
           return { proceed: true, injection: output };

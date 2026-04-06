@@ -403,6 +403,34 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     role: 'user',
     content: filePath ? `${expandedPrompt}\n\n[File context: ${filePath}]` : expandedPrompt,
   };
+
+  // C17: user_prompt_submit hook — fire before adding message to history
+  // Allows hooks to inject additionalContext into the user message
+  try {
+    const { HookRunner } = await import('../hooks.js');
+    const _hookRunner = new HookRunner(process.cwd());
+    if (_hookRunner.hasHooksFor('user_prompt_submit')) {
+      const hookResult = await _hookRunner.run({
+        event: 'user_prompt_submit',
+        userPrompt: expandedPrompt,
+        cwd: process.cwd(),
+      });
+      if (hookResult.proceed === false) {
+        // Hook blocked the prompt submission
+        const reason = hookResult.blockReason ?? hookResult.stopReason ?? 'Blocked by user_prompt_submit hook';
+        onChunk(`\n[Hook] user_prompt_submit hook blocked prompt: ${reason}\n`);
+        const result: StreamLoopResult = { reason: 'hook_blocked', iterations: 0 };
+        events?.onTerminal?.(result);
+        return result;
+      }
+      // Inject additionalContext into user message
+      if (hookResult.additionalContext) {
+        (userMessage as { content: string }).content =
+          (userMessage.content as string) + '\n\n' + hookResult.additionalContext;
+      }
+    }
+  } catch { /* non-fatal: hook failure does not block prompt */ }
+
   history.push(userMessage);
 
   // ── Layer 4: Session Memory Update ─────────────────────────────────────────
@@ -1040,27 +1068,38 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
             events?.onToolEnd?.(call.name, true, durationMs);
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
             // Round 8: fire tool_post_use (PostToolUse parity)
+            // H17: updatedMCPToolOutput — allows hook to modify MCP tool output
+            let finalResultStr = resultStr;
             try {
               const { getHookRunner: _postUseRunner } = await import('../hooks.js');
               const _pr = _postUseRunner(process.cwd());
               if (_pr.hasHooksFor('tool_post_use')) {
-                await _pr.run({
+                const _postResult = await _pr.run({
                   event: 'tool_post_use',
                   toolName: call.name,
                   toolArgs: effectiveArgs as Record<string, unknown>,
                   toolResult: resultStr.slice(0, 2000), // cap to avoid huge payloads
                   cwd: process.cwd(),
                 });
+                // H17: if hook returns updatedMCPToolOutput and this is an MCP tool, use it
+                if (
+                  _postResult.updatedMCPToolOutput !== undefined &&
+                  (call.name.startsWith('mcp_') || call.name.includes('__mcp__'))
+                ) {
+                  finalResultStr = typeof _postResult.updatedMCPToolOutput === 'string'
+                    ? _postResult.updatedMCPToolOutput
+                    : JSON.stringify(_postResult.updatedMCPToolOutput);
+                }
               }
             } catch { /* non-fatal */ }
             // ── ToolUseSummary: async compress large results (Round 3) ─────
             // Fire-and-forget background summary for oversized tool outputs.
             // Summary is injected at the start of the NEXT iteration.
             // Only triggered for read-only tools (write tools rarely produce huge output).
-            if (resultStr.length >= TOOL_USE_SUMMARY_THRESHOLD && PARALLELIZABLE_TOOLS.has(call.name)) {
-              maybeGenerateToolSummary(call.name, resultStr).catch(() => { /* non-fatal */ });
+            if (finalResultStr.length >= TOOL_USE_SUMMARY_THRESHOLD && PARALLELIZABLE_TOOLS.has(call.name)) {
+              maybeGenerateToolSummary(call.name, finalResultStr).catch(() => { /* non-fatal */ });
             }
-            return { role: 'tool' as const, toolCallId: call.id, content: resultStr };
+            return { role: 'tool' as const, toolCallId: call.id, content: finalResultStr };
           } catch (err) {
             const durationMs = Date.now() - toolStartMs;
             await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: err instanceof Error ? err.message : String(err), success: false }));

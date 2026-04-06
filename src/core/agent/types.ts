@@ -113,6 +113,7 @@ export type TerminalReason =
   | 'max_iterations'       // 达到最大迭代次数
   | 'blocking_limit'       // context 已满（blocking 状态）
   | 'hook_stopped'         // hook 返回 stop
+  | 'hook_blocked'         // C17: user_prompt_submit hook 阻止了提交
   | 'budget_exhausted'     // token 预算耗尽
   | 'prompt_too_long'      // PTL 无法恢复
   | 'model_error'          // 模型调用失败

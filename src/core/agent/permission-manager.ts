@@ -41,6 +41,18 @@ export type ApprovalMode = 'default' | 'autoEdit' | 'yolo';
 
 /** Three-level permission decision (mirrors claude-code's allow/ask/deny) */
 export type PermissionDecision = 'allow' | 'ask' | 'deny';
+/**
+ * E17: Extended permission decision type — adds 'passthrough' as 4th behavior.
+ * Mirrors claude-code src/types/permissions.ts PermissionResult passthrough.
+ *
+ * passthrough semantics: for pipeline commands (cmd1 && cmd2), a sub-command
+ * needs user confirmation but should not immediately block the overall command —
+ * results are collected in subcommandResults and shown to the user together.
+ *
+ * Note: Most code uses the 3-type PermissionDecision; only pipe/compound command
+ * handlers and hook merging need the 4-type version.
+ */
+export type PermissionDecisionExtended = PermissionDecision | 'passthrough';
 
 export interface PermissionSettings {
   /** Tools/patterns that are always allowed without prompting */
@@ -331,6 +343,28 @@ export class PermissionManager {
   // ── Permission decision ─────────────────────────────────────────────────────
 
   /**
+   * E17: Emit permission hooks (fire-and-forget, non-blocking).
+   * Triggers permission_request (when asking user) or permission_denied (when denying).
+   */
+  private _emitPermissionHook(
+    event: 'permission_request' | 'permission_denied',
+    toolName: string,
+    toolArgs: Record<string, unknown> | undefined,
+  ): void {
+    // Fire-and-forget: permission hooks do not block the decision flow
+    import('../hooks.js').then(({ HookRunner }) => {
+      const runner = new HookRunner(this.cwd);
+      if (!runner.hasHooksFor(event)) return;
+      runner.run({
+        event,
+        permissionToolName: toolName,
+        permissionOperation: toolArgs ? JSON.stringify(toolArgs).slice(0, 200) : undefined,
+        cwd: this.cwd,
+      }).catch(() => { /* non-fatal */ });
+    }).catch(() => { /* import failure is non-fatal */ });
+  }
+
+  /**
    * Decide whether to allow, ask, or deny a tool invocation.
    *
    * Priority (claude-code parity, B9 updated):
@@ -365,12 +399,20 @@ export class PermissionManager {
 
     // 1. Check deny rules (highest priority — any deny wins)
     for (const pattern of this.allAlwaysDeny) {
-      if (matchesPattern(pattern, toolName, normalizedArgs)) return 'deny';
+      if (matchesPattern(pattern, toolName, normalizedArgs)) {
+        // E17: fire permission_denied hook (fire-and-forget)
+        this._emitPermissionHook('permission_denied', toolName, toolArgs);
+        return 'deny';
+      }
     }
 
     // 2. Check ask[] rules (force confirmation even in yolo mode)
     for (const pattern of this.allAsk) {
-      if (matchesPattern(pattern, toolName, normalizedArgs)) return 'ask';
+      if (matchesPattern(pattern, toolName, normalizedArgs)) {
+        // E17: fire permission_request hook (fire-and-forget)
+        this._emitPermissionHook('permission_request', toolName, toolArgs);
+        return 'ask';
+      }
     }
 
     // 3. Check allow rules
@@ -384,6 +426,8 @@ export class PermissionManager {
     if (approvalMode === 'autoEdit') {
       // Read-class tools are automatically allowed in autoEdit mode
       if (READ_TOOLS.has(toolName)) return 'allow';
+      // E17: fire permission_request for autoEdit write tools
+      this._emitPermissionHook('permission_request', toolName, toolArgs);
       return 'ask';
     }
 
