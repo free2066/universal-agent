@@ -31,7 +31,7 @@
  * }
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, watchFile, unwatchFile } from 'fs';
 import { resolve, join } from 'path';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -184,6 +184,42 @@ function saveSettingsFile(path: string, settings: PermissionSettings): void {
   writeFileSync(path, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
 }
 
+// ── settings.json watchFile hot-reload (C11: claude-code settingsCache.ts parity) ────────────
+//
+// Watches each settings file for changes and auto-invalidates the PermissionManager cache.
+// This mirrors claude-code's resetSettingsCache() behavior triggered by file watchers.
+// Uses polling (watchFile) instead of inotify (fs.watch) for cross-platform reliability.
+//
+// Auto-unwatches after 30 minutes to prevent memory/fd leaks on long-running sessions.
+
+const _settingsWatchers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Register a watchFile listener for a settings file path.
+ * On change: calls manager.invalidate() so the next read re-parses from disk.
+ * Idempotent: calling twice for the same path is safe (no duplicate listeners).
+ */
+function watchSettingsFile(filePath: string, manager: PermissionManager): void {
+  if (_settingsWatchers.has(filePath)) return;
+
+  // Use polling interval of 2s — less responsive than inotify but works on
+  // network filesystems, Docker volumes, and macOS where fs.watch is flaky.
+  watchFile(filePath, { interval: 2000, persistent: false }, () => {
+    manager.invalidate();
+  });
+
+  // Auto-unwatch after 30 minutes to prevent fd/memory leaks.
+  // PermissionManager is typically re-created each agent session anyway.
+  const timer = setTimeout(() => {
+    unwatchFile(filePath);
+    _settingsWatchers.delete(filePath);
+  }, 30 * 60 * 1000);
+  // Allow the timer to be garbage-collected when the process is about to exit
+  if (typeof timer === 'object' && timer.unref) timer.unref();
+
+  _settingsWatchers.set(filePath, timer);
+}
+
 // ── PermissionManager ─────────────────────────────────────────────────────────
 
 export class PermissionManager {
@@ -201,6 +237,8 @@ export class PermissionManager {
   private get userSettings(): PermissionSettings {
     if (!this._userSettings) {
       this._userSettings = loadSettingsFile(USER_SETTINGS_FILE);
+      // C11: hot-reload — watch for changes and auto-invalidate cache
+      watchSettingsFile(USER_SETTINGS_FILE, this);
     }
     return this._userSettings;
   }
@@ -209,6 +247,8 @@ export class PermissionManager {
     if (!this._projectSettings) {
       const path = resolve(this.cwd, SETTINGS_FILE);
       this._projectSettings = loadSettingsFile(path);
+      // C11: hot-reload — watch project settings file
+      watchSettingsFile(path, this);
     }
     return this._projectSettings;
   }
@@ -217,6 +257,8 @@ export class PermissionManager {
     if (!this._localSettings) {
       const path = resolve(this.cwd, LOCAL_SETTINGS_FILE);
       this._localSettings = loadSettingsFile(path);
+      // C11: hot-reload — watch local settings file (may not exist yet, watchFile tolerates this)
+      watchSettingsFile(path, this);
     }
     return this._localSettings;
   }

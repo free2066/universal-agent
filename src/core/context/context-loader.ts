@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, statSync, readdirSync } from '
 import { resolve, join, dirname, isAbsolute, extname } from 'path';
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
+import picomatch from 'picomatch';
 import { getSkillLoader } from '../skills/skill-loader.js';
 import { getUserSetting } from '../agent/permission-manager.js';
 
@@ -53,19 +54,15 @@ function parseFrontmatter(content: string): { body: string; paths: string[] | nu
 
 /**
  * Check whether a given file path matches any of the scope patterns.
- * Uses simple glob matching (same approach as permission-manager.ts).
+ * D11: Uses picomatch for accurate bash-style glob matching (claude-code parity).
+ * Replaces the previous manual regex substitution which had edge cases with
+ * single-level wildcards (*) vs multi-level (**), and didn't support {a,b} alternation.
  */
 function matchesPathScope(filePath: string, scopePatterns: string[]): boolean {
   if (scopePatterns.length === 0) return true; // no scope = always inject
-  for (const pattern of scopePatterns) {
-    const regexStr = pattern
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*\*/g, '__DSTAR__')
-      .replace(/\*/g, '[^/]*')
-      .replace(/__DSTAR__/g, '.*');
-    if (new RegExp(`^${regexStr}$`).test(filePath)) return true;
-  }
-  return false;
+  return scopePatterns.some(pattern =>
+    picomatch.isMatch(filePath, pattern, { dot: true, windows: false }),
+  );
 }
 
 /**
@@ -210,6 +207,10 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
       join(dir, 'AGENTS.override.md'),
       join(dir, 'AGENTS.md'),
       join(dir, 'CLAUDE.md'),
+      // E11: Local private context files — NOT committed to SCM (add to .gitignore)
+      // Mirrors claude-code's CLAUDE.local.md pattern for per-developer overrides.
+      join(dir, 'CLAUDE.local.md'),
+      join(dir, 'AGENTS.local.md'),
     ];
 
     for (const filePath of candidates) {
@@ -579,6 +580,24 @@ export function initAgentsMd(dir: string): string {
     '',
   ].join('\n');
   writeFileSync(filePath, content);
+  // E11: Add *.local.md to .gitignore to prevent accidental SCM commit of private context files
+  // Mirrors claude-code's handling of CLAUDE.local.md as a private developer override.
+  try {
+    const gitignorePath = join(dir, '.gitignore');
+    const ignoreEntries = ['CLAUDE.local.md', 'AGENTS.local.md', '*.local.md'];
+    let gitignoreContent = existsSync(gitignorePath)
+      ? readFileSync(gitignorePath, 'utf-8')
+      : '';
+    const lines = gitignoreContent.split('\n');
+    let added = false;
+    for (const entry of ignoreEntries) {
+      if (!lines.includes(entry)) {
+        gitignoreContent = gitignoreContent.trimEnd() + '\n' + entry + '\n';
+        added = true;
+      }
+    }
+    if (added) writeFileSync(gitignorePath, gitignoreContent, 'utf-8');
+  } catch { /* non-fatal: .gitignore update is best-effort */ }
   return `✓ Created AGENTS.md at ${filePath}`;
 }
 
