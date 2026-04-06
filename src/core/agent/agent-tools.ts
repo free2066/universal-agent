@@ -11,13 +11,16 @@ import type { ToolRegistration } from '../../models/types.js';
 import { subagentSystem, createTaskTool, askExpertModelTool } from '../subagent-system.js';
 import { readFileTool, writeFileTool, editFileTool, bashTool, listFilesTool, grepTool } from '../tools/fs/fs-tools.js';
 import { notebookEditTool } from '../tools/fs/notebook-tool.js';
+import { globTool } from '../tools/fs/glob-tool.js';
 import { webFetchTool, webSearchTool } from '../tools/web/web-tools.js';
 import { codeInspectorTool } from '../tools/code/code-inspector.js';
 import { selfHealTool } from '../tools/code/self-heal.js';
 import { spawnAgentTool, spawnParallelTool } from '../tools/agents/spawn-agent.js';
 import { coordinatorRunTool } from '../tools/agents/coordinator-tool.js';
+import { enterPlanModeTool, exitPlanModeTool } from '../tools/agents/plan-mode-tools.js';
 import { businessDefectDetectorTool } from '../tools/code/business-defect-detector.js';
 import { reverseAnalyzeTool } from '../tools/code/reverse-analyze.js';
+import { lspTool } from '../tools/code/lsp-tool.js';
 import { loadSkillTool, runSkillTool } from '../tools/productivity/skill-tool.js';
 import { readDocTool, docSearchTool, fetchDocTool } from '../tools/productivity/docs-tool.js';
 import { scriptSaveTool, scriptRunTool, scriptListTool } from '../tools/productivity/script-tools.js';
@@ -111,6 +114,7 @@ export function registerAllTools(
     listFilesTool,
     grepTool,
     notebookEditTool,  // Round 5: claude-code NotebookEditTool parity
+    globTool,          // Round 6: claude-code GlobTool parity
   ]);
 
   // Web tools
@@ -128,6 +132,13 @@ export function registerAllTools(
   reg(coordinatorRunTool);
   reg(businessDefectDetectorTool);
   reg(reverseAnalyzeTool);
+
+  // EnterPlanMode / ExitPlanMode — plan review before execution (Round 6: claude-code parity)
+  reg(enterPlanModeTool);
+  reg(exitPlanModeTool);
+
+  // LSPTool — language server code intelligence (Round 6: claude-code parity, needs ENABLE_LSP_TOOL=true)
+  reg(lspTool);
 
   // s03 — in-session todo tracking with nag reminder
   {

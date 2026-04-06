@@ -398,9 +398,18 @@ async function spawnAndRun(
   // ── Delegate to subagent system if a named type is requested ─────────────
   if (opts.subagentType) {
     const { subagentSystem } = await import('../../subagent-system.js');
-    const result = await subagentSystem.runAgent(opts.subagentType, fullTask, model);
-    writeContextFile(root, taskId, result);
-    return result;
+    const { emitHook: emitHookSub } = await import('../../hooks.js');
+
+    emitHookSub('subagent_start', { agentName: opts.subagentType });
+    try {
+      const result = await subagentSystem.runAgent(opts.subagentType, fullTask, model);
+      emitHookSub('subagent_stop', { agentName: opts.subagentType });
+      writeContextFile(root, taskId, result);
+      return result;
+    } catch (err) {
+      emitHookSub('subagent_stop', { agentName: opts.subagentType });
+      throw err;
+    }
   }
 
   // ── Spawn a fully isolated AgentCore, injecting depth+1 ──────────────────
@@ -449,7 +458,26 @@ async function spawnAndRun(
 
   let result: string;
   try {
+    // ── SubagentStart Hook (Round 6: claude-code SubagentStop parity) ─────────
+    // Emit subagent_start before the child agent begins execution.
+    const { emitHook } = await import('../../hooks.js');
+    emitHook('subagent_start', {
+      agentName: opts.subagentType ?? `spawn-${taskId}`,
+    });
+
     result = await Promise.race([runPromise, timeoutPromise]);
+
+    // ── SubagentStop Hook ─────────────────────────────────────────────────────
+    emitHook('subagent_stop', {
+      agentName: opts.subagentType ?? `spawn-${taskId}`,
+    });
+  } catch (err) {
+    // Emit subagent_stop on error too (agent finished, even if errored)
+    const { emitHook } = await import('../../hooks.js');
+    emitHook('subagent_stop', {
+      agentName: opts.subagentType ?? `spawn-${taskId}`,
+    });
+    throw err;
   } finally {
     clearTimeout(_timeoutHandle);
   }

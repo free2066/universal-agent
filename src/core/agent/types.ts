@@ -18,6 +18,7 @@ export const PARALLELIZABLE_TOOLS = new Set([
   'Read', 'read_file', 'readFile',
   'LS', 'ls', 'list_files',
   'Grep', 'grep_search',
+  'Glob', 'glob',              // Round 6: GlobTool parity
   // Web
   'WebFetch', 'WebSearch', 'web_search', 'web_fetch',
   // Analysis / inspection
