@@ -1355,7 +1355,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               _pendingToolUseSummaryPromise = maybeGenerateToolSummary(call.name, finalResultStr)
                 .catch(() => null);
             }
-            return { role: 'tool' as const, toolCallId: call.id, content: finalResultStr };
+
+            // C24: processToolResult -- persist large results to disk instead of truncating
+            // Mirrors claude-code toolResultStorage.ts L205 processToolResultBlock().
+            // Results > 50k chars are saved to ~/.uagent/tool-results/ and replaced with
+            // a <persisted-output> reference. The model can use Read tool to access full content.
+            let persistedResultStr = finalResultStr;
+            try {
+              const { processToolResult } = await import('../tools/tool-result-storage.js');
+              persistedResultStr = await processToolResult(call.id, call.name, finalResultStr);
+            } catch { /* non-fatal: fall through with original result */ }
+
+            return { role: 'tool' as const, toolCallId: call.id, content: persistedResultStr };
           } catch (err) {
             const durationMs = Date.now() - toolStartMs;
             await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: err instanceof Error ? err.message : String(err), success: false }));

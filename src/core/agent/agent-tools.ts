@@ -49,7 +49,7 @@ import {
 } from '../tools/productivity/terminal-ipc-tool.js';
 import { redisProbeTool } from '../tools/productivity/redis-probe.js';
 import { databaseQueryTool } from '../tools/productivity/database-query.js';
-import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool } from '../task-board.js';
+import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool, taskOutputTool } from '../task-board.js';
 import { backgroundRunTool, checkBackgroundTool, killBashTool } from '../tools/productivity/background-tools.js';
 import { todoWriteTool, todoReadTool } from '../tools/productivity/todo-tool.js';
 import { toolSearchToolRegistration } from '../tools/tool-search-tool.js';
@@ -59,6 +59,7 @@ import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
 import { askUserQuestionTool } from '../tools/productivity/ask-user-question-tool.js';
 import { configGetTool, configSetTool } from '../tools/config/config-tool.js';
 import { cronCreateTool, cronDeleteTool, cronListTool } from '../tools/productivity/cron-tools.js';
+import { teamCreateTool, teamDeleteTool } from '../tools/swarm/team-tools.js';
 import {
   spawnTeammateTool,
   listTeammatesTool,
@@ -221,7 +222,8 @@ export function registerAllTools(
   reg(autopilotRunTool);
 
   // s07 — persistent task board (+ s11 claim)
-  regMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool]);
+  // F24: added taskOutputTool (poll/block wait for task output)
+  regMany([taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool, taskOutputTool]);
   reg(claimTaskFromBoardTool);
 
   // s08 — background command execution
@@ -261,6 +263,12 @@ export function registerAllTools(
   // E23: ScheduleCronTool — 定时任务系统（claude-code ScheduleCronTool parity）
   // 门控：AGENT_TRIGGERS 环境变量（默认开启）
   regMany([cronCreateTool, cronDeleteTool, cronListTool]);
+
+  // E24: TeamCreate/TeamDeleteTool — Swarm team management (LLM-callable)
+  // Mirrors claude-code TeamCreateTool + TeamDeleteTool
+  // Creates/disbands named teams with multiple spawned agents
+  reg(teamCreateTool);
+  reg(teamDeleteTool);
 
   // Domain-specific tools
   router.registerTools(registry, domain);

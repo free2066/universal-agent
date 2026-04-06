@@ -41,6 +41,17 @@ export interface Task {
   owner: string;
   createdAt: number;
   updatedAt: number;
+  // F24: activeForm -- spinner display text shown in UI progress timeline
+  // Mirrors claude-code TaskCreateTool activeForm field
+  // e.g. "Running tests" (present-tense, concise)
+  activeForm?: string;
+  // F24: metadata -- arbitrary key-value pairs for agent coordination
+  // Mirrors claude-code TaskUpdateTool metadata field
+  // Set a key to null to delete it
+  metadata?: Record<string, string | null>;
+  // F24: output -- task result output (written by owning agent on completion)
+  output?: string;
+  outputWrittenAt?: number;
 }
 
 // ─── TaskBoard ────────────────────────────────────────────────────────────────
@@ -86,7 +97,7 @@ export class TaskBoard {
     writeFileSync(this.filePath(task.id), JSON.stringify(task, null, 2), 'utf-8');
   }
 
-  create(subject: string, description = '', blockedBy: number[] = []): string {
+  create(subject: string, description = '', blockedBy: number[] = [], activeForm?: string): string {
     const now = Date.now();
     const task: Task = {
       id: this.nextId++,
@@ -97,6 +108,7 @@ export class TaskBoard {
       owner: '',
       createdAt: now,
       updatedAt: now,
+      ...(activeForm ? { activeForm } : {}),
     };
     this.save(task);
     // Emit task_create hook (Batch 2)
@@ -115,6 +127,9 @@ export class TaskBoard {
     addBlockedBy?: number[];
     removeBlockedBy?: number[];
     owner?: string;
+    activeForm?: string;
+    metadata?: Record<string, string | null>;
+    output?: string;
   }): string {
     const task = this.load(id);
     if (opts.status) {
@@ -138,6 +153,27 @@ export class TaskBoard {
     }
     if (opts.owner !== undefined) {
       task.owner = opts.owner;
+    }
+    // F24: activeForm update
+    if (opts.activeForm !== undefined) {
+      task.activeForm = opts.activeForm;
+    }
+    // F24: metadata merge (set null key to delete)
+    if (opts.metadata) {
+      const current = task.metadata ?? {};
+      for (const [k, v] of Object.entries(opts.metadata)) {
+        if (v === null) {
+          delete current[k];
+        } else {
+          current[k] = v;
+        }
+      }
+      task.metadata = Object.keys(current).length > 0 ? current : undefined;
+    }
+    // F24: output recording
+    if (opts.output !== undefined) {
+      task.output = opts.output;
+      task.outputWrittenAt = Date.now();
     }
     task.updatedAt = Date.now();
     this.save(task);
@@ -284,12 +320,16 @@ export const taskCreateTool: ToolRegistration = {
     parameters: {
       type: 'object' as const,
       properties: {
-        subject: { type: 'string', description: 'Short task title (≤80 chars).' },
+        subject: { type: 'string', description: 'Short task title (<=80 chars).' },
         description: { type: 'string', description: 'Detailed description (optional).' },
         blocked_by: {
           type: 'array',
           items: { type: "number" },
           description: 'IDs of tasks that must complete before this one can start.',
+        },
+        active_form: {
+          type: 'string',
+          description: 'F24: Present-tense spinner text shown in UI (e.g. "Running tests").',
         },
       },
       required: ['subject'],
@@ -301,6 +341,7 @@ export const taskCreateTool: ToolRegistration = {
       args.subject as string,
       (args.description as string | undefined) ?? '',
       (args.blocked_by as number[] | undefined) ?? [],
+      args.active_form as string | undefined,
     );
   },
 };
@@ -309,7 +350,7 @@ export const taskUpdateTool: ToolRegistration = {
   definition: {
     name: 'task_update',
     description: [
-      'Update a task\'s status or dependencies.',
+      'Update a task\'s status, dependencies, or metadata.',
       'Completing a task (status=completed) automatically removes it from all blockedBy lists,',
       'potentially unblocking downstream tasks.',
     ].join(' '),
@@ -333,6 +374,18 @@ export const taskUpdateTool: ToolRegistration = {
           description: 'Remove dependencies.',
         },
         owner: { type: 'string', description: 'Assign an owner (agent name or "me").' },
+        active_form: {
+          type: 'string',
+          description: 'F24: Update spinner text (e.g. "Writing tests"). Set to "" to clear.',
+        },
+        metadata: {
+          type: 'object',
+          description: 'F24: Key-value metadata to merge. Set a key to null to delete it.',
+        },
+        output: {
+          type: 'string',
+          description: 'F24: Task result output written by the owning agent.',
+        },
       },
       required: ['task_id'],
     },
@@ -344,6 +397,9 @@ export const taskUpdateTool: ToolRegistration = {
       addBlockedBy: args.add_blocked_by as number[] | undefined,
       removeBlockedBy: args.remove_blocked_by as number[] | undefined,
       owner: args.owner as string | undefined,
+      activeForm: args.active_form as string | undefined,
+      metadata: args.metadata as Record<string, string | null> | undefined,
+      output: args.output as string | undefined,
     });
   },
 };
@@ -402,5 +458,94 @@ export const taskStopTool: ToolRegistration = {
       args.task_id as number,
       args.reason as string | undefined,
     );
+  },
+};
+
+/**
+ * F24: taskOutputTool -- poll or wait for task output
+ *
+ * Mirrors claude-code src/tools/TaskOutputTool/TaskOutputTool.tsx:
+ * Polls the task's output field, optionally blocking until it appears or the task completes.
+ * Supports bash/agent/swarm tasks uniformly.
+ */
+export const taskOutputTool: ToolRegistration = {
+  definition: {
+    name: 'task_output',
+    description: [
+      'F24: Poll or wait for the output of a task.',
+      'Returns the task\'s output field if available.',
+      'With block=true, waits up to timeout_ms milliseconds for the task to complete.',
+      'Useful for coordinating between agents: agent writes output via task_update(output=...),',
+      'lead polls via task_output.',
+    ].join(' '),
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'number', description: 'Task ID to get output from.' },
+        block: {
+          type: 'boolean',
+          description: 'If true, wait for the task to complete (default: false).',
+        },
+        timeout_ms: {
+          type: 'number',
+          description: 'Max wait time in ms when block=true (default: 30000 = 30s).',
+        },
+        poll_interval_ms: {
+          type: 'number',
+          description: 'Poll interval in ms when block=true (default: 2000 = 2s).',
+        },
+      },
+      required: ['task_id'],
+    },
+  },
+  handler: async (args: Record<string, unknown>): Promise<string> => {
+    const taskId = args.task_id as number;
+    const block = (args.block as boolean | undefined) ?? false;
+    const timeoutMs = (args.timeout_ms as number | undefined) ?? 30_000;
+    const pollIntervalMs = (args.poll_interval_ms as number | undefined) ?? 2_000;
+
+    const board = getTaskBoard(process.cwd());
+
+    // Non-blocking: return current state immediately
+    if (!block) {
+      const raw = JSON.parse(board.get(taskId)) as Task;
+      if (raw.output) {
+        return `Task #${taskId} output:\n${raw.output}`;
+      }
+      const statusInfo = `Task #${taskId} (${raw.status}): no output yet.`;
+      if (['completed', 'cancelled'].includes(raw.status)) {
+        return `${statusInfo} Task ended without writing output.`;
+      }
+      return statusInfo;
+    }
+
+    // Blocking: poll until output appears or task completes or timeout
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      let raw: Task;
+      try {
+        raw = JSON.parse(board.get(taskId)) as Task;
+      } catch {
+        return `Error: Task ${taskId} not found.`;
+      }
+
+      if (raw.output) {
+        return `Task #${taskId} output:\n${raw.output}`;
+      }
+
+      if (['completed', 'cancelled'].includes(raw.status)) {
+        return `Task #${taskId} ended (${raw.status}) without writing output.`;
+      }
+
+      // Wait before polling again
+      await new Promise<void>((resolve) => {
+        const wait = Math.min(pollIntervalMs, deadline - Date.now());
+        if (wait <= 0) { resolve(); return; }
+        setTimeout(resolve, wait);
+      });
+    }
+
+    // Timeout
+    return `Task #${taskId} output poll timed out after ${timeoutMs}ms. Task may still be running.`;
   },
 };

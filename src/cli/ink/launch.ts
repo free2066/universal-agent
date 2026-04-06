@@ -17,6 +17,7 @@ import { App } from './App.js';
 import type { AgentCore } from '../../core/agent.js';
 import { modelManager } from '../../models/model-manager.js';
 import { loadLocalPlugins } from '../../core/domain-router.js';
+import { setupGracefulShutdown } from '../graceful-shutdown.js';
 
 export interface InkReplOptions {
   domain: string;
@@ -194,6 +195,37 @@ export async function runInkREPL(
       process.stdout.write('Goodbye!\n');
       setTimeout(() => process.exit(0), 200);
       resolve();
+    });
+
+    // A24: setupGracefulShutdown -- SIGTERM/SIGHUP with failsafe timer
+    // Mirrors claude-code gracefulShutdown.ts L237+L391
+    // SIGTERM (143): Kubernetes/Docker/systemd graceful stop
+    // SIGHUP  (129): terminal hangup, nohup
+    setupGracefulShutdown({
+      onShutdown: async () => {
+        try { abortCurrentStream?.(); } catch { /* non-fatal */ }
+        sigintLoggerClose?.();
+        const history = agent.getHistory();
+        if (history.length >= 2) {
+          try {
+            const { saveSnapshot } = await import('../../core/memory/session-snapshot.js');
+            saveSnapshot(`session-${SESSION_ID}`, history);
+          } catch { /* non-fatal */ }
+        }
+        if (history.length >= 4) {
+          try {
+            const { drainIngest } = await import('../../core/memory/memory-store.js');
+            await drainIngest(3000);
+          } catch { /* non-fatal */ }
+        }
+        try {
+          const { HookRunner } = await import('../../core/hooks.js');
+          await new HookRunner(process.cwd()).run({ event: 'on_session_end', cwd: process.cwd() });
+        } catch { /* non-fatal */ }
+        unmount();
+        process.stdout.write('\nGoodbye!\n');
+      },
+      timeoutMs: 5_000,
     });
   });
 }
