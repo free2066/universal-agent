@@ -716,7 +716,120 @@ export const bashTool: ToolRegistration = {
     const shell = findSuitableShell();
     const subprocessEnv = buildSubprocessEnv();
 
+    // G26: BASH_AUTO_BACKGROUND — commands running >15s are automatically moved to background.
+    // Mirrors claude-code BashTool.tsx ASSISTANT_BLOCKING_BUDGET_MS = 15_000 + auto-background trigger.
+    // Disabled for: sleep, wait, read, pause (commands expected to run long without producing output).
+    const BASH_BLOCKING_BUDGET_MS = 15_000;
+    const DISALLOWED_AUTO_BACKGROUND = new Set(['sleep', 'wait', 'read', 'pause', 'tail']);
+    const firstWord = command.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+    const autoBackgroundEnabled = !DISALLOWED_AUTO_BACKGROUND.has(firstWord) &&
+      process.env.BASH_DISABLE_AUTO_BACKGROUND !== '1';
+
     const startMs = Date.now();
+
+    if (autoBackgroundEnabled) {
+      // G26: Async spawn path — allows 15s auto-backgrounding
+      return await new Promise<string>((resolve: (value: string) => void) => {
+        const { spawn: spawnProc } = require('child_process') as typeof import('child_process');
+        const proc = spawnProc(shell ?? 'sh', ['-c', command], {
+          cwd,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: subprocessEnv,
+        });
+
+        let stdout = '';
+        let stderr = '';
+        proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+        proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+        let settled = false;
+
+        // G26: 15s auto-background timer — transfer process to backgroundManager
+        const autoBackgroundTimer = setTimeout(() => {
+          if (settled || proc.exitCode !== null) return;
+          settled = true;
+
+          try {
+            const { backgroundManager: bgMgr } = require('../../background-manager.js') as typeof import('../../background-manager.js');
+            const partialOutput = (stdout + stderr).slice(0, 2000);
+            const bgId = bgMgr.registerExistingProcess(proc, command, partialOutput);
+            resolve(
+              `[Command auto-backgrounded after ${BASH_BLOCKING_BUDGET_MS / 1000}s]\n` +
+              `Background task ID: ${bgId}\n` +
+              `Use check_background { "id": "${bgId}" } to poll for results.\n` +
+              `Results will also appear automatically before the next LLM call.\n\n` +
+              `Partial output so far (first 2000 chars):\n${partialOutput || '(no output yet)'}`,
+            );
+          } catch (bgErr) {
+            // BackgroundManager import failed — fall through to wait for proc naturally
+            resolve(`[Command still running after 15s — will complete eventually]\nPartial output:\n${(stdout + stderr).slice(0, 1000)}`);
+          }
+        }, BASH_BLOCKING_BUDGET_MS);
+
+        const hardTimeoutTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(autoBackgroundTimer);
+          try { proc.kill('SIGTERM'); } catch { /* already dead */ }
+          const raw = (stdout + stderr).trim() || '(no output)';
+          resolve(`${raw}\n(Command timed out after ${timeout}ms)`);
+        }, timeout);
+
+        proc.on('close', (code) => {
+          if (settled) return; // already auto-backgrounded
+          settled = true;
+          clearTimeout(autoBackgroundTimer);
+          clearTimeout(hardTimeoutTimer);
+
+          const elapsed = Date.now() - startMs;
+          const raw = (stdout + (stderr ? `\nSTDERR:\n${stderr}` : '')).trim() || '(no output)';
+
+          // C10-4: Large output file storage — outputs > 100KB are written to a temp file
+          const OUTPUT_FILE_THRESHOLD = 100 * 1024;
+          if (Buffer.byteLength(raw, 'utf-8') > OUTPUT_FILE_THRESHOLD) {
+            try {
+              const { mkdtempSync, writeFileSync: wfs } = require('fs') as typeof import('fs');
+              const { join: pjoin } = require('path') as typeof import('path');
+              const { tmpdir } = require('os') as typeof import('os');
+              const tmpDir = mkdtempSync(pjoin(tmpdir(), 'uagent-bash-'));
+              const outFile = pjoin(tmpDir, 'output.txt');
+              wfs(outFile, raw, 'utf-8');
+              const lines = raw.split('\n').length;
+              const bytes = Buffer.byteLength(raw, 'utf-8');
+              const timingNote = elapsed > 5000 ? ` (${(elapsed / 1000).toFixed(1)}s)` : '';
+              resolve(
+                `Output too large to display inline (${lines} lines, ${Math.round(bytes / 1024)}KB).${timingNote}\n` +
+                `Saved to: ${outFile}\n` +
+                `Use Read tool to view: Read { file_path: "${outFile}" }\n\n` +
+                `Preview (first 100 lines):\n` +
+                raw.split('\n').slice(0, 100).join('\n'),
+              );
+              return;
+            } catch { /* fall through to normal truncation */ }
+          }
+
+          const { content, truncated } = truncateOutput(raw);
+          const timingNote = elapsed > 5000 ? `\n(Completed in ${(elapsed / 1000).toFixed(1)}s)` : '';
+          const exitNote = code !== 0 ? `\n(Exit code: ${code})` : '';
+          // G12-2: Detect CWD changes after bash execution
+          setImmediate(() => { try { maybeFireCwdChanged(process.cwd()); } catch { /* non-fatal */ } });
+          resolve(content + timingNote + exitNote + (truncated ? '' : ''));
+        });
+
+        proc.on('error', (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(autoBackgroundTimer);
+          clearTimeout(hardTimeoutTimer);
+          const elapsed = Date.now() - startMs;
+          const raw = (stdout + stderr).trim();
+          const timingNote = elapsed > 5000 ? `\n(Failed after ${(elapsed / 1000).toFixed(1)}s)` : '';
+          resolve(`${raw || 'Command failed'}\n${err.message}${timingNote}`);
+        });
+      });
+    }
+
+    // Non-auto-background path (sleep/wait/read/pause): use synchronous execSync
     try {
       const output = execSync(command, {
         cwd,

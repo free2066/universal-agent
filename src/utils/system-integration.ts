@@ -17,32 +17,32 @@ import type { ChildProcess } from 'child_process';
 
 // ── preventSleep ─────────────────────────────────────────────────────────────
 
-let _caffeinateProc: ChildProcess | null = null;
-
 /**
- * Prevent the system from sleeping during long-running agent tasks.
- * Call startPreventSleep() at task start, stopPreventSleep() at completion.
+ * C26: preventSleep — refCount + 4分钟自动重启 + SIGKILL 自愈
+ * Mirrors claude-code src/services/preventSleep.ts L27-92.
  *
- * macOS: Spawns `caffeinate -i` (inhibit idle sleep, terminates with process).
- * Linux: Uses `systemd-inhibit` if available.
- * Other platforms: no-op.
- *
- * Idempotent: calling while already active is a no-op.
+ * - refCount: 多任务并发时 stop 不会提前终止 caffeinate
+ * - 4分钟自动重启: 在 caffeinate 5分钟超时前重启进程（SIGKILL 自愈）
+ * - caffeinate -t 300: 即使 Node 被 SIGKILL，孤儿进程也会在 300s 后自动退出
  */
-export function startPreventSleep(): void {
-  if (_caffeinateProc !== null) return; // already active
 
+let _caffeinateProc: ChildProcess | null = null;
+let _refCount = 0;
+let _restartInterval: ReturnType<typeof setInterval> | null = null;
+
+const RESTART_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes (caffeinate -t 300 = 5 min)
+const SLEEP_TIMEOUT_SEC = 300;              // caffeinate -t 300: SIGKILL auto-heal
+
+function _spawnCaffeinate(): void {
   try {
     if (process.platform === 'darwin') {
-      // caffeinate -i: inhibit idle sleep. Killed when parent exits.
-      _caffeinateProc = spawn('caffeinate', ['-i'], {
+      _caffeinateProc = spawn('caffeinate', ['-i', '-t', String(SLEEP_TIMEOUT_SEC)], {
         detached: false,
         stdio: 'ignore',
       });
-      // Don't hold the event loop open if caffeinate outlives our process
-      _caffeinateProc.unref();
+      _caffeinateProc.unref(); // 不阻止 Node 进程退出
     } else if (process.platform === 'linux') {
-      // systemd-inhibit with --mode=block --what=idle for desktop Linux
+      // systemd-inhibit with sleep 86400 (24h), terminated by stopPreventSleep
       _caffeinateProc = spawn(
         'systemd-inhibit',
         ['--mode=block', '--what=idle', '--who=uagent', '--why=agent task running', 'sleep', '86400'],
@@ -52,18 +52,53 @@ export function startPreventSleep(): void {
     }
     // Windows: not implemented — PowerRequest API would require native addon
   } catch {
-    // Non-fatal: sleep prevention is best-effort
     _caffeinateProc = null;
   }
 }
 
 /**
+ * Prevent the system from sleeping during long-running agent tasks.
+ *
+ * C26: Uses refCount to support concurrent tasks. Safe to call multiple times.
+ * Each call increments refCount; caffeinate only starts on 0→1 transition.
+ *
+ * macOS: caffeinate -i -t 300 (inhibit idle sleep, 5-min SIGKILL self-heal)
+ * Linux: systemd-inhibit (if available)
+ * Other platforms: no-op.
+ */
+export function startPreventSleep(): void {
+  _refCount++;
+  if (_refCount > 1) return; // 已在运行，增加引用计数即可
+
+  _spawnCaffeinate();
+
+  // C26: 4分钟自动重启 — 在 caffeinate 5分钟超时前重启，确保连续防休眠
+  _restartInterval = setInterval(() => {
+    if (_caffeinateProc) {
+      try { _caffeinateProc.kill('SIGKILL'); } catch { /* ignore */ }
+      _caffeinateProc = null;
+    }
+    _spawnCaffeinate();
+  }, RESTART_INTERVAL_MS);
+  _restartInterval.unref(); // 不阻止 Node 进程退出
+}
+
+/**
  * Release the sleep prevention lock.
+ *
+ * C26: Decrements refCount; only terminates caffeinate when refCount reaches 0.
  * Safe to call even if startPreventSleep() was never called.
  */
 export function stopPreventSleep(): void {
+  _refCount = Math.max(0, _refCount - 1);
+  if (_refCount > 0) return; // 还有其他任务在使用，不终止
+
+  if (_restartInterval !== null) {
+    clearInterval(_restartInterval);
+    _restartInterval = null;
+  }
   try {
-    _caffeinateProc?.kill('SIGTERM');
+    _caffeinateProc?.kill('SIGKILL');
   } catch { /* non-fatal */ }
   _caffeinateProc = null;
 }

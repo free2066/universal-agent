@@ -25,6 +25,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, join } from 'path';
+import { homedir } from 'os';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -158,6 +159,47 @@ function deleteNestedKey(obj: Record<string, unknown>, key: string): void {
   if (cur != null) delete cur[parts[parts.length - 1]];
 }
 
+// ── A26: policySettings -- 第5层最高优先级只读配置 ─────────────────────────────
+//
+// policySettings mirrors claude-code src/utils/settings/constants.ts SETTING_SOURCES[4]
+// 'policySettings'. Read from managed-settings.json (written by admin/enterprise tools).
+// Highest priority, read-only (users cannot override).
+//
+// Search order (first found wins):
+//   1. /etc/uagent/managed-settings.json   (system-level, admin-written)
+//   2. ~/.codeflicker/managed-settings.json (user-scoped, admin can write)
+
+const MANAGED_SETTINGS_PATHS = [
+  '/etc/uagent/managed-settings.json',
+  join(homedir(), '.codeflicker', 'managed-settings.json'),
+];
+
+/**
+ * A26: loadPolicySettings — read managed-settings.json (admin-written, user read-only).
+ * Mirrors claude-code policySettings (SETTING_SOURCES[4]).
+ */
+function loadPolicySettings(): Partial<UAgentConfig> {
+  for (const p of MANAGED_SETTINGS_PATHS) {
+    if (existsSync(p)) {
+      try {
+        return JSON.parse(readFileSync(p, 'utf-8')) as Partial<UAgentConfig>;
+      } catch { /* skip malformed */ }
+    }
+  }
+  return {};
+}
+
+/**
+ * A26: getPolicySettingsPath — returns the path of the first managed-settings.json found.
+ * Used by /doctor to display policy status.
+ */
+export function getPolicySettingsPath(): string | null {
+  for (const p of MANAGED_SETTINGS_PATHS) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 // ── D25: flagSettings -- process-scoped highest priority config override ──────
 //
 // flagSettings mirrors claude-code src/utils/settings/constants.ts SETTING_SOURCES[3]
@@ -232,19 +274,25 @@ export function parseFlagSettings(rawArgs: string[]): Partial<UAgentConfig> {
 /**
  * Load and merge all config layers.
  * Result priority (highest → lowest):
- *   D25: flagSettings > project local > project > global
+ *   A26: policySettings > D25: flagSettings > project local > project > global
  *
- * flagSettings mirrors claude-code's SETTING_SOURCES[3] (process-scoped, not persisted).
+ * policySettings: managed-settings.json (admin-written, user read-only). Mirrors claude-code SETTING_SOURCES[4].
+ * flagSettings:   process-scoped CLI overrides via --settings flag. Mirrors claude-code SETTING_SOURCES[3].
  */
 export function loadConfig(cwd = process.cwd()): UAgentConfig {
   const globalCfg  = readJsonSafe(globalConfigPath());
   const projectCfg = readJsonSafe(projectConfigPath(cwd));
   const localCfg   = readJsonSafe(projectLocalConfigPath(cwd));
   const merged = mergeConfig(mergeConfig(globalCfg, projectCfg), localCfg);
-  // D25: flagSettings has highest priority (process-scoped CLI overrides)
-  return Object.keys(_flagSettings).length > 0
+  // D25: flagSettings has higher priority than file-based configs (process-scoped CLI overrides)
+  const withFlags = Object.keys(_flagSettings).length > 0
     ? mergeConfig(merged, _flagSettings as UAgentConfig)
     : merged;
+  // A26: policySettings has highest priority (admin-written, user read-only)
+  const policySettings = loadPolicySettings();
+  return Object.keys(policySettings).length > 0
+    ? mergeConfig(withFlags, policySettings as UAgentConfig)
+    : withFlags;
 }
 
 /**

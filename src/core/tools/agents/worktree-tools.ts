@@ -452,6 +452,137 @@ export const taskBindWorktreeTool: ToolRegistration = {
 };
 
 /**
+ * E26: worktree_enter — 切换当前 agent 会话工作目录到 worktree 路径
+ *
+ * Mirrors claude-code EnterWorktreeTool.ts 的4步实现：
+ *   1. process.chdir(wtPath)          — OS 进程切换目录
+ *   2. 记录原始 cwd（供 worktree_exit 恢复）
+ *   3. clearSystemPromptSectionsCache — 清 system prompt 缓存（避免旧 cwd 信息残留）
+ *   4. clearMemoryFilesCache          — 清 CLAUDE.md/AGENTS.md 缓存
+ *
+ * 调用 worktree_exit 恢复原始工作目录。
+ */
+export const worktreeEnterTool: ToolRegistration = {
+  definition: {
+    name: 'worktree_enter',
+    description:
+      'Enter a git worktree, switching the agent session working directory to the worktree path. ' +
+      'All subsequent tool calls (file read/write, bash, etc.) will use the worktree as their working directory. ' +
+      'Call worktree_exit to return to the original directory.',
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Absolute path to the worktree directory, or a named worktree (looks up path from worktree index).',
+        },
+      },
+      required: ['path'],
+    },
+  },
+  handler: async (args: Record<string, unknown>): Promise<string> => {
+    const pathArg = args.path as string;
+
+    // Look up path from worktree index if it's a named worktree
+    let wtPath = resolve(pathArg);
+    const mgr = getWorktreeManager();
+    try {
+      const idx = mgr.listAll();
+      // list() returns JSON string; try to parse it and find by name
+      const parsed = JSON.parse(idx) as { name: string; path: string }[];
+      const entry = parsed.find((e) => e.name === pathArg || resolve(e.path) === wtPath);
+      if (entry) wtPath = resolve(entry.path);
+    } catch { /* fallback to direct path */ }
+
+    if (!existsSync(wtPath)) {
+      return `Error: Worktree path does not exist: ${wtPath}`;
+    }
+
+    const originalCwd = process.cwd();
+
+    // E26: Step 1 + 2 — switch OS process working directory + record original
+    try {
+      process.chdir(wtPath);
+    } catch (e) {
+      return `Error: Failed to chdir to worktree path: ${wtPath}: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    // Store original cwd as an environment variable so worktree_exit can restore it
+    process.env['__UAGENT_WORKTREE_ORIGINAL_CWD'] = originalCwd;
+    process.env['__UAGENT_WORKTREE_ACTIVE'] = wtPath;
+
+    // E26: Step 3 + 4 — context will be rebuilt for the new cwd on the next LLM call
+    // (buildSystemPromptWithContext uses process.cwd() at call time, so chdir is sufficient)
+
+    log.debug('worktree_enter: switched cwd', { from: originalCwd, to: wtPath });
+
+    return [
+      `Entered worktree: ${wtPath}`,
+      `Original cwd saved: ${originalCwd}`,
+      `All subsequent file/bash tool calls will use the worktree directory.`,
+      `Use worktree_exit to return to ${originalCwd}`,
+    ].join('\n');
+  },
+};
+
+/**
+ * E26: worktree_exit — 从 worktree 恢复到原始工作目录
+ *
+ * Mirrors claude-code ExitWorktreeTool.ts 的恢复逻辑：
+ *   1. process.chdir(originalCwd)     — 恢复 OS 进程工作目录
+ *   2. 清除 worktree 会话状态
+ *   3. clearSystemPromptSectionsCache — 重新构建 system prompt（新 cwd 上下文）
+ */
+export const worktreeExitTool: ToolRegistration = {
+  definition: {
+    name: 'worktree_exit',
+    description:
+      'Exit the current git worktree and return to the original working directory. ' +
+      'Clears worktree session state and rebuilds context for the original directory.',
+    parameters: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  handler: async (_args: Record<string, unknown>): Promise<string> => {
+    const originalCwd = process.env['__UAGENT_WORKTREE_ORIGINAL_CWD'];
+    const activePath = process.env['__UAGENT_WORKTREE_ACTIVE'];
+
+    if (!originalCwd) {
+      return 'Not in a worktree session (no active worktree_enter recorded). Current directory: ' + process.cwd();
+    }
+
+    if (!existsSync(originalCwd)) {
+      return `Error: Original cwd no longer exists: ${originalCwd}`;
+    }
+
+    const wtPath = process.cwd();
+
+    // E26: Step 1 — restore original cwd
+    try {
+      process.chdir(originalCwd);
+    } catch (e) {
+      return `Error: Failed to chdir back to original cwd: ${originalCwd}: ${e instanceof Error ? e.message : String(e)}`;
+    }
+
+    // Clear worktree session state
+    delete process.env['__UAGENT_WORKTREE_ORIGINAL_CWD'];
+    delete process.env['__UAGENT_WORKTREE_ACTIVE'];
+
+    // E26: Step 3 — context will be rebuilt for restored cwd on next LLM call
+    // (buildSystemPromptWithContext uses process.cwd() at call time, so chdir is sufficient)
+
+    log.debug('worktree_exit: restored cwd', { from: wtPath, to: originalCwd });
+
+    return [
+      `Exited worktree: ${activePath ?? wtPath}`,
+      `Restored working directory: ${originalCwd}`,
+      `All subsequent tool calls will use the original directory.`,
+    ].join('\n');
+  },
+};
+
+/**
  * worktree_sync — Batch 2: Synchronize worktree statuses to task board.
  *
  * Scans the worktree index and, for each active worktree with a bound task:

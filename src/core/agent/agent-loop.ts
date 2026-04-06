@@ -49,6 +49,13 @@ import {
 
 const log = createLogger('agent-loop');
 
+// ── B26: InterruptMessage 常量 — Ctrl+C 中断时注入 history ──────────────────
+// Mirrors claude-code messages.ts L207-209.
+// Only injected when signal.reason !== 'interrupt' (new message submitted),
+// to avoid redundant notifications when user types a new prompt.
+const INTERRUPT_MESSAGE = '[Request interrupted by user]';
+const INTERRUPT_MESSAGE_FOR_TOOL_USE = '[Request interrupted by user for tool use]';
+
 // ── Tombstone mechanism (claude-code parity) ──────────────────────────────────
 //
 // When the LLM stream is interrupted (e.g. model fallback, context overflow),
@@ -652,6 +659,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
       // Mirrors claude-code query.ts signal.aborted checks at iteration boundaries.
       // Exits cleanly with 'aborted' reason rather than throwing an error.
       if (_abortSignal?.aborted) {
+        // B26: InterruptMessage — inject into history so LLM can see why we stopped.
+        // Mirrors claude-code messages.ts createUserInterruptionMessage() L545-560.
+        // Only inject when reason is NOT 'interrupt' (new prompt submitted — user intent is clear).
+        if (_abortSignal.reason !== 'interrupt' && history.length > 0) {
+          const lastMsg = history[history.length - 1];
+          const toolsWereRunning = lastMsg?.role === 'tool' ||
+            (lastMsg?.role === 'assistant' && Array.isArray((lastMsg as unknown as Record<string, unknown>)['toolCalls']));
+          const interruptContent = toolsWereRunning
+            ? INTERRUPT_MESSAGE_FOR_TOOL_USE
+            : INTERRUPT_MESSAGE;
+          history.push({ role: 'user', content: interruptContent });
+        }
         _terminalReason = 'aborted';
         _earlyExit = true;
         break;
@@ -965,6 +984,21 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
             };
             if (rawId) lastAssistant.messageId = rawId;
           }
+        }
+
+        // D26: ContextWindowUsage — pass API usage (including cache tokens) to StatusBar
+        // Mirrors claude-code calculateContextPercentages() src/utils/context.ts L118-144.
+        // totalInputTokens = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+        if (inputTokens > 0) {
+          const totalInputTokens = inputTokens + cacheWriteTokens + cacheReadTokens;
+          try {
+            const { updateStatusBar } = await import('../../cli/statusbar.js');
+            updateStatusBar({
+              apiTokensUsed: totalInputTokens,
+              cacheCreationTokens: cacheWriteTokens,
+              cacheReadTokens: cacheReadTokens,
+            });
+          } catch { /* non-fatal: StatusBar update is best-effort */ }
         }
       }
 

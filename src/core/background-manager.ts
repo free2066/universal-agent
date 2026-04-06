@@ -170,6 +170,57 @@ export class BackgroundManager {
   hasPending(): boolean {
     return [...this.tasks.values()].some((t) => t.status === 'running');
   }
+
+  /**
+   * G26: registerExistingProcess — adopt an already-spawned child process.
+   * Used by Bash auto-background: when a command runs >15s, the bash handler
+   * transfers the existing process to the background manager and returns immediately.
+   *
+   * Mirrors claude-code BashTool.tsx's backgroundFn transfer pattern.
+   */
+  registerExistingProcess(
+    proc: import('child_process').ChildProcess,
+    command: string,
+    partialOutput: string,
+  ): string {
+    const id = randomBytes(4).toString('hex');
+    const task: BgTask = {
+      id,
+      command,
+      status: 'running',
+      result: null,
+      startedAt: Date.now(),
+    };
+    this.tasks.set(id, task);
+
+    if (proc.pid !== undefined) this.pids.set(id, proc.pid);
+
+    // Collect remaining output (process is already running)
+    const chunks: Buffer[] = [Buffer.from(partialOutput)];
+    proc.stdout?.on('data', (d: Buffer) => chunks.push(d));
+    proc.stderr?.on('data', (d: Buffer) => chunks.push(d));
+
+    // 5-minute timeout guard (from registration time)
+    const timer = setTimeout(() => {
+      try { proc.kill('SIGTERM'); } catch { /* already dead */ }
+      this.finalize(id, 'timeout', 'Error: Timeout (300s) after auto-background');
+    }, 300_000);
+
+    proc.on('close', () => {
+      clearTimeout(timer);
+      if (task.status === 'timeout') return;
+      const output = Buffer.concat(chunks).toString('utf-8').trim().slice(0, 50_000);
+      this.finalize(id, 'completed', output || '(no output)');
+    });
+
+    proc.on('error', (err: Error) => {
+      clearTimeout(timer);
+      if (task.status !== 'running') return;
+      this.finalize(id, 'error', `Error: ${err.message}`);
+    });
+
+    return id;
+  }
 }
 
 // ─── Singleton ────────────────────────────────────────────────────────────────

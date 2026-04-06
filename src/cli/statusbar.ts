@@ -12,6 +12,12 @@ export interface StatusBarState {
   estimatedTokens: number;
   contextLength: number;
   isThinking: ThinkingLevel;
+  /** D26: API 精确 token 数（含 cache tokens），来自最后一次 API response */
+  apiTokensUsed?: number;
+  /** D26: cache_creation_input_tokens（写入新 cache 的 token 数） */
+  cacheCreationTokens?: number;
+  /** D26: cache_read_input_tokens（命中 cache 的 token 数） */
+  cacheReadTokens?: number;
 }
 
 let _state: StatusBarState = {
@@ -158,14 +164,27 @@ export function buildStatusPrompt(domain: string, _model?: string): string {
 
 function _statusLine(): string {
   const cols = _cols();
+
+  // D26: 优先使用 API 精确 token 数（含 cache tokens）；fallback 到估算值
+  // Mirrors claude-code calculateContextPercentages() src/utils/context.ts L118-144.
+  const displayTokens = _state.apiTokensUsed !== undefined
+    ? _state.apiTokensUsed   // API response 精确值（含 cache_creation + cache_read）
+    : _state.estimatedTokens;
+
   const pct  = _state.contextLength > 0
-    ? Math.round((_state.estimatedTokens / _state.contextLength) * 100)
+    ? Math.round((displayTokens / _state.contextLength) * 100)
     : 0;
   const pctCapped   = Math.min(pct, 100);
   const projectName = basename(process.cwd());
   const modelShort  = (_state.model.split('/').pop() ?? _state.model).slice(0, 28);
-  const tokensPart  = _fmtTokens(_state.estimatedTokens);
+  const tokensPart  = _fmtTokens(displayTokens);
   const idPart      = _state.sessionId.slice(0, 8);
+
+  // D26: cache 命中率显示（cache_read / total * 100）
+  const totalRaw = (_state.cacheCreationTokens ?? 0) + (_state.cacheReadTokens ?? 0);
+  const cacheHitPct = totalRaw > 0 && _state.apiTokensUsed
+    ? Math.round((_state.cacheReadTokens ?? 0) / _state.apiTokensUsed * 100)
+    : null;
 
   const bg  = chalk.bgHex('#1e1b4b');
   const sep = bg.dim(' │ ');
@@ -175,7 +194,7 @@ function _statusLine(): string {
     bg.white(modelShort),
     ...(thinking ? [thinking] : []),
     bg.dim(projectName),
-    bg.dim(tokensPart),
+    bg.dim(`${tokensPart}${cacheHitPct !== null ? chalk.bgHex('#1e1b4b').dim(` (cache:${cacheHitPct}%)`) : ''}`),
     bg(_ctxColor(pctCapped)(`${pctCapped}%`)),
     chalk.bgHex('#7c3aed').white(' ID ') + bg.dim(` ${idPart}`),
   ];
