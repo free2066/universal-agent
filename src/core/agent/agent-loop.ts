@@ -628,12 +628,19 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           input_tokens?: number; output_tokens?: number;
           prompt_tokens?: number; completion_tokens?: number;
           cache_creation_input_tokens?: number; cache_read_input_tokens?: number;
+          web_search_requests?: number;
         };
         const rawId = ((response as unknown as Record<string, unknown>).id as string | undefined);
-        const inputTokens = rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0;
+        const inputTokens  = rawUsage.input_tokens  ?? rawUsage.prompt_tokens  ?? 0;
         const outputTokens = rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0;
+        const cacheReadTokens  = rawUsage.cache_read_input_tokens       ?? 0;
+        const cacheWriteTokens = rawUsage.cache_creation_input_tokens   ?? 0;
+        const webSearchRequests = rawUsage.web_search_requests ?? 0;
 
-        modelManager.recordUsage(inputTokens, outputTokens, modelManager.getCurrentModel('main'));
+        modelManager.recordUsage(
+          { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, webSearchRequests },
+          modelManager.getCurrentModel('main'),
+        );
         sessionMetrics.record({
           model: modelManager.getCurrentModel('main'),
           durationMs: Date.now() - _llmCallStart,

@@ -23,6 +23,9 @@ import { resolve, join } from 'path';
 export interface ModelUsage {
   input: number;
   output: number;
+  cacheRead: number;                         // prompt_cache_read tokens
+  cacheWrite: number;                        // prompt_cache_creation tokens
+  webSearchRequests: number;
   costUSD: number;
   calls: number;
 }
@@ -31,6 +34,9 @@ export interface DailyUsage {
   date: string;                              // "YYYY-MM-DD"
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheWriteTokens: number;
+  totalWebSearchRequests: number;
   totalCostUSD: number;
   byModel: Record<string, ModelUsage>;
   sessions: number;
@@ -137,6 +143,9 @@ export class UsageTracker {
       date,
       totalInputTokens: 0,
       totalOutputTokens: 0,
+      totalCacheReadTokens: 0,
+      totalCacheWriteTokens: 0,
+      totalWebSearchRequests: 0,
       totalCostUSD: 0,
       byModel: {},
       sessions: 0,
@@ -167,21 +176,39 @@ export class UsageTracker {
   /**
    * Record a model API call and return the current limit check result.
    * Call this AFTER a successful API call to track usage.
+   * @param cacheReadTokens   Tokens served from prompt cache (cheaper than input)
+   * @param cacheWriteTokens  Tokens written to prompt cache (slightly costlier than input)
+   * @param webSearchRequests Number of web search tool invocations billed in this call
    */
-  recordCall(inputTokens: number, outputTokens: number, model: string, costUSD: number): LimitCheckResult {
+  recordCall(
+    inputTokens: number,
+    outputTokens: number,
+    model: string,
+    costUSD: number,
+    cacheReadTokens = 0,
+    cacheWriteTokens = 0,
+    webSearchRequests = 0,
+  ): LimitCheckResult {
     const today = this.loadTodayUsage();
 
     today.totalInputTokens += inputTokens;
     today.totalOutputTokens += outputTokens;
+    today.totalCacheReadTokens = (today.totalCacheReadTokens ?? 0) + cacheReadTokens;
+    today.totalCacheWriteTokens = (today.totalCacheWriteTokens ?? 0) + cacheWriteTokens;
+    today.totalWebSearchRequests = (today.totalWebSearchRequests ?? 0) + webSearchRequests;
     today.totalCostUSD += costUSD;
 
     if (!today.byModel[model]) {
-      today.byModel[model] = { input: 0, output: 0, costUSD: 0, calls: 0 };
+      today.byModel[model] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, webSearchRequests: 0, costUSD: 0, calls: 0 };
     }
-    today.byModel[model].input += inputTokens;
-    today.byModel[model].output += outputTokens;
-    today.byModel[model].costUSD += costUSD;
-    today.byModel[model].calls += 1;
+    const m = today.byModel[model];
+    m.input += inputTokens;
+    m.output += outputTokens;
+    m.cacheRead = (m.cacheRead ?? 0) + cacheReadTokens;
+    m.cacheWrite = (m.cacheWrite ?? 0) + cacheWriteTokens;
+    m.webSearchRequests = (m.webSearchRequests ?? 0) + webSearchRequests;
+    m.costUSD += costUSD;
+    m.calls += 1;
 
     this.saveDay(today);
 
@@ -267,10 +294,17 @@ export class UsageTracker {
     const todayUsage = this.loadTodayUsage();
     lines.push(`📊 Usage Statistics\n`);
     lines.push(`Today (${today}):`);
-    lines.push(`  Input:    ${todayUsage.totalInputTokens.toLocaleString()} tokens`);
-    lines.push(`  Output:   ${todayUsage.totalOutputTokens.toLocaleString()} tokens`);
-    lines.push(`  Cost:     $${todayUsage.totalCostUSD.toFixed(4)} USD`);
-    lines.push(`  Sessions: ${todayUsage.sessions}`);
+    lines.push(`  Input:        ${todayUsage.totalInputTokens.toLocaleString()} tokens`);
+    lines.push(`  Output:       ${todayUsage.totalOutputTokens.toLocaleString()} tokens`);
+    if ((todayUsage.totalCacheReadTokens ?? 0) > 0 || (todayUsage.totalCacheWriteTokens ?? 0) > 0) {
+      lines.push(`  Cache read:   ${(todayUsage.totalCacheReadTokens ?? 0).toLocaleString()} tokens`);
+      lines.push(`  Cache write:  ${(todayUsage.totalCacheWriteTokens ?? 0).toLocaleString()} tokens`);
+    }
+    if ((todayUsage.totalWebSearchRequests ?? 0) > 0) {
+      lines.push(`  Web searches: ${(todayUsage.totalWebSearchRequests ?? 0).toLocaleString()}`);
+    }
+    lines.push(`  Cost:         $${todayUsage.totalCostUSD.toFixed(4)} USD`);
+    lines.push(`  Sessions:     ${todayUsage.sessions}`);
 
     // Per-model breakdown for today
     const modelEntries = Object.entries(todayUsage.byModel);
@@ -278,7 +312,12 @@ export class UsageTracker {
       lines.push(`  Models:`);
       for (const [model, mu] of modelEntries) {
         const shortModel = model.length > 40 ? '...' + model.slice(-37) : model;
-        lines.push(`    ${shortModel.padEnd(40)}  ${mu.input.toLocaleString()} in + ${mu.output.toLocaleString()} out  ($${mu.costUSD.toFixed(4)}) × ${mu.calls} calls`);
+        const extras: string[] = [];
+        if ((mu.cacheRead ?? 0) > 0)  extras.push(`cache_r: ${(mu.cacheRead ?? 0).toLocaleString()}`);
+        if ((mu.cacheWrite ?? 0) > 0) extras.push(`cache_w: ${(mu.cacheWrite ?? 0).toLocaleString()}`);
+        if ((mu.webSearchRequests ?? 0) > 0) extras.push(`search: ${(mu.webSearchRequests ?? 0)}×`);
+        const extrasStr = extras.length > 0 ? `  [${extras.join(', ')}]` : '';
+        lines.push(`    ${shortModel.padEnd(40)}  ${mu.input.toLocaleString()} in + ${mu.output.toLocaleString()} out  ($${mu.costUSD.toFixed(4)}) × ${mu.calls} calls${extrasStr}`);
       }
     }
 

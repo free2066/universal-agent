@@ -29,7 +29,16 @@ export interface HistoryEntry {
 }
 
 // ── Session ID ────────────────────────────────────────────────────────────────
-const SESSION_ID = Math.random().toString(36).slice(2);
+// Use crypto.randomUUID() for proper UUID v4 (mirrors claude-code's randomUUID() usage).
+// Falls back to Math.random() in environments where crypto is unavailable.
+const SESSION_ID = (() => {
+  try {
+    return (globalThis as { crypto?: { randomUUID?: () => string } })
+      .crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
+  } catch {
+    return Math.random().toString(36).slice(2);
+  }
+})();
 
 export function getSessionId(): string {
   return SESSION_ID;

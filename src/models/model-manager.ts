@@ -14,9 +14,21 @@ export interface ModelProfile {
   baseURL?: string;
   maxTokens: number;
   contextLength: number;
-  costPer1kInput: number;   // USD
-  costPer1kOutput: number;  // USD
+  costPer1kInput: number;          // USD per 1k input tokens
+  costPer1kOutput: number;         // USD per 1k output tokens
+  costPer1mCacheWrite?: number;    // USD per 1M cache_creation tokens (≈1.25× input price)
+  costPer1mCacheRead?: number;     // USD per 1M cache_read tokens (≈0.10× input price)
+  costPerWebSearch?: number;       // USD per web_search tool invocation (default 0.01)
   isActive: boolean;
+}
+
+/** Detailed per-call token breakdown passed to recordUsage() */
+export interface TokenUsageDetail {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;      // prompt_cache_read_input_tokens
+  cacheWriteTokens?: number;     // prompt_cache_creation_input_tokens
+  webSearchRequests?: number;    // number of web search tool calls billed this turn
 }
 
 export interface ModelPointers {
@@ -315,18 +327,35 @@ export class ModelManager {
     };
   }
 
-  recordUsage(inputTokens: number, outputTokens: number, model: string) {
+  recordUsage(usage: TokenUsageDetail, model: string) {
+    const { inputTokens, outputTokens, cacheReadTokens = 0, cacheWriteTokens = 0, webSearchRequests = 0 } = usage;
     const profile = this.profiles.get(model) ||
       Array.from(this.profiles.values()).find(p => p.modelName === model);
-    const costIn = (inputTokens / 1000) * (profile?.costPer1kInput || 0);
-    const costOut = (outputTokens / 1000) * (profile?.costPer1kOutput || 0);
-    const costUSD = costIn + costOut;
+
+    // Standard input/output cost
+    const costIn    = (inputTokens  / 1000) * (profile?.costPer1kInput  || 0);
+    const costOut   = (outputTokens / 1000) * (profile?.costPer1kOutput || 0);
+    // Cache write is slightly more expensive than input (~1.25× for Anthropic)
+    const costCacheW = cacheWriteTokens > 0
+      ? (cacheWriteTokens / 1_000_000) * (profile?.costPer1mCacheWrite ?? (profile?.costPer1kInput ?? 0) * 1.25 * 1000)
+      : 0;
+    // Cache read is much cheaper than input (~0.10× for Anthropic)
+    const costCacheR = cacheReadTokens > 0
+      ? (cacheReadTokens / 1_000_000) * (profile?.costPer1mCacheRead ?? (profile?.costPer1kInput ?? 0) * 0.1 * 1000)
+      : 0;
+    // Web search billed per-request (default $0.01 each)
+    const costWebSearch = webSearchRequests * (profile?.costPerWebSearch ?? 0.01);
+
+    const costUSD = costIn + costOut + costCacheW + costCacheR + costWebSearch;
     this.sessionCost += costUSD;
-    this.sessionInputTokens += inputTokens;
+    this.sessionInputTokens  += inputTokens;
     this.sessionOutputTokens += outputTokens;
     this.usageHistory.push({ inputTokens, outputTokens, model, timestamp: Date.now() });
     // Persist to disk & check daily limits
-    const check = usageTracker.recordCall(inputTokens, outputTokens, model, costUSD);
+    const check = usageTracker.recordCall(
+      inputTokens, outputTokens, model, costUSD,
+      cacheReadTokens, cacheWriteTokens, webSearchRequests,
+    );
     if (check.status === 'warn' && check.message) {
       process.stderr.write('\n' + check.message + '\n');
     } else if (check.status === 'block') {

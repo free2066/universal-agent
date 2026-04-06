@@ -46,11 +46,25 @@ export interface PermissionSettings {
   alwaysAllow: string[];
   /** Tools/patterns that are always denied */
   alwaysDeny: string[];
+  /**
+   * Tools/patterns that MUST be confirmed by the user even in yolo mode.
+   * Mirrors claude-code's ask[] permission tier.
+   * Example: ["Bash(deploy*)", "Bash(prod*)"]
+   */
+  ask?: string[];
+  /**
+   * Additional directories (outside CWD) the agent is allowed to read/write.
+   * Paths may use ~ expansion. Mirrors claude-code's additionalDirectories.
+   * Example: ["/tmp/workspace", "~/repos/shared"]
+   */
+  additionalDirectories?: string[];
 }
 
 const EMPTY_SETTINGS: PermissionSettings = {
   alwaysAllow: [],
   alwaysDeny: [],
+  ask: [],
+  additionalDirectories: [],
 };
 
 // ── Pattern matching ──────────────────────────────────────────────────────────
@@ -126,6 +140,8 @@ function loadSettingsFile(path: string): PermissionSettings {
     return {
       alwaysAllow: Array.isArray(raw.alwaysAllow) ? raw.alwaysAllow : [],
       alwaysDeny: Array.isArray(raw.alwaysDeny) ? raw.alwaysDeny : [],
+      ask: Array.isArray(raw.ask) ? raw.ask : [],
+      additionalDirectories: Array.isArray(raw.additionalDirectories) ? raw.additionalDirectories : [],
     };
   } catch {
     return { ...EMPTY_SETTINGS };
@@ -193,6 +209,45 @@ export class PermissionManager {
     ];
   }
 
+  /**
+   * Merged ask[] rules — force user confirmation even in yolo mode.
+   * Mirrors claude-code's ask[] permission tier.
+   */
+  get allAsk(): string[] {
+    return [
+      ...(this.userSettings.ask ?? []),
+      ...(this.projectSettings.ask ?? []),
+      ...(this.localSettings.ask ?? []),
+    ];
+  }
+
+  /**
+   * Merged additionalDirectories list (~ expanded to HOME).
+   * Returns resolved absolute paths.
+   */
+  get allAdditionalDirectories(): string[] {
+    const home = process.env.HOME ?? '';
+    const expand = (p: string) => p.startsWith('~') ? p.replace(/^~/, home) : p;
+    return [
+      ...(this.userSettings.additionalDirectories ?? []),
+      ...(this.projectSettings.additionalDirectories ?? []),
+      ...(this.localSettings.additionalDirectories ?? []),
+    ].map(expand);
+  }
+
+  /**
+   * Check whether a given file path is accessible.
+   * A path is allowed if it falls under CWD or any additionalDirectories entry.
+   */
+  isPathAllowed(filePath: string): boolean {
+    const abs = resolve(filePath);
+    if (abs.startsWith(resolve(this.cwd))) return true;
+    for (const dir of this.allAdditionalDirectories) {
+      if (abs.startsWith(resolve(dir))) return true;
+    }
+    return false;
+  }
+
   /** Invalidate cache (call after modifying settings) */
   invalidate(): void {
     this._userSettings = null;
@@ -205,10 +260,11 @@ export class PermissionManager {
   /**
    * Decide whether to allow, ask, or deny a tool invocation.
    *
-   * Priority (claude-code parity):
-   *   1. alwaysDeny → deny  (any source can deny)
-   *   2. alwaysAllow → allow
-   *   3. approvalMode-dependent fallback:
+   * Priority (claude-code parity, B9 updated):
+   *   1. alwaysDeny  → deny  (any source can deny, highest priority)
+   *   2. ask[]       → ask   (force confirmation even in yolo mode)
+   *   3. alwaysAllow → allow
+   *   4. approvalMode-dependent fallback:
    *        yolo      → allow
    *        autoEdit  → allow for read tools, ask for write tools
    *        default   → ask
@@ -225,12 +281,17 @@ export class PermissionManager {
       if (matchesPattern(pattern, toolName, args)) return 'deny';
     }
 
-    // 2. Check allow rules
+    // 2. Check ask[] rules (force confirmation even in yolo mode)
+    for (const pattern of this.allAsk) {
+      if (matchesPattern(pattern, toolName, args)) return 'ask';
+    }
+
+    // 3. Check allow rules
     for (const pattern of this.allAlwaysAllow) {
       if (matchesPattern(pattern, toolName, args)) return 'allow';
     }
 
-    // 3. ApprovalMode fallback
+    // 4. ApprovalMode fallback
     if (approvalMode === 'yolo') return 'allow';
 
     if (approvalMode === 'autoEdit') {
@@ -302,12 +363,12 @@ export class PermissionManager {
 
   /**
    * Add a rule to the project-level settings.
-   * @param type  'allow' | 'deny'
+   * @param type  'allow' | 'ask' | 'deny'
    * @param pattern  Tool pattern (e.g. "Bash(npm test)", "Write(src/**)")
    * @param scope  'project' | 'local' | 'user'
    */
   addRule(
-    type: 'allow' | 'deny',
+    type: 'allow' | 'ask' | 'deny',
     pattern: string,
     scope: 'project' | 'local' | 'user' = 'project',
   ): void {
@@ -318,10 +379,34 @@ export class PermissionManager {
         : resolve(this.cwd, SETTINGS_FILE);
 
     const settings = loadSettingsFile(settingsPath);
-    const key = type === 'allow' ? 'alwaysAllow' : 'alwaysDeny';
+    const key = type === 'allow' ? 'alwaysAllow' : type === 'ask' ? 'ask' : 'alwaysDeny';
+    const list = ((settings[key as keyof PermissionSettings] ?? []) as string[]);
 
-    if (!settings[key].includes(pattern)) {
-      settings[key].push(pattern);
+    if (!list.includes(pattern)) {
+      list.push(pattern);
+      (settings as unknown as Record<string, unknown>)[key] = list;
+      saveSettingsFile(settingsPath, settings);
+      this.invalidate();
+    }
+  }
+
+  /**
+   * Add a directory to the additionalDirectories list.
+   * @param dir  Absolute path or ~ path
+   * @param scope  'project' | 'local' | 'user'
+   */
+  addDirectory(dir: string, scope: 'project' | 'local' | 'user' = 'project'): void {
+    const settingsPath = scope === 'user'
+      ? USER_SETTINGS_FILE
+      : scope === 'local'
+        ? resolve(this.cwd, LOCAL_SETTINGS_FILE)
+        : resolve(this.cwd, SETTINGS_FILE);
+
+    const settings = loadSettingsFile(settingsPath);
+    const dirs = settings.additionalDirectories ?? [];
+    if (!dirs.includes(dir)) {
+      dirs.push(dir);
+      settings.additionalDirectories = dirs;
       saveSettingsFile(settingsPath, settings);
       this.invalidate();
     }
@@ -330,21 +415,23 @@ export class PermissionManager {
   /**
    * Remove a rule from all settings files.
    */
-  removeRule(type: 'allow' | 'deny', pattern: string): boolean {
+  removeRule(type: 'allow' | 'ask' | 'deny', pattern: string): boolean {
     let removed = false;
     const paths = [
       USER_SETTINGS_FILE,
       resolve(this.cwd, SETTINGS_FILE),
       resolve(this.cwd, LOCAL_SETTINGS_FILE),
     ];
-    const key = type === 'allow' ? 'alwaysAllow' : 'alwaysDeny';
+    const key = type === 'allow' ? 'alwaysAllow' : type === 'ask' ? 'ask' : 'alwaysDeny';
 
     for (const settingsPath of paths) {
       if (!existsSync(settingsPath)) continue;
       const settings = loadSettingsFile(settingsPath);
-      const idx = settings[key].indexOf(pattern);
+      const list = ((settings[key as keyof PermissionSettings] ?? []) as string[]);
+      const idx = list.indexOf(pattern);
       if (idx !== -1) {
-        settings[key].splice(idx, 1);
+        list.splice(idx, 1);
+        (settings as unknown as Record<string, unknown>)[key] = list;
         saveSettingsFile(settingsPath, settings);
         removed = true;
       }
@@ -356,8 +443,8 @@ export class PermissionManager {
   /**
    * List all rules (merged from all sources, with source annotation).
    */
-  listRules(): Array<{ type: 'allow' | 'deny'; pattern: string; source: string }> {
-    const results: Array<{ type: 'allow' | 'deny'; pattern: string; source: string }> = [];
+  listRules(): Array<{ type: 'allow' | 'ask' | 'deny'; pattern: string; source: string }> {
+    const results: Array<{ type: 'allow' | 'ask' | 'deny'; pattern: string; source: string }> = [];
 
     const sources: Array<[PermissionSettings, string]> = [
       [this.userSettings, 'user'],
@@ -368,6 +455,9 @@ export class PermissionManager {
     for (const [settings, source] of sources) {
       for (const pattern of settings.alwaysAllow) {
         results.push({ type: 'allow', pattern, source });
+      }
+      for (const pattern of (settings.ask ?? [])) {
+        results.push({ type: 'ask', pattern, source });
       }
       for (const pattern of settings.alwaysDeny) {
         results.push({ type: 'deny', pattern, source });
@@ -382,11 +472,15 @@ export class PermissionManager {
    */
   formatRules(): string {
     const rules = this.listRules();
-    if (rules.length === 0) {
+    const dirs = this.allAdditionalDirectories;
+    const hasRules = rules.length > 0;
+    const hasDirs = dirs.length > 0;
+
+    if (!hasRules && !hasDirs) {
       return 'No permission rules configured.\n\nUse /permissions allow <pattern> or /permissions deny <pattern> to add rules.';
     }
 
-    const byType: Record<string, string[]> = { allow: [], deny: [] };
+    const byType: Record<string, string[]> = { allow: [], ask: [], deny: [] };
     for (const r of rules) {
       byType[r.type].push(`  ${r.pattern} (${r.source})`);
     }
@@ -397,9 +491,19 @@ export class PermissionManager {
       lines.push(...byType.allow);
       lines.push('');
     }
+    if (byType.ask.length > 0) {
+      lines.push('Always Ask (even in yolo mode):');
+      lines.push(...byType.ask);
+      lines.push('');
+    }
     if (byType.deny.length > 0) {
       lines.push('Always Deny:');
       lines.push(...byType.deny);
+      lines.push('');
+    }
+    if (hasDirs) {
+      lines.push('Additional Directories:');
+      for (const d of dirs) lines.push(`  ${d}`);
       lines.push('');
     }
     lines.push('Patterns: "ToolName", "ToolName(*)", "ToolName(glob)", "*"');

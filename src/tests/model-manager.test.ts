@@ -143,14 +143,24 @@ describe('ModelManager - trackUsage / getCostSummary', () => {
   });
 
   it('recordUsage does not throw', () => {
-    expect(() => manager.recordUsage(100, 50, 'gpt-4o')).not.toThrow();
+    expect(() => manager.recordUsage({ inputTokens: 100, outputTokens: 50 }, 'gpt-4o')).not.toThrow();
   });
 
   it('getCostSummary reflects usage after recordUsage', () => {
-    manager.recordUsage(1000, 500, 'gpt-4o');
+    manager.recordUsage({ inputTokens: 1000, outputTokens: 500 }, 'gpt-4o');
     const summary = manager.getCostSummary();
     // Summary should mention tokens
     expect(summary).toMatch(/token|cost|Token|Cost/i);
+  });
+
+  it('recordUsage with cache tokens does not throw', () => {
+    expect(() => manager.recordUsage({
+      inputTokens: 1000,
+      outputTokens: 200,
+      cacheReadTokens: 5000,
+      cacheWriteTokens: 2000,
+      webSearchRequests: 1,
+    }, 'gpt-4o')).not.toThrow();
   });
 });
 

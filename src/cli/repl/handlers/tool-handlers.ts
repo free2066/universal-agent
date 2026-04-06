@@ -396,15 +396,25 @@ export async function handleOutputStyle(input: string, ctx: SlashContext): Promi
   return done(rl);
 }
 
-export async function handleCost(ctx: SlashContext): Promise<true> {  const { rl } = ctx;
+export async function handleCost(ctx: SlashContext): Promise<true> {
+  const { rl } = ctx;
   const { usageTracker } = await import('../../../models/usage-tracker.js');
   console.log('\n' + modelManager.getCostSummary());
   const todayUsage = usageTracker.loadTodayUsage();
   console.log(`\n📅 Today (persisted across sessions):`);
-  console.log(`   Input:    ${todayUsage.totalInputTokens.toLocaleString()} tokens`);
-  console.log(`   Output:   ${todayUsage.totalOutputTokens.toLocaleString()} tokens`);
-  console.log(`   Cost:     $${todayUsage.totalCostUSD.toFixed(4)} USD`);
-  console.log(`   Sessions: ${todayUsage.sessions}`);
+  console.log(`   Input:        ${todayUsage.totalInputTokens.toLocaleString()} tokens`);
+  console.log(`   Output:       ${todayUsage.totalOutputTokens.toLocaleString()} tokens`);
+  if ((todayUsage.totalCacheWriteTokens ?? 0) > 0) {
+    console.log(`   Cache write:  ${(todayUsage.totalCacheWriteTokens ?? 0).toLocaleString()} tokens`);
+  }
+  if ((todayUsage.totalCacheReadTokens ?? 0) > 0) {
+    console.log(`   Cache read:   ${(todayUsage.totalCacheReadTokens ?? 0).toLocaleString()} tokens`);
+  }
+  if ((todayUsage.totalWebSearchRequests ?? 0) > 0) {
+    console.log(`   Web search:   ${(todayUsage.totalWebSearchRequests ?? 0).toLocaleString()} requests`);
+  }
+  console.log(`   Cost:         $${todayUsage.totalCostUSD.toFixed(4)} USD`);
+  console.log(`   Sessions:     ${todayUsage.sessions}`);
   const check = usageTracker.checkLimits();
   if (check.status !== 'ok' && check.message) {
     console.log('\n' + check.message);
@@ -592,6 +602,14 @@ export async function handlePermissions(input: string, ctx: SlashContext): Promi
     return done(rl);
   }
 
+  // /permissions ask <pattern>  — force confirm even in yolo mode
+  if (sub === 'ask' && parts[2]) {
+    const pattern = parts.slice(2).join(' ');
+    mgr.addRule('ask', pattern, 'project');
+    console.log(chalk.cyan(`\n✓ Added ask rule: "${pattern}" (must confirm even in yolo mode)\n`));
+    return done(rl);
+  }
+
   // /permissions deny <pattern>
   if (sub === 'deny' && parts[2]) {
     const pattern = parts.slice(2).join(' ');
@@ -600,10 +618,20 @@ export async function handlePermissions(input: string, ctx: SlashContext): Promi
     return done(rl);
   }
 
+  // /permissions add-dir <path>  — whitelist additional directory
+  if ((sub === 'add-dir' || sub === 'adddir') && parts[2]) {
+    const dir = parts.slice(2).join(' ');
+    mgr.addDirectory(dir, 'project');
+    console.log(chalk.green(`\n✓ Added directory to whitelist: "${dir}" (project scope)\n`));
+    return done(rl);
+  }
+
   // /permissions remove allow <pattern>
+  // /permissions remove ask <pattern>
   // /permissions remove deny <pattern>
   if (sub === 'remove' && parts[2] && parts[3]) {
-    const type = parts[2].toLowerCase() === 'allow' ? 'allow' : 'deny';
+    const rawType = parts[2].toLowerCase();
+    const type = rawType === 'allow' ? 'allow' : rawType === 'ask' ? 'ask' : 'deny';
     const pattern = parts.slice(3).join(' ');
     const removed = mgr.removeRule(type, pattern);
     if (removed) {
@@ -618,11 +646,14 @@ export async function handlePermissions(input: string, ctx: SlashContext): Promi
   console.log([
     '',
     chalk.yellow('Usage:'),
-    '  /permissions                      — list all rules',
-    '  /permissions allow <pattern>      — add alwaysAllow rule',
-    '  /permissions deny <pattern>       — add alwaysDeny rule',
-    '  /permissions remove allow <pat>   — remove rule',
-    '  /permissions remove deny <pat>    — remove rule',
+    '  /permissions                        — list all rules',
+    '  /permissions allow <pattern>        — add alwaysAllow rule',
+    '  /permissions ask <pattern>          — add ask rule (force confirm in yolo mode)',
+    '  /permissions deny <pattern>         — add alwaysDeny rule',
+    '  /permissions add-dir <path>         — whitelist additional directory',
+    '  /permissions remove allow <pat>     — remove rule',
+    '  /permissions remove ask <pat>       — remove ask rule',
+    '  /permissions remove deny <pat>      — remove rule',
     '',
     chalk.yellow('Pattern examples:'),
     '  Bash                   exact tool name',
@@ -630,6 +661,10 @@ export async function handlePermissions(input: string, ctx: SlashContext): Promi
     '  Write(src/**)          Write on src/** paths',
     '  *                      all tools (use carefully!)',
     '',
+    chalk.gray('ask[] rules are enforced even in --yolo mode.'),
+    chalk.gray('additionalDirectories lets the agent access dirs outside CWD.'),
+    '',
   ].join('\n'));
   return done(rl);
 }
+
