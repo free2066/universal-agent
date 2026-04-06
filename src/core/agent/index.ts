@@ -40,6 +40,7 @@ export class AgentCore {
   private _thinkingLevel: import('../../models/types.js').ThinkingLevel | undefined = undefined;
   private _disabledTools: Record<string, boolean> | undefined = undefined;
   private _outputStyle: string | null = null;  // Batch 3: 'plain' | 'markdown' | 'compact'
+  private _approvalMode: 'default' | 'autoEdit' | 'yolo' = 'default';  // Round 5: claude-code parity
   private uncertainItems: string[] = [];
 
   /** Mutable ref so agent-loop can read/write without holding `this`. */
@@ -61,6 +62,7 @@ export class AgentCore {
     if (options.systemPromptOverride) this._systemPromptOverride = options.systemPromptOverride;
     if (options.appendSystemPrompt) this._appendSystemPrompt = options.appendSystemPrompt;
     if (options.thinkingLevel) this._thinkingLevel = options.thinkingLevel;
+    if (options.approvalMode) this._approvalMode = options.approvalMode;
     if (this.safeMode) process.env.AGENT_SAFE_MODE = '1';
 
     modelManager.setPointer('main', options.model);
@@ -264,6 +266,7 @@ export class AgentCore {
       systemPromptOverride: this._systemPromptOverride,
       appendSystemPrompt: this._appendSystemPrompt,
       thinkingLevel: this._thinkingLevel,
+      approvalMode: this._approvalMode,  // Round 5: pass through to agent-loop (claude-code parity)
       currentDomain: this.currentDomain,
       verbose: this.verbose,
       registry: this.registry,

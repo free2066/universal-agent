@@ -10,6 +10,7 @@ import type { DomainRouter } from '../domain-router.js';
 import type { ToolRegistration } from '../../models/types.js';
 import { subagentSystem, createTaskTool, askExpertModelTool } from '../subagent-system.js';
 import { readFileTool, writeFileTool, editFileTool, bashTool, listFilesTool, grepTool } from '../tools/fs/fs-tools.js';
+import { notebookEditTool } from '../tools/fs/notebook-tool.js';
 import { webFetchTool, webSearchTool } from '../tools/web/web-tools.js';
 import { codeInspectorTool } from '../tools/code/code-inspector.js';
 import { selfHealTool } from '../tools/code/self-heal.js';
@@ -49,6 +50,7 @@ import { taskCreateTool, taskUpdateTool, taskListTool, taskGetTool, taskStopTool
 import { backgroundRunTool, checkBackgroundTool, killBashTool } from '../tools/productivity/background-tools.js';
 import { todoWriteTool } from '../tools/productivity/todo-tool.js';
 import { syntheticOutputTool } from '../tools/productivity/synthetic-output.js';
+import { askUserQuestionTool } from '../tools/productivity/ask-user-question-tool.js';
 import {
   spawnTeammateTool,
   listTeammatesTool,
@@ -108,6 +110,7 @@ export function registerAllTools(
     bashTool,
     listFilesTool,
     grepTool,
+    notebookEditTool,  // Round 5: claude-code NotebookEditTool parity
   ]);
 
   // Web tools
@@ -136,6 +139,9 @@ export function registerAllTools(
     } catch { /* config unavailable → default ON */ }
     if (todoEnabled) reg(todoWriteTool);
   }
+
+  // AskUserQuestion — interactive structured prompting (Round 5: claude-code parity)
+  reg(askUserQuestionTool);
 
   // s05 — on-demand skill loading
   reg(loadSkillTool);

@@ -34,7 +34,7 @@ const SLASH_COMPLETIONS = [
   '/search',
   '/branch', '/rename', '/add-dir',
   '/terminal-setup', '/bug', '/doctor', '/output-style',
-  '/skills', '/plugin', '/logout',
+  '/skills', '/plugin', '/logout', '/permissions',
   '/metrics', '/plugins',
   '/thinkback',
 ];
@@ -1520,6 +1520,104 @@ export function App({
       return;
     }
 
+    // ── /doctor — environment diagnostic check (Round 5: claude-code /doctor parity) ──
+    if (cmd === '/doctor') {
+      const lines: string[] = ['🩺  Doctor — environment diagnostics', ''];
+      // API keys
+      const apiKeyChecks: { env: string; label: string }[] = [
+        { env: 'ANTHROPIC_API_KEY', label: 'Anthropic' },
+        { env: 'OPENAI_API_KEY',    label: 'OpenAI' },
+        { env: 'GEMINI_API_KEY',    label: 'Gemini' },
+        { env: 'DEEPSEEK_API_KEY',  label: 'DeepSeek' },
+        { env: 'GROQ_API_KEY',      label: 'Groq' },
+        { env: 'WQ_API_KEY',        label: '万擎 (WQ)' },
+      ];
+      lines.push('API Keys:');
+      for (const { env, label } of apiKeyChecks) {
+        const val = process.env[env];
+        if (val && val.length > 4) {
+          const redacted = val.slice(0, 4) + '…' + val.slice(-2);
+          lines.push(`  ✓  ${label.padEnd(14)} ${redacted}`);
+        } else {
+          lines.push(`  ·  ${label.padEnd(14)} not set`);
+        }
+      }
+      // Model
+      lines.push('');
+      lines.push('Current Model:');
+      const { modelManager: inkModelMgr } = await import('../../models/model-manager.js');
+      const inkCurrentModel = inkModelMgr.getCurrentModel('main');
+      lines.push(`  ✓  main: ${inkCurrentModel}`);
+      const inkProfile = inkModelMgr.listProfiles().find(p => p.name === inkCurrentModel);
+      if (inkProfile) {
+        const ctxLbl = inkProfile.contextLength >= 1_000_000
+          ? `${(inkProfile.contextLength / 1_000_000).toFixed(1)}M context`
+          : `${Math.round(inkProfile.contextLength / 1000)}k context`;
+        lines.push(`  ·  ${ctxLbl}`);
+      }
+      // MCP
+      lines.push('');
+      lines.push('MCP Servers:');
+      try {
+        const { MCPManager: _InkMCPMgr } = await import('../../core/mcp-manager.js');
+        const inkMcp = new _InkMCPMgr(process.cwd());
+        const inkServers = inkMcp.listServers().filter((s: { enabled: boolean }) => s.enabled);
+        if (inkServers.length === 0) {
+          lines.push('  ·  No servers configured');
+        } else {
+          for (const s of inkServers as Array<{ name: string; type: string }>) lines.push(`  ✓  ${s.name} (${s.type})`);
+        }
+      } catch { lines.push('  ✗  MCP manager unavailable'); }
+      // Config
+      lines.push('');
+      lines.push('Config:');
+      try {
+        const { loadConfig: inkLoadCfg } = await import('../../cli/config-store.js');
+        const inkCfg = inkLoadCfg();
+        lines.push(`  ✓  config OK (${Object.keys(inkCfg).length} keys)`);
+      } catch (e) { lines.push(`  ✗  config error: ${e instanceof Error ? e.message : String(e)}`); }
+
+      setInfoOverlay(lines.join('\n') + '\n\n  [any key to close]');
+      return;
+    }
+
+    // ── /permissions — manage allow/deny rules (Round 5: claude-code parity) ──
+    if (cmd.startsWith('/permissions')) {
+      try {
+        const { getPermissionManager } = await import('../../core/agent/permission-manager.js');
+        const permMgr = getPermissionManager(process.cwd());
+        const subParts = cmd.split(/\s+/);
+        const subCmd = subParts[1];
+        const outputLines: string[] = [];
+        if (subCmd === 'add-allow' || subCmd === 'add-deny') {
+          const pattern = subParts.slice(2).join(' ');
+          if (!pattern) { appendSystem(`Usage: /permissions ${subCmd} <ToolName(*)>`); return; }
+          permMgr.addRule(subCmd === 'add-allow' ? 'allow' : 'deny', pattern);
+          appendSystem(`Permission rule added: ${subCmd.replace('add-', '')} ${pattern}`);
+        } else if (subCmd === 'remove') {
+          const type = subParts[2] as 'allow' | 'deny';
+          const pattern = subParts.slice(3).join(' ');
+          if (!type || !pattern) { appendSystem('Usage: /permissions remove <allow|deny> <pattern>'); return; }
+          permMgr.removeRule(type, pattern);
+          appendSystem(`Permission rule removed: ${type} ${pattern}`);
+        } else {
+          // Show rules
+          const formatted = permMgr.formatRules();
+          outputLines.push('Permission Rules:', '', ...formatted.split('\n'));
+          outputLines.push('');
+          outputLines.push('  /permissions add-allow <ToolName>      — always allow this tool');
+          outputLines.push('  /permissions add-deny <ToolName>       — always deny this tool');
+          outputLines.push('  /permissions remove allow <ToolName>   — remove allow rule');
+          outputLines.push('  /permissions remove deny <ToolName>    — remove deny rule');
+          outputLines.push('  Current approvalMode: default | autoEdit | yolo (set via --approval-mode)');
+          setInfoOverlay(outputLines.join('\n') + '\n\n  [any key to close]');
+        }
+      } catch (e) {
+        appendSystem(`/permissions error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return;
+    }
+
     // ── /plugin ───────────────────────────────────────────────────────────────
     if (cmd.startsWith('/plugin')) {
       const sub = cmd.replace('/plugin', '').trim();
@@ -1811,6 +1909,7 @@ export function App({
         '    /domain [name]   show or switch domain',
         '    /agents          list subagents',
         '    /logout          show API key status',
+        '    /permissions     view/manage allow-deny rules (Round 5)',
         '',
         '  Context:',
         '    /tokens          show token usage',

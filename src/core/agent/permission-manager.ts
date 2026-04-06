@@ -244,6 +244,49 @@ export class PermissionManager {
   }
 
   /**
+   * Async version of decide() — uses yolo-classifier for autoEdit mode.
+   *
+   * In autoEdit mode, for non-READ_TOOLS, runs a lightweight LLM classifier
+   * to determine if auto-approval is safe (claude-code yoloClassifier parity).
+   *
+   * Falls back to synchronous decide() if classifier is unavailable or times out.
+   *
+   * Round 5: claude-code yoloClassifier.ts parity
+   */
+  async decideAsync(
+    toolName: string,
+    toolArgs: Record<string, unknown> | undefined,
+    approvalMode: ApprovalMode,
+    cwd?: string,
+  ): Promise<PermissionDecision> {
+    // Run synchronous checks first (deny/allow rules + yolo mode)
+    const syncDecision = this.decide(toolName, toolArgs, approvalMode);
+    if (syncDecision !== 'ask') return syncDecision;
+
+    // In autoEdit mode with 'ask' result → try classifier
+    if (approvalMode === 'autoEdit' && cwd) {
+      try {
+        const { checkAutoEditApproval } = await import('./yolo-classifier.js');
+        const classifierResult = await checkAutoEditApproval(
+          toolName,
+          toolArgs ?? {},
+          cwd,
+        );
+        // Map classifier result to PermissionDecision
+        if (classifierResult === 'allow') return 'allow';
+        if (classifierResult === 'deny') return 'deny';
+        // 'ask' falls through to default ask behavior
+        return 'ask';
+      } catch {
+        // Classifier failure — fall back to ask (fail-open)
+        return 'ask';
+      }
+    }
+
+    return 'ask';
+  }
+
+  /**
    * Check whether a tool is "safe to auto-approve" given the current approvalMode.
    * Returns true when agent-loop should skip the user confirmation gate.
    */

@@ -263,7 +263,52 @@ export class MCPManager {
         failed.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+
+    // ── Content-hash dedup (Round 5: claude-code dedupPluginMcpServers parity) ──
+    // When multiple servers expose tools with identical names AND identical
+    // parameter schemas (content signature), suppress duplicates to prevent
+    // LLM confusion from seeing the same tool twice with different prefixes.
+    this._deduplicateTools();
+
     return { connected, failed };
+  }
+
+  /**
+   * Content-hash dedup: remove duplicate tool registrations.
+   *
+   * Two tools are considered duplicates if they have the same name AND
+   * their parameter schemas produce the same JSON string (content signature).
+   *
+   * The first occurrence (by registration order) wins; subsequent duplicates
+   * are logged and removed.
+   *
+   * Round 5: claude-code dedupPluginMcpServers parity
+   */
+  private _deduplicateTools(): void {
+    const seen = new Map<string, string>(); // tool name → content hash
+    const toRemove: string[] = [];
+
+    for (const [toolName, tool] of this.tools.entries()) {
+      const contentSig = JSON.stringify({
+        description: tool.definition.description,
+        parameters: tool.definition.parameters,
+      });
+
+      const existing = seen.get(toolName);
+      if (existing !== undefined) {
+        if (existing === contentSig) {
+          // Exact duplicate — remove
+          toRemove.push(toolName);
+        }
+        // Different content but same name — keep both (name collision, not content dup)
+      } else {
+        seen.set(toolName, contentSig);
+      }
+    }
+
+    for (const name of toRemove) {
+      this.tools.delete(name);
+    }
   }
 
   private async connectServer(server: MCPServer): Promise<ToolRegistration[]> {

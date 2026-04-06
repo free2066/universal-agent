@@ -40,6 +40,11 @@ import { todoManager } from '../tools/productivity/todo-tool.js';
 import { getTeammateManager } from '../teammate-manager.js';
 import { sessionMetrics } from '../metrics.js';
 import { getPermissionManager } from './permission-manager.js';
+import {
+  createBudgetTracker,
+  checkTokenBudget,
+  buildBudgetStopMessage,
+} from './token-budget.js';
 
 const log = createLogger('agent-loop');
 
@@ -403,6 +408,15 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
   let lastLLMCallAt = 0;
   const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? String(DEFAULT_MAX_ITERATIONS), 10);
 
+  // ── Token Budget Tracker (Round 5: claude-code tokenBudget.ts parity) ────────
+  // Tracks per-turn token usage to detect diminishing returns and enforce budget.
+  // Sub-agents (spawned via SpawnAgent/CoordinatorTool) bypass budget entirely.
+  const _budgetTracker = createBudgetTracker();
+  const _isSubAgent = !!(opts as unknown as Record<string, unknown>).isSubAgent;
+  const _tokenBudget = process.env.AGENT_TOKEN_BUDGET
+    ? parseInt(process.env.AGENT_TOKEN_BUDGET, 10)
+    : null;
+
   const unattendedRetry = process.env.AGENT_UNATTENDED_RETRY === '1';
   let unattendedRetryCount = 0;
   const MAX_UNATTENDED_RETRIES = parseInt(
@@ -549,6 +563,33 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
           error: errMsg.slice(0, 120),
         });
         const isContextOverflow = /413|context.{0,30}(overflow|limit|length|window)|too.{0,10}(long|large|many.{0,10}token)|maximum.{0,20}(context|length)/i.test(errMsg);
+        const isPromptTooLong = /prompt_too_long|PROMPT_TOO_LONG|PromptTooLong/i.test(errMsg);
+
+        // ── PTL Retry (Round 5: claude-code PTL retry parity) ─────────────
+        // When the LLM explicitly returns a "prompt_too_long" error (as opposed
+        // to a general 413), truncate the oldest message group from history and
+        // retry — up to MAX_PTL_RETRIES times before giving up.
+        if (isPromptTooLong) {
+          const MAX_PTL_RETRIES = 3;
+          const ptlKey = '__ptl_retry_count__';
+          const ptlCount = ((opts as unknown as Record<string, unknown>)[ptlKey] as number | undefined) ?? 0;
+
+          if (ptlCount < MAX_PTL_RETRIES) {
+            (opts as unknown as Record<string, unknown>)[ptlKey] = ptlCount + 1;
+            // Remove oldest 2 messages (one user+assistant pair)
+            const removeCount = Math.min(2, Math.max(0, history.length - 3));
+            if (removeCount > 0) {
+              history.splice(0, removeCount);
+              onChunk(`\n⚠️  Prompt too long — truncating oldest ${removeCount} message(s) and retrying (attempt ${ptlCount + 1}/${MAX_PTL_RETRIES})…\n`);
+              history.push(createTombstone(history.length) as unknown as Message);
+              continue;
+            }
+          }
+          onChunk(`\n❌ Prompt too long and max PTL retries (${MAX_PTL_RETRIES}) reached.\n`);
+          history.push(createTombstone(history.length) as unknown as Message);
+          break;
+        }
+
         if (isContextOverflow) {
           onChunk(`\n⚠️  Context overflow detected (${errMsg.slice(0, 80)}) — attempting reactive compact…\n`);
           // ── Tombstone: clear partial streaming messages before retry ────────
@@ -655,6 +696,39 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<void> {
         }
 
         history.push({ role: 'assistant', content });
+
+        // ── Token Budget Check (Round 5: claude-code tokenBudget.ts parity) ──
+        // After a text response is committed, check if we've used too many tokens.
+        // Diminishing returns: if the model keeps adding tiny increments → stop.
+        // Use turn-level token count from the last recorded usage.
+        const _lastUsage = (() => {
+          const last = [...history].reverse().find((m) => m.role === 'assistant' && m.usage);
+          return last?.usage ?? null;
+        })();
+        const _turnTokens = _lastUsage
+          ? (_lastUsage.input_tokens ?? 0) + (_lastUsage.output_tokens ?? 0)
+          : 0;
+        if (_turnTokens > 0 || _tokenBudget !== null) {
+          const _budgetDecision = checkTokenBudget(
+            _budgetTracker,
+            _turnTokens,
+            _tokenBudget,
+            _isSubAgent,
+          );
+          if (_budgetDecision.action === 'stop' && _budgetDecision.reason !== 'sub_agent') {
+            const _stopReason = _budgetDecision.reason as 'budget_exhausted' | 'diminishing_returns';
+            const stopMsg = buildBudgetStopMessage(_stopReason);
+            onChunk(`\n${stopMsg}\n`);
+            break;
+          } else if (_budgetDecision.action === 'continue') {
+            const _nudge = (_budgetDecision as { action: 'continue'; nudgeMessage?: string }).nudgeMessage;
+            if (_nudge) {
+              history.push({ role: 'user', content: _nudge });
+              continue;
+            }
+          }
+        }
+
         break;
       }
 
