@@ -267,7 +267,7 @@ export function App({
       streamFlushTimer.current = null;
     }
     flushStreamBuf();
-    stopStreaming();
+    setIsStreaming(false);
   }, [flushStreamBuf]);
 
   // ── Slash command handler — real implementations, no console.log capture ──
