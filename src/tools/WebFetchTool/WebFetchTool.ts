@@ -1,231 +1,318 @@
-/**
- * WebFetchTool/WebFetchTool.ts — WebFetch: fetch and extract URL content
- *
- * Mirrors claude-code's WebFetchTool design.
- *
- * F18: WebFetch Safety Layer (claude-code WebFetchTool/utils.ts parity)
- *   1. SSRF protection: block private/loopback IP addresses and metadata endpoints
- *   2. URL content cache: in-memory LRU-style cache (15-min TTL, 50MB max)
- *   3. Content size limit: 10MB per response (mirrors claude-code MAX_HTTP_CONTENT_LENGTH)
- */
+import { z } from 'zod/v4'
+import { buildTool, type ToolDef } from '../../Tool.js'
+import type { PermissionUpdate } from '../../types/permissions.js'
+import { formatFileSize } from '../../utils/format.js'
+import { lazySchema } from '../../utils/lazySchema.js'
+import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
+import { getRuleByContentsForTool } from '../../utils/permissions/permissions.js'
+import { isPreapprovedHost } from './preapproved.js'
+import { DESCRIPTION, WEB_FETCH_TOOL_NAME } from './prompt.js'
+import {
+  getToolUseSummary,
+  renderToolResultMessage,
+  renderToolUseMessage,
+  renderToolUseProgressMessage,
+} from './UI.js'
+import {
+  applyPromptToMarkdown,
+  type FetchedContent,
+  getURLMarkdownContent,
+  isPreapprovedUrl,
+  MAX_MARKDOWN_LENGTH,
+} from './utils.js'
 
-import type { ToolRegistration } from '../../models/types.js';
+const inputSchema = lazySchema(() =>
+  z.strictObject({
+    url: z.string().url().describe('The URL to fetch content from'),
+    prompt: z.string().describe('The prompt to run on the fetched content'),
+  }),
+)
+type InputSchema = ReturnType<typeof inputSchema>
 
-/**
- * AbortSignal.timeout() polyfill for Node.js < 17.3.
- */
-function timeoutSignal(ms: number): AbortSignal {
-  if (typeof AbortSignal.timeout === 'function') {
-    return AbortSignal.timeout(ms);
+const outputSchema = lazySchema(() =>
+  z.object({
+    bytes: z.number().describe('Size of the fetched content in bytes'),
+    code: z.number().describe('HTTP response code'),
+    codeText: z.string().describe('HTTP response code text'),
+    result: z
+      .string()
+      .describe('Processed result from applying the prompt to the content'),
+    durationMs: z
+      .number()
+      .describe('Time taken to fetch and process the content'),
+    url: z.string().describe('The URL that was fetched'),
+  }),
+)
+type OutputSchema = ReturnType<typeof outputSchema>
+
+export type Output = z.infer<OutputSchema>
+
+function webFetchToolInputToPermissionRuleContent(input: {
+  [k: string]: unknown
+}): string {
+  try {
+    const parsedInput = WebFetchTool.inputSchema.safeParse(input)
+    if (!parsedInput.success) {
+      return `input:${input.toString()}`
+    }
+    const { url } = parsedInput.data
+    const hostname = new URL(url).hostname
+    return `domain:${hostname}`
+  } catch {
+    return `input:${input.toString()}`
   }
-  const ctrl = new AbortController();
-  setTimeout(() => ctrl.abort(new DOMException('TimeoutError', 'TimeoutError')), ms);
-  return ctrl.signal;
 }
 
-/** Maximum HTTP response size in bytes (10MB — mirrors claude-code) */
-const MAX_HTTP_CONTENT_LENGTH = 10 * 1024 * 1024; // 10MB
-
-/** Fetch timeout in ms (60s — mirrors claude-code FETCH_TIMEOUT_MS) */
-const FETCH_TIMEOUT_MS = 60_000;
-
-/** Maximum URL length check (2000 chars — browsers/servers generally reject longer) */
-const MAX_URL_LENGTH = 2000;
-
-/** URL content cache entry */
-interface UrlCacheEntry {
-  content: string;
-  fetchedAt: number;
-}
-
-/**
- * Simple in-memory URL content cache (TTL + size-limited).
- * Mirrors claude-code URL_CACHE (LRUCache, 50MB, 15-min TTL).
- */
-const URL_CACHE = new Map<string, UrlCacheEntry>();
-const URL_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const URL_CACHE_MAX_ENTRIES = 128;         // max cached URLs
-
-function getUrlCached(url: string): string | null {
-  const entry = URL_CACHE.get(url);
-  if (!entry) return null;
-  if (Date.now() - entry.fetchedAt > URL_CACHE_TTL_MS) {
-    URL_CACHE.delete(url);
-    return null;
-  }
-  return entry.content;
-}
-
-function setUrlCached(url: string, content: string): void {
-  if (URL_CACHE.size >= URL_CACHE_MAX_ENTRIES) {
-    const firstKey = URL_CACHE.keys().next().value;
-    if (firstKey !== undefined) URL_CACHE.delete(firstKey);
-  }
-  URL_CACHE.set(url, { content, fetchedAt: Date.now() });
-}
-
-/**
- * F18: SSRF protection — block requests to private/loopback/metadata IP ranges.
- */
-export function isBlockedDomain(hostname: string): { blocked: boolean; reason?: string } {
-  const h = hostname.toLowerCase();
-
-  if (h === 'localhost' || h === 'localhost.') {
-    return { blocked: true, reason: 'loopback address' };
-  }
-  if (/^127\.\d+\.\d+\.\d+$/.test(h)) {
-    return { blocked: true, reason: 'loopback address (127.x)' };
-  }
-  if (/^169\.254\./.test(h)) {
-    return { blocked: true, reason: 'link-local / cloud metadata address (169.254.x)' };
-  }
-  if (/^10\./.test(h)) {
-    return { blocked: true, reason: 'private network (10.x)' };
-  }
-  if (/^192\.168\./.test(h)) {
-    return { blocked: true, reason: 'private network (192.168.x)' };
-  }
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) {
-    return { blocked: true, reason: 'private network (172.16-31.x)' };
-  }
-  if (h === '::1' || h === '[::1]') {
-    return { blocked: true, reason: 'IPv6 loopback' };
-  }
-  if (/^(fc|fd)[0-9a-f]{2}:/.test(h)) {
-    return { blocked: true, reason: 'IPv6 private network (fc00::/7)' };
-  }
-
-  return { blocked: false };
-}
-
-// ─── Helpers ─────────────────────────────────────────────
-function stripHTML(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s{3,}/g, '\n\n')
-    .trim();
-}
-
-function extractLinks(html: string, baseUrl: string): string[] {
-  const base = new URL(baseUrl);
-  const links: string[] = [];
-  const pattern = /href="([^"]+)"/gi;
-  let match;
-  while ((match = pattern.exec(html)) !== null) {
+export const WebFetchTool = buildTool({
+  name: WEB_FETCH_TOOL_NAME,
+  searchHint: 'fetch and extract content from a URL',
+  // 100K chars - tool result persistence threshold
+  maxResultSizeChars: 100_000,
+  shouldDefer: true,
+  async description(input) {
+    const { url } = input as { url: string }
     try {
-      const href = match[1];
-      if (href.startsWith('#')) continue;
-      const full = href.startsWith('http') ? href : new URL(href, base).toString();
-      links.push(full);
-    } catch { /* skip invalid URLs */ }
-  }
-  return [...new Set(links)];
-}
-
-// ─── WebFetch ────────────────────────────────────────────
-export const webFetchTool: ToolRegistration = {
-  definition: {
-    name: 'WebFetch',
-    description: 'Fetch and extract the main content from a URL. Returns readable text content.',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'The URL to fetch' },
-        extract: {
-          type: 'string',
-          description: 'What to extract: text | links | both',
-          enum: ['text', 'links', 'both'],
-        },
-      },
-      required: ['url'],
-    },
+      const hostname = new URL(url).hostname
+      return `Claude wants to fetch content from ${hostname}`
+    } catch {
+      return `Claude wants to fetch content from this URL`
+    }
   },
+  userFacingName() {
+    return 'Fetch'
+  },
+  getToolUseSummary,
+  getActivityDescription(input) {
+    const summary = getToolUseSummary(input)
+    return summary ? `Fetching ${summary}` : 'Fetching web page'
+  },
+  get inputSchema(): InputSchema {
+    return inputSchema()
+  },
+  get outputSchema(): OutputSchema {
+    return outputSchema()
+  },
+  isConcurrencySafe() {
+    return true
+  },
+  isReadOnly() {
+    return true
+  },
+  toAutoClassifierInput(input) {
+    return input.prompt ? `${input.url}: ${input.prompt}` : input.url
+  },
+  async checkPermissions(input, context): Promise<PermissionDecision> {
+    const appState = context.getAppState()
+    const permissionContext = appState.toolPermissionContext
 
-  validate(args) {
-    const { url } = args as { url?: string };
-    if (!url || typeof url !== 'string' || url.trim().length === 0) {
-      return { result: false, message: 'url is required', errorCode: 'missing_url' };
-    }
-    if (url.length > MAX_URL_LENGTH) {
-      return { result: false, message: `URL too long (${url.length} > ${MAX_URL_LENGTH} chars)`, errorCode: 'url_too_long' };
-    }
+    // Check if the hostname is in the preapproved list
     try {
-      const parsed = new URL(url);
-      if (!['http:', 'https:'].includes(parsed.protocol)) {
-        return { result: false, message: `Unsupported protocol: ${parsed.protocol}`, errorCode: 'unsupported_protocol' };
-      }
-      const { blocked, reason } = isBlockedDomain(parsed.hostname);
-      if (blocked) {
-        return { result: false, message: `Blocked domain: ${reason}`, errorCode: 'domain_blocked' };
+      const { url } = input as { url: string }
+      const parsedUrl = new URL(url)
+      if (isPreapprovedHost(parsedUrl.hostname, parsedUrl.pathname)) {
+        return {
+          behavior: 'allow',
+          updatedInput: input,
+          decisionReason: { type: 'other', reason: 'Preapproved host' },
+        }
       }
     } catch {
-      return { result: false, message: `Invalid URL: ${url}`, errorCode: 'invalid_url' };
+      // If URL parsing fails, continue with normal permission checks
     }
-    return { result: true };
-  },
 
-  handler: async (args) => {
-    const { url, extract = 'text' } = args as { url: string; extract: string };
+    // Check for a rule specific to the tool input (matching hostname)
+    const ruleContent = webFetchToolInputToPermissionRuleContent(input)
 
-    // F18: Check URL cache first
-    const cached = getUrlCached(url);
-    if (cached) return cached;
-
-    try {
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; UniversalAgent/1.0)',
-          Accept: 'text/html,application/xhtml+xml,*/*',
+    const denyRule = getRuleByContentsForTool(
+      permissionContext,
+      WebFetchTool,
+      'deny',
+    ).get(ruleContent)
+    if (denyRule) {
+      return {
+        behavior: 'deny',
+        message: `${WebFetchTool.name} denied access to ${ruleContent}.`,
+        decisionReason: {
+          type: 'rule',
+          rule: denyRule,
         },
-        signal: timeoutSignal(FETCH_TIMEOUT_MS),
-      });
-
-      if (!res.ok) return `Error: HTTP ${res.status} ${res.statusText}`;
-
-      // F18: Content size limit — check Content-Length header first
-      const contentLength = res.headers.get('content-length');
-      if (contentLength && parseInt(contentLength, 10) > MAX_HTTP_CONTENT_LENGTH) {
-        return `Error: Response too large (${Math.round(parseInt(contentLength, 10) / 1024 / 1024)}MB > 10MB limit)`;
       }
+    }
 
-      const contentType = res.headers.get('content-type') || '';
-      const text = await res.text();
-
-      // F18: Runtime size check after reading body
-      if (Buffer.byteLength(text, 'utf-8') > MAX_HTTP_CONTENT_LENGTH) {
-        return `Error: Response too large (> 10MB limit). First 5000 chars:\n${text.slice(0, 5000)}`;
+    const askRule = getRuleByContentsForTool(
+      permissionContext,
+      WebFetchTool,
+      'ask',
+    ).get(ruleContent)
+    if (askRule) {
+      return {
+        behavior: 'ask',
+        message: `Claude requested permissions to use ${WebFetchTool.name}, but you haven't granted it yet.`,
+        decisionReason: {
+          type: 'rule',
+          rule: askRule,
+        },
+        suggestions: buildSuggestions(ruleContent),
       }
+    }
 
-      let result: string;
-
-      // JSON response
-      if (contentType.includes('application/json')) {
-        try {
-          result = JSON.stringify(JSON.parse(text), null, 2).slice(0, 8000);
-        } catch { result = text.slice(0, 8000); }
-      } else {
-        // HTML — strip tags
-        const stripped = stripHTML(text);
-        const links = extract !== 'text' ? extractLinks(text, url) : [];
-
-        if (extract === 'links') result = links.slice(0, 50).join('\n');
-        else if (extract === 'both') result = `Content:\n${stripped.slice(0, 5000)}\n\nLinks:\n${links.slice(0, 20).join('\n')}`;
-        else result = stripped.slice(0, 8000);
+    const allowRule = getRuleByContentsForTool(
+      permissionContext,
+      WebFetchTool,
+      'allow',
+    ).get(ruleContent)
+    if (allowRule) {
+      return {
+        behavior: 'allow',
+        updatedInput: input,
+        decisionReason: {
+          type: 'rule',
+          rule: allowRule,
+        },
       }
+    }
 
-      // F18: Store in cache
-      setUrlCached(url, result);
-      return result;
-    } catch (err) {
-      return `Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`;
+    return {
+      behavior: 'ask',
+      message: `Claude requested permissions to use ${WebFetchTool.name}, but you haven't granted it yet.`,
+      suggestions: buildSuggestions(ruleContent),
     }
   },
-};
+  async prompt(_options) {
+    // Always include the auth warning regardless of whether ToolSearch is
+    // currently in the tools list. Conditionally toggling this prefix based
+    // on ToolSearch availability caused the tool description to flicker
+    // between SDK query() calls (when ToolSearch enablement varies due to
+    // MCP tool count thresholds), invalidating the Anthropic API prompt
+    // cache on each toggle — two consecutive cache misses per flicker event.
+    return `IMPORTANT: WebFetch WILL FAIL for authenticated or private URLs. Before using this tool, check if the URL points to an authenticated service (e.g. Google Docs, Confluence, Jira, GitHub). If so, look for a specialized MCP tool that provides authenticated access.
+${DESCRIPTION}`
+  },
+  async validateInput(input) {
+    const { url } = input
+    try {
+      new URL(url)
+    } catch {
+      return {
+        result: false,
+        message: `Error: Invalid URL "${url}". The URL provided could not be parsed.`,
+        meta: { reason: 'invalid_url' },
+        errorCode: 1,
+      }
+    }
+    return { result: true }
+  },
+  renderToolUseMessage,
+  renderToolUseProgressMessage,
+  renderToolResultMessage,
+  async call(
+    { url, prompt },
+    { abortController, options: { isNonInteractiveSession } },
+  ) {
+    const start = Date.now()
+
+    const response = await getURLMarkdownContent(url, abortController)
+
+    // Check if we got a redirect to a different host
+    if ('type' in response && response.type === 'redirect') {
+      const statusText =
+        response.statusCode === 301
+          ? 'Moved Permanently'
+          : response.statusCode === 308
+            ? 'Permanent Redirect'
+            : response.statusCode === 307
+              ? 'Temporary Redirect'
+              : 'Found'
+
+      const message = `REDIRECT DETECTED: The URL redirects to a different host.
+
+Original URL: ${response.originalUrl}
+Redirect URL: ${response.redirectUrl}
+Status: ${response.statusCode} ${statusText}
+
+To complete your request, I need to fetch content from the redirected URL. Please use WebFetch again with these parameters:
+- url: "${response.redirectUrl}"
+- prompt: "${prompt}"`
+
+      const output: Output = {
+        bytes: Buffer.byteLength(message),
+        code: response.statusCode,
+        codeText: statusText,
+        result: message,
+        durationMs: Date.now() - start,
+        url,
+      }
+
+      return {
+        data: output,
+      }
+    }
+
+    const {
+      content,
+      bytes,
+      code,
+      codeText,
+      contentType,
+      persistedPath,
+      persistedSize,
+    } = response as FetchedContent
+
+    const isPreapproved = isPreapprovedUrl(url)
+
+    let result: string
+    if (
+      isPreapproved &&
+      contentType.includes('text/markdown') &&
+      content.length < MAX_MARKDOWN_LENGTH
+    ) {
+      result = content
+    } else {
+      result = await applyPromptToMarkdown(
+        prompt,
+        content,
+        abortController.signal,
+        isNonInteractiveSession,
+        isPreapproved,
+      )
+    }
+
+    // Binary content (PDFs, etc.) was additionally saved to disk with a
+    // mime-derived extension. Note it so Claude can inspect the raw file
+    // if the Haiku summary above isn't enough.
+    if (persistedPath) {
+      result += `\n\n[Binary content (${contentType}, ${formatFileSize(persistedSize ?? bytes)}) also saved to ${persistedPath}]`
+    }
+
+    const output: Output = {
+      bytes,
+      code,
+      codeText,
+      result,
+      durationMs: Date.now() - start,
+      url,
+    }
+
+    return {
+      data: output,
+    }
+  },
+  mapToolResultToToolResultBlockParam({ result }, toolUseID) {
+    return {
+      tool_use_id: toolUseID,
+      type: 'tool_result',
+      content: result,
+    }
+  },
+} satisfies ToolDef<InputSchema, Output>)
+
+function buildSuggestions(ruleContent: string): PermissionUpdate[] {
+  return [
+    {
+      type: 'addRules',
+      destination: 'localSettings',
+      rules: [{ toolName: WEB_FETCH_TOOL_NAME, ruleContent }],
+      behavior: 'allow',
+    },
+  ]
+}

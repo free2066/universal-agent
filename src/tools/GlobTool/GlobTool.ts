@@ -1,251 +1,198 @@
-/**
- * GlobTool/GlobTool.ts — GlobTool: file pattern matching search
- *
- * Mirrors claude-code's GlobTool.ts design.
- *
- * Finds files matching a glob pattern within a directory.
- * - Input: { pattern: string, path?: string }
- * - Output: list of matching file paths relative to cwd
- * - Maximum 100 results (matching claude-code limit)
- * - Uses Node.js built-ins only (no external glob dependency)
- *
- * Safety:
- * - Skips UNC paths (\\... or //...) to prevent NTLM credential leaks
- * - Validates path is an existing directory
- *
- * Round 6: claude-code GlobTool parity
- */
+import { z } from 'zod/v4'
+import type { ValidationResult } from '../../Tool.js'
+import { buildTool, type ToolDef } from '../../Tool.js'
+import { getCwd } from '../../utils/cwd.js'
+import { isENOENT } from '../../utils/errors.js'
+import {
+  FILE_NOT_FOUND_CWD_NOTE,
+  suggestPathUnderCwd,
+} from '../../utils/file.js'
+import { getFsImplementation } from '../../utils/fsOperations.js'
+import { glob } from '../../utils/glob.js'
+import { lazySchema } from '../../utils/lazySchema.js'
+import { expandPath, toRelativePath } from '../../utils/path.js'
+import { checkReadPermissionForTool } from '../../utils/permissions/filesystem.js'
+import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
+import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
+import { DESCRIPTION, GLOB_TOOL_NAME } from './prompt.js'
+import {
+  getToolUseSummary,
+  renderToolResultMessage,
+  renderToolUseErrorMessage,
+  renderToolUseMessage,
+  userFacingName,
+} from './UI.js'
 
-import { existsSync, statSync, readdirSync } from 'fs';
-import { resolve, relative, isAbsolute, join, sep } from 'path';
-import type { ToolRegistration } from '../../models/types.js';
+const inputSchema = lazySchema(() =>
+  z.strictObject({
+    pattern: z.string().describe('The glob pattern to match files against'),
+    path: z
+      .string()
+      .optional()
+      .describe(
+        'The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this field to use the default directory. DO NOT enter "undefined" or "null" - simply omit it for the default behavior. Must be a valid directory path if provided.',
+      ),
+  }),
+)
+type InputSchema = ReturnType<typeof inputSchema>
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+const outputSchema = lazySchema(() =>
+  z.object({
+    durationMs: z
+      .number()
+      .describe('Time taken to execute the search in milliseconds'),
+    numFiles: z.number().describe('Total number of files found'),
+    filenames: z
+      .array(z.string())
+      .describe('Array of file paths that match the pattern'),
+    truncated: z
+      .boolean()
+      .describe('Whether results were truncated (limited to 100 files)'),
+  }),
+)
+type OutputSchema = ReturnType<typeof outputSchema>
 
-const MAX_GLOB_RESULTS = 100;
+export type Output = z.infer<OutputSchema>
 
-// ── Glob pattern → RegExp conversion ─────────────────────────────────────────
-
-/**
- * Convert a glob pattern to a RegExp.
- *
- * Supported syntax:
- *   **   → match any path segment (including /)
- *   *    → match any character except /
- *   ?    → match any single character except /
- *   [..] → character class
- *
- * All other regex special characters are escaped.
- */
-function globToRegex(pattern: string): RegExp {
-  // Normalize path separators
-  const normalized = pattern.replace(/\\/g, '/');
-
-  let regexStr = '';
-  let i = 0;
-  while (i < normalized.length) {
-    const ch = normalized[i]!;
-
-    if (ch === '*' && normalized[i + 1] === '*') {
-      // **/ at start or after /
-      if (normalized[i + 2] === '/') {
-        // **/ → match zero or more path segments
-        regexStr += '(?:.+/)?';
-        i += 3;
-      } else if (i === normalized.length - 2) {
-        // trailing ** → match everything
-        regexStr += '.*';
-        i += 2;
-      } else {
-        regexStr += '.*';
-        i += 2;
-      }
-    } else if (ch === '*') {
-      // single * → match any character except /
-      regexStr += '[^/]*';
-      i++;
-    } else if (ch === '?') {
-      // ? → match any single character except /
-      regexStr += '[^/]';
-      i++;
-    } else if (ch === '[') {
-      // character class — pass through as-is until matching ]
-      const end = normalized.indexOf(']', i + 1);
-      if (end < 0) {
-        regexStr += '\\[';
-        i++;
-      } else {
-        regexStr += normalized.slice(i, end + 1);
-        i = end + 1;
-      }
-    } else if ('.+^${}()|\\'.includes(ch)) {
-      // Escape regex special characters
-      regexStr += `\\${ch}`;
-      i++;
-    } else {
-      regexStr += ch;
-      i++;
-    }
-  }
-
-  return new RegExp(`^${regexStr}$`);
-}
-
-// ── Recursive directory traversal ─────────────────────────────────────────────
-
-function collectFiles(
-  dir: string,
-  baseDir: string,
-  pattern: RegExp,
-  results: string[],
-  limit: number,
-): void {
-  if (results.length >= limit) return;
-
-  let entries: import('fs').Dirent[];
-  try {
-    entries = readdirSync(dir, { withFileTypes: true }) as import('fs').Dirent[];
-  } catch { return; /* permission denied or inaccessible — skip silently */ }
-
-  for (const entry of entries) {
-    if (results.length >= limit) return;
-
-    // Skip hidden directories (like .git, node_modules when traversing deeply)
-    if (entry.name.startsWith('.') && entry.isDirectory()) continue;
-    // Skip node_modules
-    if (entry.name === 'node_modules') continue;
-
-    const fullPath = join(dir, entry.name);
-    const relPath = relative(baseDir, fullPath).replace(/\\/g, '/');
-
-    if (pattern.test(relPath)) {
-      results.push(relPath);
-    }
-
-    if (entry.isDirectory()) {
-      collectFiles(fullPath, baseDir, pattern, results, limit);
-    }
-  }
-}
-
-// ── Tool registration ─────────────────────────────────────────────────────────
-
-export const globTool: ToolRegistration = {
-  definition: {
-    name: 'Glob',
-    description: [
-      'Find files matching a glob pattern.',
-      '',
-      'Use this tool to quickly locate files by name pattern.',
-      'Examples:',
-      '  **/*.ts        — all TypeScript files in any subdirectory',
-      '  src/**/*.test.ts — all test files under src/',
-      '  *.json         — JSON files in the root',
-      '',
-      'Results are capped at 100 files. Use a more specific path to narrow results.',
-      'Returns file paths relative to the current working directory.',
-    ].join('\n'),
-    parameters: {
-      type: 'object' as const,
-      properties: {
-        pattern: {
-          type: 'string',
-          description: 'Glob pattern to match files (e.g. "**/*.ts", "src/**/*.json")',
-        },
-        path: {
-          type: 'string',
-          description: 'Absolute or relative directory path to search within (defaults to cwd)',
-        },
-      },
-      required: ['pattern'],
-    },
+export const GlobTool = buildTool({
+  name: GLOB_TOOL_NAME,
+  searchHint: 'find files by name pattern or wildcard',
+  maxResultSizeChars: 100_000,
+  async description() {
+    return DESCRIPTION
   },
-
-  async handler(args: unknown): Promise<string> {
-    const input = args as { pattern?: string; path?: string };
-    const pattern = (input.pattern ?? '').trim();
-    const pathArg = input.path?.trim();
-
-    if (!pattern) {
-      return '[Glob] Error: pattern is required';
-    }
-
-    // Resolve search directory
-    const cwd = process.cwd();
-    let searchDir: string;
-
-    if (pathArg) {
-      searchDir = isAbsolute(pathArg) ? pathArg : resolve(cwd, pathArg);
-    } else {
-      searchDir = cwd;
-    }
-
-    // Safety: skip UNC paths (\\... or //...) to prevent NTLM credential leaks
-    if (searchDir.startsWith('\\\\') || searchDir.startsWith('//')) {
-      return '[Glob] Error: UNC paths are not supported';
-    }
-
-    // Validate directory exists
-    if (!existsSync(searchDir)) {
-      return `[Glob] Error: directory not found: ${searchDir}`;
-    }
-    try {
-      const st = statSync(searchDir);
-      if (!st.isDirectory()) {
-        return `[Glob] Error: path is not a directory: ${searchDir}`;
-      }
-    } catch (e) {
-      return `[Glob] Error: cannot access path: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    const startMs = Date.now();
-
-    // Build regex from pattern
-    // Normalize separators to forward slash for consistent matching
-    const normalizedPattern = pattern.replace(/\\/g, '/');
-    let patternRegex: RegExp;
-    try {
-      patternRegex = globToRegex(normalizedPattern);
-    } catch (e) {
-      return `[Glob] Error: invalid pattern: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    // Collect matching files (collect up to MAX+1 to detect truncation)
-    const rawResults: string[] = [];
-    collectFiles(searchDir, searchDir, patternRegex, rawResults, MAX_GLOB_RESULTS + 1);
-
-    // Sort for deterministic output
-    rawResults.sort();
-
-    let truncated = false;
-    let filenames: string[];
-    if (rawResults.length > MAX_GLOB_RESULTS) {
-      truncated = true;
-      filenames = rawResults.slice(0, MAX_GLOB_RESULTS);
-    } else {
-      filenames = rawResults;
-    }
-
-    // Relativize to cwd (saves tokens when searchDir != cwd)
-    const relativeFilenames = filenames.map((f) => {
-      const abs = resolve(searchDir, f);
-      const rel = relative(cwd, abs);
-      // Normalize path separators to forward slash
-      return rel.replace(/\\/g, '/');
-    });
-
-    const durationMs = Date.now() - startMs;
-    const numFiles = relativeFilenames.length;
-
-    if (numFiles === 0) {
-      return `[Glob] No files found matching "${pattern}"${pathArg ? ` in ${searchDir}` : ''}.`;
-    }
-
-    const header = `${numFiles} file${numFiles !== 1 ? 's' : ''} found (${durationMs}ms)${truncated ? ` [truncated at ${MAX_GLOB_RESULTS}]` : ''}:`;
-    return [header, ...relativeFilenames].join('\n');
+  userFacingName,
+  getToolUseSummary,
+  getActivityDescription(input) {
+    const summary = getToolUseSummary(input)
+    return summary ? `Finding ${summary}` : 'Finding files'
   },
-};
+  get inputSchema(): InputSchema {
+    return inputSchema()
+  },
+  get outputSchema(): OutputSchema {
+    return outputSchema()
+  },
+  isConcurrencySafe() {
+    return true
+  },
+  isReadOnly() {
+    return true
+  },
+  toAutoClassifierInput(input) {
+    return input.pattern
+  },
+  isSearchOrReadCommand() {
+    return { isSearch: true, isRead: false }
+  },
+  getPath({ path }): string {
+    return path ? expandPath(path) : getCwd()
+  },
+  async preparePermissionMatcher({ pattern }) {
+    return rulePattern => matchWildcardPattern(rulePattern, pattern)
+  },
+  async validateInput({ path }): Promise<ValidationResult> {
+    // If path is provided, validate that it exists and is a directory
+    if (path) {
+      const fs = getFsImplementation()
+      const absolutePath = expandPath(path)
 
-// Add 'Glob' to PARALLELIZABLE_TOOLS in types.ts is handled automatically
-// since this tool only reads the filesystem (no writes).
-void sep; // use import to avoid unused warning
+      // SECURITY: Skip filesystem operations for UNC paths to prevent NTLM credential leaks.
+      if (absolutePath.startsWith('\\\\') || absolutePath.startsWith('//')) {
+        return { result: true }
+      }
+
+      let stats
+      try {
+        stats = await fs.stat(absolutePath)
+      } catch (e: unknown) {
+        if (isENOENT(e)) {
+          const cwdSuggestion = await suggestPathUnderCwd(absolutePath)
+          let message = `Directory does not exist: ${path}. ${FILE_NOT_FOUND_CWD_NOTE} ${getCwd()}.`
+          if (cwdSuggestion) {
+            message += ` Did you mean ${cwdSuggestion}?`
+          }
+          return {
+            result: false,
+            message,
+            errorCode: 1,
+          }
+        }
+        throw e
+      }
+
+      if (!stats.isDirectory()) {
+        return {
+          result: false,
+          message: `Path is not a directory: ${path}`,
+          errorCode: 2,
+        }
+      }
+    }
+
+    return { result: true }
+  },
+  async checkPermissions(input, context): Promise<PermissionDecision> {
+    const appState = context.getAppState()
+    return checkReadPermissionForTool(
+      GlobTool,
+      input,
+      appState.toolPermissionContext,
+    )
+  },
+  async prompt() {
+    return DESCRIPTION
+  },
+  renderToolUseMessage,
+  renderToolUseErrorMessage,
+  renderToolResultMessage,
+  // Reuses Grep's render (UI.tsx:65) — shows filenames.join. durationMs/
+  // numFiles are "Found 3 files in 12ms" chrome (under-count, fine).
+  extractSearchText({ filenames }) {
+    return filenames.join('\n')
+  },
+  async call(input, { abortController, getAppState, globLimits }) {
+    const start = Date.now()
+    const appState = getAppState()
+    const limit = globLimits?.maxResults ?? 100
+    const { files, truncated } = await glob(
+      input.pattern,
+      GlobTool.getPath(input),
+      { limit, offset: 0 },
+      abortController.signal,
+      appState.toolPermissionContext,
+    )
+    // Relativize paths under cwd to save tokens (same as GrepTool)
+    const filenames = files.map(toRelativePath)
+    const output: Output = {
+      filenames,
+      durationMs: Date.now() - start,
+      numFiles: filenames.length,
+      truncated,
+    }
+    return {
+      data: output,
+    }
+  },
+  mapToolResultToToolResultBlockParam(output, toolUseID) {
+    if (output.filenames.length === 0) {
+      return {
+        tool_use_id: toolUseID,
+        type: 'tool_result',
+        content: 'No files found',
+      }
+    }
+    return {
+      tool_use_id: toolUseID,
+      type: 'tool_result',
+      content: [
+        ...output.filenames,
+        ...(output.truncated
+          ? [
+              '(Results are truncated. Consider using a more specific path or pattern.)',
+            ]
+          : []),
+      ].join('\n'),
+    }
+  },
+} satisfies ToolDef<InputSchema, Output>)

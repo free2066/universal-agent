@@ -1,0 +1,6 @@
+[build]
+target = "bun"
+sourcemap = "external"
+
+[run]
+bun = true

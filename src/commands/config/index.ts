@@ -1,8 +1,11 @@
-/**
- * commands/config/index.ts — /config command
- *
- * Mirrors claude-code's commands/config/index.ts.
- * Re-exports the config command handler.
- */
+import type { Command } from '../../commands.js'
 
-export * from '../../cli/commands/cmd-misc.js';
+const config = {
+  aliases: ['settings'],
+  type: 'local-jsx',
+  name: 'config',
+  description: 'Open config panel',
+  load: () => import('./config.js'),
+} satisfies Command
+
+export default config

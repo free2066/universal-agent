@@ -1,151 +1,215 @@
-/**
- * mcp-auth-tool.ts — McpAuthTool 未认证 MCP 服务器伪工具
- *
- * A22: 对标 claude-code src/tools/McpAuthTool/McpAuthTool.ts
- *
- * 当 MCP 服务器配置了 OAuth 但尚未认证时，动态注入一个同名"伪工具"：
- *   mcp__<serverName>__authenticate
- *
- * 当 LLM 调用该伪工具时，触发 OAuth 授权流程（打开浏览器），
- * 认证完成后返回成功消息。这允许 LLM 主动发起 MCP OAuth 认证，
- * 实现零配置 OAuth 接入体验（无需用户手动触发认证流程）。
- *
- * 设计原则：
- *   - 非侵入式：伪工具仅在服务器未认证时出现
- *   - 幂等：多次调用安全（重复授权检查）
- *   - 清晰错误：授权失败返回结构化错误消息
- */
+import reject from 'lodash-es/reject.js'
+import { z } from 'zod/v4'
+import { performMCPOAuthFlow } from '../../services/mcp/auth.js'
+import {
+  clearMcpAuthCache,
+  reconnectMcpServerImpl,
+} from '../../services/mcp/client.js'
+import {
+  buildMcpToolName,
+  getMcpPrefix,
+} from '../../services/mcp/mcpStringUtils.js'
+import type {
+  McpHTTPServerConfig,
+  McpSSEServerConfig,
+  ScopedMcpServerConfig,
+} from '../../services/mcp/types.js'
+import type { Tool } from '../../Tool.js'
+import { errorMessage } from '../../utils/errors.js'
+import { lazySchema } from '../../utils/lazySchema.js'
+import { logMCPDebug, logMCPError } from '../../utils/log.js'
+import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 
-import type { ToolRegistration } from '../../models/types.js';
+const inputSchema = lazySchema(() => z.object({}))
+type InputSchema = ReturnType<typeof inputSchema>
 
-// ── McpAuthTool 工具名前缀 ───────────────────────────────────────────────────
-const MCP_AUTH_TOOL_PREFIX = 'mcp__';
-const MCP_AUTH_TOOL_SUFFIX = '__authenticate';
+export type McpAuthOutput = {
+  status: 'auth_url' | 'unsupported' | 'error'
+  message: string
+  authUrl?: string
+}
+
+function getConfigUrl(config: ScopedMcpServerConfig): string | undefined {
+  if ('url' in config) return config.url
+  return undefined
+}
 
 /**
- * A22: createMcpAuthTool — 为未认证的 MCP 服务器创建伪工具
+ * Creates a pseudo-tool for an MCP server that is installed but not
+ * authenticated. Surfaced in place of the server's real tools so the model
+ * knows the server exists and can start the OAuth flow on the user's behalf.
  *
- * 对标 claude-code McpAuthTool.ts:
- *   - 工具名格式: mcp__<serverName>__authenticate
- *   - 描述: 告知 LLM 此服务器需要 OAuth 认证，调用工具触发授权
- *   - 执行: 调用 auth.authorize() 打开浏览器完成 OAuth 流程
- *   - 成功后: 返回成功消息（正常 MCP 工具自动可用）
- *   - 失败: 返回结构化错误消息（不抛出，保持 LLM 对话稳定）
- *
- * @param serverName  MCP 服务器名称
- * @param authorizeCallback  触发 OAuth 授权的回调函数
- * @returns ToolRegistration 可注册到工具注册表的伪工具
- */
-/**
- * A22 + C27: createMcpAuthTool — 为未认证的 MCP 服务器创建伪工具
- *
- * 对标 claude-code McpAuthTool.ts:
- *   - 工具名格式: mcp__<serverName>__authenticate
- *   - 描述: 告知 LLM 此服务器需要 OAuth 认证，调用工具触发授权
- *   - 执行: 调用 auth.authorize() 打开浏览器完成 OAuth 流程
- *   - 成功后: 返回成功消息（正常 MCP 工具自动可用）
- *   - 失败: 返回结构化错误消息（不抛出，保持 LLM 对话稳定）
- *
- * C27: skipBrowserOpen 模式 — 对标 claude-code McpAuthTool.ts L126-132
- *   - headless/CI 环境（!process.stdout.isTTY）自动启用
- *   - skipBrowserOpen=true 时返回 auth URL 而非打开浏览器
- *   - 后台等待 OAuth 完成后通知 reconnect
- *
- * @param serverName  MCP 服务器名称
- * @param authorizeCallback  触发 OAuth 授权的回调函数
- * @param options    C27: 可选配置项
- * @returns ToolRegistration 可注册到工具注册表的伪工具
+ * When called, starts performMCPOAuthFlow with skipBrowserOpen and returns
+ * the authorization URL. The OAuth callback completes in the background;
+ * once it fires, reconnectMcpServerImpl runs and the server's real tools
+ * are swapped into appState.mcp.tools via the existing prefix-based
+ * replacement (useManageMCPConnections.updateServer wipes anything matching
+ * mcp__<server>__*, so this pseudo-tool is removed automatically).
  */
 export function createMcpAuthTool(
   serverName: string,
-  authorizeCallback: () => Promise<void>,
-  options?: {
-    /** C27: skipBrowserOpen — return auth URL instead of opening browser (for headless/SDK use) */
-    getAuthUrl?: () => Promise<string | null>;
-    /** C27: onReconnect — called after OAuth completes to reconnect the MCP server */
-    onReconnect?: () => Promise<void>;
-  },
-): ToolRegistration {
-  const toolName = `${MCP_AUTH_TOOL_PREFIX}${serverName}${MCP_AUTH_TOOL_SUFFIX}`;
+  config: ScopedMcpServerConfig,
+): Tool<InputSchema, McpAuthOutput> {
+  const url = getConfigUrl(config)
+  const transport = config.type ?? 'stdio'
+  const location = url ? `${transport} at ${url}` : transport
 
-  // C27: auto-detect headless environment
-  const isHeadless = !process.stdout.isTTY || process.env.CI === '1';
+  const description =
+    `The \`${serverName}\` MCP server (${location}) is installed but requires authentication. ` +
+    `Call this tool to start the OAuth flow — you'll receive an authorization URL to share with the user. ` +
+    `Once the user completes authorization in their browser, the server's real tools will become available automatically.`
 
   return {
-    definition: {
-      name: toolName,
-      description:
-        `This MCP server (${serverName}) requires OAuth authentication before its tools can be used. ` +
-        `Call this tool to ${isHeadless ? 'get the authorization URL to complete authentication' : 'open the browser and complete the authorization flow'}. ` +
-        `After authentication succeeds, the server's actual tools will become available. ` +
-        `Only call this tool once — it will wait for the OAuth flow to complete.`,
-      parameters: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
+    name: buildMcpToolName(serverName, 'authenticate'),
+    isMcp: true,
+    mcpInfo: { serverName, toolName: 'authenticate' },
+    isEnabled: () => true,
+    isConcurrencySafe: () => false,
+    isReadOnly: () => false,
+    toAutoClassifierInput: () => serverName,
+    userFacingName: () => `${serverName} - authenticate (MCP)`,
+    maxResultSizeChars: 10_000,
+    renderToolUseMessage: () => `Authenticate ${serverName} MCP server`,
+    async description() {
+      return description
     },
-    handler: async (): Promise<string> => {
-      // C27: headless/SDK mode — return URL instead of opening browser
-      // Mirrors claude-code McpAuthTool.ts L126-132: skipBrowserOpen + Promise.race
-      if (isHeadless && options?.getAuthUrl) {
-        try {
-          const authUrl = await options.getAuthUrl();
-          if (authUrl) {
-            // C27: Background wait for OAuth completion + auto-reconnect
-            // Mirrors McpAuthTool.ts L137-173: background reconnect after oauth completes
-            (async () => {
-              try {
-                await authorizeCallback();
-                if (options?.onReconnect) {
-                  await options.onReconnect();
-                }
-              } catch { /* non-fatal background reconnect failure */ }
-            })().catch(() => {});
-
-            return (
-              `🔗 OAuth authentication required for MCP server "${serverName}".\n\n` +
-              `Visit this URL to authenticate:\n${authUrl}\n\n` +
-              `After completing authentication in your browser, the server's tools will become available automatically.`
-            );
-          }
-        } catch { /* fallthrough to browser mode */ }
-      }
-
-      // Default: open browser (interactive TTY mode)
-      try {
-        await authorizeCallback();
-        // C27: trigger reconnect after successful auth
-        if (options?.onReconnect) {
-          await options.onReconnect().catch(() => {});
+    async prompt() {
+      return description
+    },
+    get inputSchema(): InputSchema {
+      return inputSchema()
+    },
+    async checkPermissions(input): Promise<PermissionDecision> {
+      return { behavior: 'allow', updatedInput: input }
+    },
+    async call(_input, context) {
+      // claude.ai connectors use a separate auth flow (handleClaudeAIAuth in
+      // MCPRemoteServerMenu) that we don't invoke programmatically here —
+      // just point the user at /mcp.
+      if (config.type === 'claudeai-proxy') {
+        return {
+          data: {
+            status: 'unsupported' as const,
+            message: `This is a claude.ai MCP connector. Ask the user to run /mcp and select "${serverName}" to authenticate.`,
+          },
         }
-        return (
-          `✅ OAuth authentication for MCP server "${serverName}" completed successfully. ` +
-          `The server's tools are now available — you can use them directly in your next tool call.`
-        );
+      }
+
+      // performMCPOAuthFlow only accepts sse/http. needs-auth state is only
+      // set on HTTP 401 (UnauthorizedError) so other transports shouldn't
+      // reach here, but be defensive.
+      if (config.type !== 'sse' && config.type !== 'http') {
+        return {
+          data: {
+            status: 'unsupported' as const,
+            message: `Server "${serverName}" uses ${transport} transport which does not support OAuth from this tool. Ask the user to run /mcp and authenticate manually.`,
+          },
+        }
+      }
+
+      const sseOrHttpConfig = config as (
+        | McpSSEServerConfig
+        | McpHTTPServerConfig
+      ) & { scope: ScopedMcpServerConfig['scope'] }
+
+      // Mirror cli/print.ts mcp_authenticate: start the flow, capture the
+      // URL via onAuthorizationUrl, return it immediately. The flow's
+      // Promise resolves later when the browser callback fires.
+      let resolveAuthUrl: ((url: string) => void) | undefined
+      const authUrlPromise = new Promise<string>(resolve => {
+        resolveAuthUrl = resolve
+      })
+
+      const controller = new AbortController()
+      const { setAppState } = context
+
+      const oauthPromise = performMCPOAuthFlow(
+        serverName,
+        sseOrHttpConfig,
+        u => resolveAuthUrl?.(u),
+        controller.signal,
+        { skipBrowserOpen: true },
+      )
+
+      // Background continuation: once OAuth completes, reconnect and swap
+      // the real tools into appState. Prefix-based replacement removes this
+      // pseudo-tool since it shares the mcp__<server>__ prefix.
+      void oauthPromise
+        .then(async () => {
+          clearMcpAuthCache()
+          const result = await reconnectMcpServerImpl(serverName, config)
+          const prefix = getMcpPrefix(serverName)
+          setAppState(prev => ({
+            ...prev,
+            mcp: {
+              ...prev.mcp,
+              clients: prev.mcp.clients.map(c =>
+                c.name === serverName ? result.client : c,
+              ),
+              tools: [
+                ...reject(prev.mcp.tools, t => t.name?.startsWith(prefix)),
+                ...result.tools,
+              ],
+              commands: [
+                ...reject(prev.mcp.commands, c => c.name?.startsWith(prefix)),
+                ...result.commands,
+              ],
+              resources: result.resources
+                ? { ...prev.mcp.resources, [serverName]: result.resources }
+                : prev.mcp.resources,
+            },
+          }))
+          logMCPDebug(
+            serverName,
+            `OAuth complete, reconnected with ${result.tools.length} tool(s)`,
+          )
+        })
+        .catch(err => {
+          logMCPError(
+            serverName,
+            `OAuth flow failed after tool-triggered start: ${errorMessage(err)}`,
+          )
+        })
+
+      try {
+        // Race: get the URL, or the flow completes without needing one
+        // (e.g. XAA with cached IdP token — silent auth).
+        const authUrl = await Promise.race([
+          authUrlPromise,
+          oauthPromise.then(() => null as string | null),
+        ])
+
+        if (authUrl) {
+          return {
+            data: {
+              status: 'auth_url' as const,
+              authUrl,
+              message: `Ask the user to open this URL in their browser to authorize the ${serverName} MCP server:\n\n${authUrl}\n\nOnce they complete the flow, the server's tools will become available automatically.`,
+            },
+          }
+        }
+
+        return {
+          data: {
+            status: 'auth_url' as const,
+            message: `Authentication completed silently for ${serverName}. The server's tools should now be available.`,
+          },
+        }
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        return (
-          `❌ OAuth authentication for MCP server "${serverName}" failed: ${errMsg}\n\n` +
-          `You can try again by calling this tool once more, or ask the user to ` +
-          `check the server configuration.`
-        );
+        return {
+          data: {
+            status: 'error' as const,
+            message: `Failed to start OAuth flow for ${serverName}: ${errorMessage(err)}. Ask the user to run /mcp and authenticate manually.`,
+          },
+        }
       }
     },
-  };
-}
-
-/**
- * A22: isMcpAuthToolName — 检测工具名是否为 McpAuthTool 伪工具
- */
-export function isMcpAuthToolName(toolName: string): boolean {
-  return toolName.startsWith(MCP_AUTH_TOOL_PREFIX) && toolName.endsWith(MCP_AUTH_TOOL_SUFFIX);
-}
-
-/**
- * A22: extractServerNameFromAuthTool — 从伪工具名提取 MCP 服务器名称
- */
-export function extractServerNameFromAuthTool(toolName: string): string | null {
-  if (!isMcpAuthToolName(toolName)) return null;
-  return toolName.slice(MCP_AUTH_TOOL_PREFIX.length, -MCP_AUTH_TOOL_SUFFIX.length);
+    mapToolResultToToolResultBlockParam(data, toolUseID) {
+      return {
+        tool_use_id: toolUseID,
+        type: 'tool_result',
+        content: data.message,
+      }
+    },
+  } satisfies Tool<InputSchema, McpAuthOutput>
 }

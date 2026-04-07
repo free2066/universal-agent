@@ -1,119 +1,434 @@
-/**
- * FileWriteTool/FileWriteTool.ts — Write content to a file
- *
- * Mirrors claude-code's FileWriteTool.ts.
- * Includes 30-pattern secret scanner (kstack article #15375).
- */
+import { dirname, sep } from 'path'
+import { logEvent } from 'src/services/analytics/index.js'
+import { z } from 'zod/v4'
+import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
+import { diagnosticTracker } from '../../services/diagnosticTracking.js'
+import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnosticRegistry.js'
+import { getLspServerManager } from '../../services/lsp/manager.js'
+import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
+import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
+import {
+  activateConditionalSkillsForPaths,
+  addSkillDirectories,
+  discoverSkillDirsForPaths,
+} from '../../skills/loadSkillsDir.js'
+import type { ToolUseContext } from '../../Tool.js'
+import { buildTool, type ToolDef } from '../../Tool.js'
+import { getCwd } from '../../utils/cwd.js'
+import { logForDebugging } from '../../utils/debug.js'
+import { countLinesChanged, getPatchForDisplay } from '../../utils/diff.js'
+import { isEnvTruthy } from '../../utils/envUtils.js'
+import { isENOENT } from '../../utils/errors.js'
+import { getFileModificationTime, writeTextContent } from '../../utils/file.js'
+import {
+  fileHistoryEnabled,
+  fileHistoryTrackEdit,
+} from '../../utils/fileHistory.js'
+import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
+import { readFileSyncWithMetadata } from '../../utils/fileRead.js'
+import { getFsImplementation } from '../../utils/fsOperations.js'
+import {
+  fetchSingleFileGitDiff,
+  type ToolUseDiff,
+} from '../../utils/gitDiff.js'
+import { lazySchema } from '../../utils/lazySchema.js'
+import { logError } from '../../utils/log.js'
+import { expandPath } from '../../utils/path.js'
+import {
+  checkWritePermissionForTool,
+  matchingRuleForInput,
+} from '../../utils/permissions/filesystem.js'
+import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
+import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
+import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
+import { gitDiffSchema, hunkSchema } from '../FileEditTool/types.js'
+import { FILE_WRITE_TOOL_NAME, getWriteToolDescription } from './prompt.js'
+import {
+  getToolUseSummary,
+  isResultTruncated,
+  renderToolResultMessage,
+  renderToolUseErrorMessage,
+  renderToolUseMessage,
+  renderToolUseRejectedMessage,
+  userFacingName,
+} from './UI.js'
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { resolve, dirname } from 'path';
-import type { ToolRegistration } from '../../models/types.js';
-import { fireFileChanged } from '../../core/hooks.js';
+const inputSchema = lazySchema(() =>
+  z.strictObject({
+    file_path: z
+      .string()
+      .describe(
+        'The absolute path to the file to write (must be absolute, not relative)',
+      ),
+    content: z.string().describe('The content to write to the file'),
+  }),
+)
+type InputSchema = ReturnType<typeof inputSchema>
 
-// ── Secret Detection (kstack article #15375) ─────────────────────────────────
-const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
-  { name: 'AWS Access Key ID',        pattern: /AKIA[0-9A-Z]{16}/ },
-  { name: 'AWS Secret Access Key',    pattern: /(?:aws.{0,10})?(?:secret.{0,10})?(?:access.{0,10})?key['":\s=]+[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])/i },
-  { name: 'GCP Service Account Key', pattern: /"private_key":\s*"-----BEGIN RSA PRIVATE KEY-----/ },
-  { name: 'Google API Key',           pattern: /AIza[0-9A-Za-z_-]{35}/ },
-  { name: 'Google OAuth Token',       pattern: /ya29\.[0-9A-Za-z_-]{68,}/ },
-  { name: 'Anthropic API Key',        pattern: /sk-ant-(?:api03|api02|api01)-[A-Za-z0-9_-]{93,}/ },
-  { name: 'OpenAI API Key',           pattern: /sk-[A-Za-z0-9]{48}/ },
-  { name: 'OpenAI Org Key',           pattern: /org-[A-Za-z0-9]{24,}/ },
-  { name: 'GitHub Token',             pattern: /(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{36,}/ },
-  { name: 'Slack Token',              pattern: /xox[baprs]-[0-9A-Za-z\-]{10,}/ },
-  { name: 'Azure Connection String',  pattern: /DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{88}/ },
-  { name: 'Azure SAS Token',          pattern: /sv=\d{4}-\d{2}-\d{2}&(?:st|se|spr|sv|sr|sp|sip|si|sig)=[^&"'\s]+/ },
-  { name: 'RSA Private Key',          pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/ },
-  { name: 'PGP Private Key',          pattern: /-----BEGIN PGP PRIVATE KEY BLOCK-----/ },
-  { name: 'Bearer Token (long)',      pattern: /[Bb]earer\s+[A-Za-z0-9+/=_-]{32,}/ },
-  { name: 'Basic Auth (base64)',      pattern: /[Bb]asic\s+[A-Za-z0-9+/=]{20,}/ },
-  { name: 'Database URL with auth',   pattern: /(?:mongodb|postgres|postgresql|mysql|redis):\/\/[^:]+:[^@]+@/ },
-  { name: 'Twilio Account SID',       pattern: /AC[a-z0-9]{32}/ },
-  { name: 'Twilio Auth Token',        pattern: /SK[a-z0-9]{32}/ },
-  { name: 'Stripe API Key',           pattern: /(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{24,}/ },
-  { name: 'SendGrid API Key',         pattern: /SG\.[A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{43,}/ },
-  { name: 'HuggingFace Token',        pattern: /hf_[A-Za-z0-9]{37,}/ },
-  { name: 'Groq API Key',             pattern: /gsk_[A-Za-z0-9]{50,}/ },
-  { name: 'Generic Hex Secret',       pattern: /(?:api[_-]?key|secret[_-]?key|auth[_-]?token|access[_-]?token)['":\s=]+[0-9a-fA-F]{32,}/ },
-  { name: 'Env Secret Assignment',    pattern: /^(?:export\s+)?[A-Z][A-Z0-9_]*(?:SECRET|KEY|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL|CRED)=['"]?[A-Za-z0-9+/=_-]{20,}['"]?$/m },
-  { name: 'Kubernetes Secret (b64)',  pattern: /data:\s*\n\s+[a-z-]+:\s+[A-Za-z0-9+/=]{40,}/ },
-  { name: 'JWT Token',                pattern: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
-  { name: 'NPM Access Token',         pattern: /npm_[A-Za-z0-9]{36,}/ },
-  { name: 'Cloudflare API Token',     pattern: /(?:CF_API_TOKEN|CLOUDFLARE_API_TOKEN|cloudflare.*token|cf.*token)[^\n]*[=:\s]["']?[A-Za-z0-9_-]{37}["']?/i },
-];
+const outputSchema = lazySchema(() =>
+  z.object({
+    type: z
+      .enum(['create', 'update'])
+      .describe(
+        'Whether a new file was created or an existing file was updated',
+      ),
+    filePath: z.string().describe('The path to the file that was written'),
+    content: z.string().describe('The content that was written to the file'),
+    structuredPatch: z
+      .array(hunkSchema())
+      .describe('Diff patch showing the changes'),
+    originalFile: z
+      .string()
+      .nullable()
+      .describe(
+        'The original file content before the write (null for new files)',
+      ),
+    gitDiff: gitDiffSchema().optional(),
+  }),
+)
+type OutputSchema = ReturnType<typeof outputSchema>
 
-function detectSecrets(content: string, filePath: string): string | null {
-  if (content.includes('\x00')) return null;
-  const base = filePath.split('/').pop() ?? '';
-  if (/^\.?env(?:\.|$)/.test(base)) return null;
+export type Output = z.infer<OutputSchema>
+export type FileWriteToolInput = InputSchema
 
-  const SCAN_LIMIT = 50 * 1024;
-  const scanContent = content.length > SCAN_LIMIT * 2
-    ? content.slice(0, SCAN_LIMIT) + content.slice(-SCAN_LIMIT)
-    : content;
-
-  for (const { name, pattern } of SECRET_PATTERNS) {
-    if (pattern.test(scanContent)) return name;
-  }
-  return null;
-}
-
-export const writeFileTool: ToolRegistration = {
-  definition: {
-    name: 'Write',
-    description: 'Write content to a file. Creates parent directories if needed. Overwrites existing file.',
-    parameters: {
-      type: 'object',
-      properties: {
-        file_path: { type: 'string', description: 'Path to write to' },
-        content: { type: 'string', description: 'Content to write' },
-      },
-      required: ['file_path', 'content'],
-    },
+export const FileWriteTool = buildTool({
+  name: FILE_WRITE_TOOL_NAME,
+  searchHint: 'create or overwrite files',
+  maxResultSizeChars: 100_000,
+  strict: true,
+  async description() {
+    return 'Write a file to the local filesystem.'
+  },
+  userFacingName,
+  getToolUseSummary,
+  getActivityDescription(input) {
+    const summary = getToolUseSummary(input)
+    return summary ? `Writing ${summary}` : 'Writing file'
+  },
+  async prompt() {
+    return getWriteToolDescription()
+  },
+  renderToolUseMessage,
+  isResultTruncated,
+  get inputSchema(): InputSchema {
+    return inputSchema()
+  },
+  get outputSchema(): OutputSchema {
+    return outputSchema()
+  },
+  toAutoClassifierInput(input) {
+    return `${input.file_path}: ${input.content}`
+  },
+  getPath(input): string {
+    return input.file_path
   },
   backfillObservableInput(input) {
-    if (typeof input['file_path'] === 'string' && !input['file_path'].startsWith('/')) {
-      input['file_path'] = resolve(process.cwd(), input['file_path']);
+    // hooks.mdx documents file_path as absolute; expand so hook allowlists
+    // can't be bypassed via ~ or relative paths.
+    if (typeof input.file_path === 'string') {
+      input.file_path = expandPath(input.file_path)
     }
   },
-  handler: async (args) => {
-    const filePath = resolve(args.file_path as string);
-    const content = args.content as string;
+  async preparePermissionMatcher({ file_path }) {
+    return pattern => matchWildcardPattern(pattern, file_path)
+  },
+  async checkPermissions(input, context): Promise<PermissionDecision> {
+    const appState = context.getAppState()
+    return checkWritePermissionForTool(
+      FileWriteTool,
+      input,
+      appState.toolPermissionContext,
+    )
+  },
+  renderToolUseRejectedMessage,
+  renderToolUseErrorMessage,
+  renderToolResultMessage,
+  extractSearchText() {
+    // Transcript render shows either content (create, via HighlightedCode)
+    // or a structured diff (update). The heuristic's 'content' allowlist key
+    // would index the raw content string even in update mode where it's NOT
+    // shown — phantom. Under-count: tool_use already indexes file_path.
+    return ''
+  },
+  async validateInput({ file_path, content }, toolUseContext: ToolUseContext) {
+    const fullFilePath = expandPath(file_path)
 
-    const secretType = detectSecrets(content, filePath);
-    if (secretType) {
-      const isSafe = process.env.AGENT_SAFE_MODE === '1';
-      if (isSafe) {
-        return (
-          `⚠️  BLOCKED: Potential secret detected in write content.\n` +
-          `  Type: ${secretType}\n` +
-          `  File: ${filePath}\n` +
-          `  Safe mode prevents writing credentials to disk.\n` +
-          `  If this is intentional, disable safe mode or exclude the file.`
-        );
-      }
-      console.warn(`[secret-scan] ⚠️  Potential secret (${secretType}) detected in write to ${filePath} — proceeding (not in safe mode)`);
+    // Reject writes to team memory files that contain secrets
+    const secretError = checkTeamMemSecrets(fullFilePath, content)
+    if (secretError) {
+      return { result: false, message: secretError, errorCode: 0 }
     }
 
+    // Check if path should be ignored based on permission settings
+    const appState = toolUseContext.getAppState()
+    const denyRule = matchingRuleForInput(
+      fullFilePath,
+      appState.toolPermissionContext,
+      'edit',
+      'deny',
+    )
+    if (denyRule !== null) {
+      return {
+        result: false,
+        message:
+          'File is in a directory that is denied by your permission settings.',
+        errorCode: 1,
+      }
+    }
+
+    // SECURITY: Skip filesystem operations for UNC paths to prevent NTLM credential leaks.
+    // On Windows, fs.existsSync() on UNC paths triggers SMB authentication which could
+    // leak credentials to malicious servers. Let the permission check handle UNC paths.
+    if (fullFilePath.startsWith('\\\\') || fullFilePath.startsWith('//')) {
+      return { result: true }
+    }
+
+    const fs = getFsImplementation()
+    let fileMtimeMs: number
     try {
-      mkdirSync(dirname(filePath), { recursive: true });
-      let diffSummary = '';
-      if (existsSync(filePath)) {
-        try {
-          const oldContent = readFileSync(filePath, 'utf-8');
-          const oldLines = oldContent.split('\n').length;
-          const newLines = content.split('\n').length;
-          diffSummary = ` (${oldLines}→${newLines} lines)`;
-        } catch { /* ignore diff errors */ }
+      const fileStat = await fs.stat(fullFilePath)
+      fileMtimeMs = fileStat.mtimeMs
+    } catch (e) {
+      if (isENOENT(e)) {
+        return { result: true }
       }
-      writeFileSync(filePath, content, 'utf-8');
-      setImmediate(() => { try { fireFileChanged(filePath); } catch { /* non-fatal */ } });
-      const lines = content.split('\n').length;
-      const secretWarning = secretType ? `\n⚠️  Warning: potential secret (${secretType}) detected in written content.` : '';
-      return `✓ Written ${lines} lines to ${filePath}${diffSummary}${secretWarning}`;
-    } catch (err) {
-      return `Error writing file: ${err instanceof Error ? err.message : String(err)}`;
+      throw e
+    }
+
+    const readTimestamp = toolUseContext.readFileState.get(fullFilePath)
+    if (!readTimestamp || readTimestamp.isPartialView) {
+      return {
+        result: false,
+        message:
+          'File has not been read yet. Read it first before writing to it.',
+        errorCode: 2,
+      }
+    }
+
+    // Reuse mtime from the stat above — avoids a redundant statSync via
+    // getFileModificationTime. The readTimestamp guard above ensures this
+    // block is always reached when the file exists.
+    const lastWriteTime = Math.floor(fileMtimeMs)
+    if (lastWriteTime > readTimestamp.timestamp) {
+      return {
+        result: false,
+        message:
+          'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
+        errorCode: 3,
+      }
+    }
+
+    return { result: true }
+  },
+  async call(
+    { file_path, content },
+    { readFileState, updateFileHistoryState, dynamicSkillDirTriggers },
+    _,
+    parentMessage,
+  ) {
+    const fullFilePath = expandPath(file_path)
+    const dir = dirname(fullFilePath)
+
+    // Discover skills from this file's path (fire-and-forget, non-blocking)
+    const cwd = getCwd()
+    const newSkillDirs = await discoverSkillDirsForPaths([fullFilePath], cwd)
+    if (newSkillDirs.length > 0) {
+      // Store discovered dirs for attachment display
+      for (const dir of newSkillDirs) {
+        dynamicSkillDirTriggers?.add(dir)
+      }
+      // Don't await - let skill loading happen in the background
+      addSkillDirectories(newSkillDirs).catch(() => {})
+    }
+
+    // Activate conditional skills whose path patterns match this file
+    activateConditionalSkillsForPaths([fullFilePath], cwd)
+
+    await diagnosticTracker.beforeFileEdited(fullFilePath)
+
+    // Ensure parent directory exists before the atomic read-modify-write section.
+    // Must stay OUTSIDE the critical section below (a yield between the staleness
+    // check and writeTextContent lets concurrent edits interleave), and BEFORE the
+    // write (lazy-mkdir-on-ENOENT would fire a spurious tengu_atomic_write_error
+    // inside writeFileSyncAndFlush_DEPRECATED before ENOENT propagates back).
+    await getFsImplementation().mkdir(dir)
+    if (fileHistoryEnabled()) {
+      // Backup captures pre-edit content — safe to call before the staleness
+      // check (idempotent v1 backup keyed on content hash; if staleness fails
+      // later we just have an unused backup, not corrupt state).
+      await fileHistoryTrackEdit(
+        updateFileHistoryState,
+        fullFilePath,
+        parentMessage.uuid,
+      )
+    }
+
+    // Load current state and confirm no changes since last read.
+    // Please avoid async operations between here and writing to disk to preserve atomicity.
+    let meta: ReturnType<typeof readFileSyncWithMetadata> | null
+    try {
+      meta = readFileSyncWithMetadata(fullFilePath)
+    } catch (e) {
+      if (isENOENT(e)) {
+        meta = null
+      } else {
+        throw e
+      }
+    }
+
+    if (meta !== null) {
+      const lastWriteTime = getFileModificationTime(fullFilePath)
+      const lastRead = readFileState.get(fullFilePath)
+      if (!lastRead || lastWriteTime > lastRead.timestamp) {
+        // Timestamp indicates modification, but on Windows timestamps can change
+        // without content changes (cloud sync, antivirus, etc.). For full reads,
+        // compare content as a fallback to avoid false positives.
+        const isFullRead =
+          lastRead &&
+          lastRead.offset === undefined &&
+          lastRead.limit === undefined
+        // meta.content is CRLF-normalized — matches readFileState's normalized form.
+        if (!isFullRead || meta.content !== lastRead.content) {
+          throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+        }
+      }
+    }
+
+    const enc = meta?.encoding ?? 'utf8'
+    const oldContent = meta?.content ?? null
+
+    // Write is a full content replacement — the model sent explicit line endings
+    // in `content` and meant them. Do not rewrite them. Previously we preserved
+    // the old file's line endings (or sampled the repo via ripgrep for new
+    // files), which silently corrupted e.g. bash scripts with \r on Linux when
+    // overwriting a CRLF file or when binaries in cwd poisoned the repo sample.
+    writeTextContent(fullFilePath, content, enc, 'LF')
+
+    // Notify LSP servers about file modification (didChange) and save (didSave)
+    const lspManager = getLspServerManager()
+    if (lspManager) {
+      // Clear previously delivered diagnostics so new ones will be shown
+      clearDeliveredDiagnosticsForFile(`file://${fullFilePath}`)
+      // didChange: Content has been modified
+      lspManager.changeFile(fullFilePath, content).catch((err: Error) => {
+        logForDebugging(
+          `LSP: Failed to notify server of file change for ${fullFilePath}: ${err.message}`,
+        )
+        logError(err)
+      })
+      // didSave: File has been saved to disk (triggers diagnostics in TypeScript server)
+      lspManager.saveFile(fullFilePath).catch((err: Error) => {
+        logForDebugging(
+          `LSP: Failed to notify server of file save for ${fullFilePath}: ${err.message}`,
+        )
+        logError(err)
+      })
+    }
+
+    // Notify VSCode about the file change for diff view
+    notifyVscodeFileUpdated(fullFilePath, oldContent, content)
+
+    // Update read timestamp, to invalidate stale writes
+    readFileState.set(fullFilePath, {
+      content,
+      timestamp: getFileModificationTime(fullFilePath),
+      offset: undefined,
+      limit: undefined,
+    })
+
+    // Log when writing to CLAUDE.md
+    if (fullFilePath.endsWith(`${sep}CLAUDE.md`)) {
+      logEvent('tengu_write_claudemd', {})
+    }
+
+    let gitDiff: ToolUseDiff | undefined
+    if (
+      isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) &&
+      getFeatureValue_CACHED_MAY_BE_STALE('tengu_quartz_lantern', false)
+    ) {
+      const startTime = Date.now()
+      const diff = await fetchSingleFileGitDiff(fullFilePath)
+      if (diff) gitDiff = diff
+      logEvent('tengu_tool_use_diff_computed', {
+        isWriteTool: true,
+        durationMs: Date.now() - startTime,
+        hasDiff: !!diff,
+      })
+    }
+
+    if (oldContent) {
+      const patch = getPatchForDisplay({
+        filePath: file_path,
+        fileContents: oldContent,
+        edits: [
+          {
+            old_string: oldContent,
+            new_string: content,
+            replace_all: false,
+          },
+        ],
+      })
+
+      const data = {
+        type: 'update' as const,
+        filePath: file_path,
+        content,
+        structuredPatch: patch,
+        originalFile: oldContent,
+        ...(gitDiff && { gitDiff }),
+      }
+      // Track lines added and removed for file updates, right before yielding result
+      countLinesChanged(patch)
+
+      logFileOperation({
+        operation: 'write',
+        tool: 'FileWriteTool',
+        filePath: fullFilePath,
+        type: 'update',
+      })
+
+      return {
+        data,
+      }
+    }
+
+    const data = {
+      type: 'create' as const,
+      filePath: file_path,
+      content,
+      structuredPatch: [],
+      originalFile: null,
+      ...(gitDiff && { gitDiff }),
+    }
+
+    // For creation of new files, count all lines as additions, right before yielding the result
+    countLinesChanged([], content)
+
+    logFileOperation({
+      operation: 'write',
+      tool: 'FileWriteTool',
+      filePath: fullFilePath,
+      type: 'create',
+    })
+
+    return {
+      data,
     }
   },
-};
+  mapToolResultToToolResultBlockParam({ filePath, type }, toolUseID) {
+    switch (type) {
+      case 'create':
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: `File created successfully at: ${filePath}`,
+        }
+      case 'update':
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: `The file ${filePath} has been updated successfully.`,
+        }
+    }
+  },
+} satisfies ToolDef<InputSchema, Output>)

@@ -1,26 +1,44 @@
 /**
- * types/ids.ts — Branded ID types
- *
- * Mirrors claude-code's types/ids.ts.
- * Provides branded types for IDs to prevent accidental misuse.
+ * Branded types for session and agent IDs.
+ * These prevent accidentally mixing up session IDs and agent IDs at compile time.
  */
 
-export type { SessionId } from '../bootstrap/state.js';
+/**
+ * A session ID uniquely identifies a Claude Code session.
+ * Returned by getSessionId().
+ */
+export type SessionId = string & { readonly __brand: 'SessionId' }
 
-/** Agent/subagent instance ID */
-export type AgentId = string & { readonly __brand: 'AgentId' };
+/**
+ * An agent ID uniquely identifies a subagent within a session.
+ * Returned by createAgentId().
+ * When present, indicates the context is a subagent (not the main session).
+ */
+export type AgentId = string & { readonly __brand: 'AgentId' }
 
-/** Task ID on the task board */
-export type TaskId = number & { readonly __brand: 'TaskId' };
+/**
+ * Cast a raw string to SessionId.
+ * Use sparingly - prefer getSessionId() when possible.
+ */
+export function asSessionId(id: string): SessionId {
+  return id as SessionId
+}
 
-/** MCP server identifier */
-export type McpServerId = string & { readonly __brand: 'McpServerId' };
+/**
+ * Cast a raw string to AgentId.
+ * Use sparingly - prefer createAgentId() when possible.
+ */
+export function asAgentId(id: string): AgentId {
+  return id as AgentId
+}
 
-/** Tool registration name */
-export type ToolName = string & { readonly __brand: 'ToolName' };
+const AGENT_ID_PATTERN = /^a(?:.+-)?[0-9a-f]{16}$/
 
-/** Create a new AgentId */
-export function newAgentId(): AgentId {
-  const { randomUUID } = require('crypto');
-  return randomUUID() as AgentId;
+/**
+ * Validate and brand a string as AgentId.
+ * Matches the format produced by createAgentId(): `a` + optional `<label>-` + 16 hex chars.
+ * Returns null if the string doesn't match (e.g. teammate names, team-addressing).
+ */
+export function toAgentId(s: string): AgentId | null {
+  return AGENT_ID_PATTERN.test(s) ? (s as AgentId) : null
 }

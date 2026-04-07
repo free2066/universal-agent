@@ -1,35 +1,33 @@
-/**
- * constants/common.ts — Common constants used throughout universal-agent
- *
- * Mirrors claude-code's constants/common.ts.
- */
+import memoize from 'lodash-es/memoize.js'
 
-/** Application name */
-export const APP_NAME = 'universal-agent';
+// This ensures you get the LOCAL date in ISO format
+export function getLocalISODate(): string {
+  // Check for ant-only date override
+  if (process.env.CLAUDE_CODE_OVERRIDE_DATE) {
+    return process.env.CLAUDE_CODE_OVERRIDE_DATE
+  }
 
-/** CLI binary name */
-export const CLI_NAME = 'uagent';
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 
-/** Config directory name (in home dir and project) */
-export const CONFIG_DIR = '.codeflicker';
+// Memoized for prompt-cache stability — captures the date once at session start.
+// The main interactive path gets this behavior via memoize(getUserContext) in
+// context.ts; simple mode (--bare) calls getSystemPrompt per-request and needs
+// an explicit memoized date to avoid busting the cached prefix at midnight.
+// When midnight rolls over, getDateChangeAttachments appends the new date at
+// the tail (though simple mode disables attachments, so the trade-off there is:
+// stale date after midnight vs. ~entire-conversation cache bust — stale wins).
+export const getSessionStartDate = memoize(getLocalISODate)
 
-/** Legacy config directory name (for migration) */
-export const LEGACY_CONFIG_DIR = '.uagent';
-
-/** Default history file name */
-export const HISTORY_FILE = 'history.jsonl';
-
-/** Default session file name */
-export const SESSION_FILE = 'session.json';
-
-/** Maximum number of sessions to retain */
-export const MAX_SESSIONS = 100;
-
-/** Maximum history entries per session */
-export const MAX_HISTORY_ENTRIES = 10_000;
-
-/** Default timeout for tool execution in ms */
-export const DEFAULT_TOOL_TIMEOUT_MS = 120_000;
-
-/** Maximum tool output size in characters */
-export const MAX_TOOL_OUTPUT_CHARS = 100_000;
+// Returns "Month YYYY" (e.g. "February 2026") in the user's local timezone.
+// Changes monthly, not daily — used in tool prompts to minimize cache busting.
+export function getLocalMonthYear(): string {
+  const date = process.env.CLAUDE_CODE_OVERRIDE_DATE
+    ? new Date(process.env.CLAUDE_CODE_OVERRIDE_DATE)
+    : new Date()
+  return date.toLocaleString('en-US', { month: 'long', year: 'numeric' })
+}

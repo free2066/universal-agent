@@ -1,56 +1,53 @@
 /**
- * memdir/memoryAge.ts — Memory time-to-live management
+ * Days elapsed since mtime.  Floor-rounded — 0 for today, 1 for
+ * yesterday, 2+ for older.  Negative inputs (future mtime, clock skew)
+ * clamp to 0.
+ */
+export function memoryAgeDays(mtimeMs: number): number {
+  return Math.max(0, Math.floor((Date.now() - mtimeMs) / 86_400_000))
+}
+
+/**
+ * Human-readable age string.  Models are poor at date arithmetic —
+ * a raw ISO timestamp doesn't trigger staleness reasoning the way
+ * "47 days ago" does.
+ */
+export function memoryAge(mtimeMs: number): string {
+  const d = memoryAgeDays(mtimeMs)
+  if (d === 0) return 'today'
+  if (d === 1) return 'yesterday'
+  return `${d} days ago`
+}
+
+/**
+ * Plain-text staleness caveat for memories >1 day old.  Returns ''
+ * for fresh (today/yesterday) memories — warning there is noise.
  *
- * Mirrors claude-code's memdir/memoryAge.ts.
- * Provides age-based TTL management for memory items.
+ * Use this when the consumer already provides its own wrapping
+ * (e.g. messages.ts relevant_memories → wrapMessagesInSystemReminder).
+ *
+ * Motivated by user reports of stale code-state memories (file:line
+ * citations to code that has since changed) being asserted as fact —
+ * the citation makes the stale claim sound more authoritative, not less.
  */
-
-import type { MemoryItem } from './memoryTypes.js';
-
-/** Default TTLs in ms */
-export const TTL = {
-  pinned: Infinity,
-  insight: 30 * 24 * 60 * 60 * 1000,   // 30 days
-  fact:     7 * 24 * 60 * 60 * 1000,   // 7 days
-  iteration: 90 * 24 * 60 * 60 * 1000, // 90 days
-};
-
-/**
- * Check if a memory item has expired.
- */
-export function isExpired(item: MemoryItem): boolean {
-  if (item.ttl === undefined) return false;
-  return Date.now() > item.ttl;
+export function memoryFreshnessText(mtimeMs: number): string {
+  const d = memoryAgeDays(mtimeMs)
+  if (d <= 1) return ''
+  return (
+    `This memory is ${d} days old. ` +
+    `Memories are point-in-time observations, not live state — ` +
+    `claims about code behavior or file:line citations may be outdated. ` +
+    `Verify against current code before asserting as fact.`
+  )
 }
 
 /**
- * Get the age of a memory item in ms.
+ * Per-memory staleness note wrapped in <system-reminder> tags.
+ * Returns '' for memories ≤ 1 day old.  Use this for callers that
+ * don't add their own system-reminder wrapper (e.g. FileReadTool output).
  */
-export function getAgeMs(item: MemoryItem): number {
-  return Date.now() - item.createdAt;
-}
-
-/**
- * Get a human-readable age string.
- */
-export function formatAge(item: MemoryItem): string {
-  const ms = getAgeMs(item);
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) return `${days}d ago`;
-  if (hours > 0) return `${hours}h ago`;
-  if (minutes > 0) return `${minutes}m ago`;
-  return `${seconds}s ago`;
-}
-
-/**
- * Get the default TTL for a memory type.
- */
-export function getDefaultTtl(type: MemoryItem['type']): number | undefined {
-  const ttl = TTL[type];
-  if (ttl === Infinity) return undefined;
-  return Date.now() + ttl;
+export function memoryFreshnessNote(mtimeMs: number): string {
+  const text = memoryFreshnessText(mtimeMs)
+  if (!text) return ''
+  return `<system-reminder>${text}</system-reminder>\n`
 }

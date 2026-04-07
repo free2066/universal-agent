@@ -1,326 +1,490 @@
-/**
- * NotebookEditTool/NotebookEditTool.ts -- Jupyter Notebook (.ipynb) cell editor
- *
- * Mirrors claude-code's NotebookEditTool.ts.
- *
- * Supports three edit modes:
- * - replace: modify an existing cell's source
- * - insert: add a new cell at a given position
- * - delete: remove a cell
- *
- * Safety checks (same as claude-code):
- * - File must have .ipynb extension
- * - Read-before-Edit: file must have been read (tracked via readFileTimestamps)
- * - mtime check: file must not have been modified externally since last read
- * - write requires write permission check
- *
- * Round 5: claude-code NotebookEditTool.ts parity
- */
+import { feature } from 'bun:bundle'
+import { extname, isAbsolute, resolve } from 'path'
+import {
+  fileHistoryEnabled,
+  fileHistoryTrackEdit,
+} from 'src/utils/fileHistory.js'
+import { z } from 'zod/v4'
+import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
+import type { NotebookCell, NotebookContent } from '../../types/notebook.js'
+import { getCwd } from '../../utils/cwd.js'
+import { isENOENT } from '../../utils/errors.js'
+import { getFileModificationTime, writeTextContent } from '../../utils/file.js'
+import { readFileSyncWithMetadata } from '../../utils/fileRead.js'
+import { safeParseJSON } from '../../utils/json.js'
+import { lazySchema } from '../../utils/lazySchema.js'
+import { parseCellId } from '../../utils/notebook.js'
+import { checkWritePermissionForTool } from '../../utils/permissions/filesystem.js'
+import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
+import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
+import { NOTEBOOK_EDIT_TOOL_NAME } from './constants.js'
+import { DESCRIPTION, PROMPT } from './prompt.js'
+import {
+  getToolUseSummary,
+  renderToolResultMessage,
+  renderToolUseErrorMessage,
+  renderToolUseMessage,
+  renderToolUseRejectedMessage,
+} from './UI.js'
 
-import { readFileSync, writeFileSync, statSync, existsSync } from 'fs';
-import { resolve, extname } from 'path';
-import type { ToolRegistration } from '../../models/types.js';
+export const inputSchema = lazySchema(() =>
+  z.strictObject({
+    notebook_path: z
+      .string()
+      .describe(
+        'The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)',
+      ),
+    cell_id: z
+      .string()
+      .optional()
+      .describe(
+        'The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified.',
+      ),
+    new_source: z.string().describe('The new source for the cell'),
+    cell_type: z
+      .enum(['code', 'markdown'])
+      .optional()
+      .describe(
+        'The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required.',
+      ),
+    edit_mode: z
+      .enum(['replace', 'insert', 'delete'])
+      .optional()
+      .describe(
+        'The type of edit to make (replace, insert, delete). Defaults to replace.',
+      ),
+  }),
+)
+type InputSchema = ReturnType<typeof inputSchema>
 
-// ── A30: Encoding & line-ending detection ─────────────────────────────────────
-// Mirrors claude-code NotebookEditTool.ts readFileSyncWithMetadata + writeTextContent
-// to preserve original encoding (utf-8 / utf16le) and line endings (LF / CRLF).
+export const outputSchema = lazySchema(() =>
+  z.object({
+    new_source: z
+      .string()
+      .describe('The new source code that was written to the cell'),
+    cell_id: z
+      .string()
+      .optional()
+      .describe('The ID of the cell that was edited'),
+    cell_type: z.enum(['code', 'markdown']).describe('The type of the cell'),
+    language: z.string().describe('The programming language of the notebook'),
+    edit_mode: z.string().describe('The edit mode that was used'),
+    error: z
+      .string()
+      .optional()
+      .describe('Error message if the operation failed'),
+    // Fields for attribution tracking
+    notebook_path: z.string().describe('The path to the notebook file'),
+    original_file: z
+      .string()
+      .describe('The original notebook content before modification'),
+    updated_file: z
+      .string()
+      .describe('The updated notebook content after modification'),
+  }),
+)
+type OutputSchema = ReturnType<typeof outputSchema>
 
-/**
- * A30: Detect file encoding via BOM bytes.
- * Returns 'utf16le' for UTF-16 LE/BE BOM, otherwise 'utf-8'.
- * Mirrors readFileSyncWithMetadata() encoding detection.
- */
-function detectEncoding(absPath: string): BufferEncoding {
-  try {
-    const buf = readFileSync(absPath);
-    // UTF-16 LE BOM: 0xFF 0xFE
-    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return 'utf16le';
-    // UTF-16 BE BOM: 0xFE 0xFF (treat as utf16le for Node compatibility)
-    if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) return 'utf16le';
-    // Default: UTF-8 (BOM 0xEF 0xBB 0xBF is handled transparently by Node)
-  } catch { /* non-fatal — fallback to utf-8 */ }
-  return 'utf-8';
-}
+export type Output = z.infer<OutputSchema>
 
-/**
- * A30: Detect dominant line ending style by counting occurrences.
- * Returns 'CRLF' if CRLF sequences outnumber bare LF, otherwise 'LF'.
- * Mirrors writeTextContent() lineEndings parameter behavior.
- */
-function detectLineEndings(content: string): 'CRLF' | 'LF' {
-  const crlfCount = (content.match(/\r\n/g) ?? []).length;
-  const lfCount   = (content.match(/(?<!\r)\n/g) ?? []).length;
-  return crlfCount > lfCount ? 'CRLF' : 'LF';
-}
-
-// ── Read-state tracking (Read-before-Edit guard) ──────────────────────────────
-// Maps absolute path → { mtime at read time }
-
-const _readTimestamps = new Map<string, number>();
-
-export function markNotebookRead(absPath: string): void {
-  try {
-    const st = statSync(absPath);
-    _readTimestamps.set(absPath, st.mtimeMs);
-  } catch { /* non-fatal */ }
-}
-
-// ── Notebook types ────────────────────────────────────────────────────────────
-
-interface NotebookCell {
-  cell_type: 'code' | 'markdown' | 'raw';
-  id?: string;
-  source: string | string[];
-  execution_count?: number | null;
-  outputs?: unknown[];
-  metadata?: Record<string, unknown>;
-}
-
-interface Notebook {
-  nbformat: number;
-  nbformat_minor: number;
-  metadata?: Record<string, unknown>;
-  cells: NotebookCell[];
-}
-
-// ── Cell ID resolution ────────────────────────────────────────────────────────
-
-function findCellIndex(cells: NotebookCell[], cellId: string): number {
-  // Try exact ID match
-  const exactIdx = cells.findIndex((c) => c.id === cellId);
-  if (exactIdx >= 0) return exactIdx;
-
-  // Try cell-N format (1-based)
-  const cellNMatch = /^cell-(\d+)$/.exec(cellId);
-  if (cellNMatch) {
-    const n = parseInt(cellNMatch[1]!, 10) - 1;
-    if (n >= 0 && n < cells.length) return n;
-  }
-
-  return -1;
-}
-
-/** Normalize cell source to a single string */
-function getCellSource(cell: NotebookCell): string {
-  if (Array.isArray(cell.source)) return cell.source.join('');
-  return cell.source ?? '';
-}
-
-/** Split source string into array for nbformat compatibility */
-function splitSource(source: string): string[] {
-  if (!source) return [];
-  const lines = source.split('\n');
-  return lines.map((line, i) => i < lines.length - 1 ? line + '\n' : line);
-}
-
-// ── Tool registration ─────────────────────────────────────────────────────────
-
-export const notebookEditTool: ToolRegistration = {
-  searchHint: 'jupyter notebook ipynb cell edit insert delete',
-  definition: {
-    name: 'NotebookEdit',
-    description: [
-      'Edit cells in a Jupyter Notebook (.ipynb file).',
-      '',
-      'Supports three operations:',
-      '  replace — modify an existing cell\'s source (default)',
-      '  insert  — add a new cell at a position (requires cell_type)',
-      '  delete  — remove a cell',
-      '',
-      'IMPORTANT: You must read the notebook with Read tool before editing.',
-      'The notebook must not have been modified externally since your last read.',
-      'For code cells, execution_count and outputs are automatically cleared on edit.',
-    ].join('\n'),
-    parameters: {
-      type: 'object' as const,
-      properties: {
-        notebook_path: {
-          type: 'string',
-          description: 'Absolute path to the .ipynb file',
-        },
-        cell_id: {
-          type: 'string',
-          description: 'Cell ID or "cell-N" (1-based index). Required for replace/delete.',
-        },
-        new_source: {
-          type: 'string',
-          description: 'New cell source content (for replace/insert modes)',
-        },
-        cell_type: {
-          type: 'string',
-          enum: ['code', 'markdown'],
-          description: 'Cell type for insert mode (required when edit_mode=insert)',
-        },
-        edit_mode: {
-          type: 'string',
-          enum: ['replace', 'insert', 'delete'],
-          description: 'Operation mode: replace (default), insert, or delete',
-        },
-      },
-      required: ['notebook_path', 'new_source'],
-    },
+export const NotebookEditTool = buildTool({
+  name: NOTEBOOK_EDIT_TOOL_NAME,
+  searchHint: 'edit Jupyter notebook cells (.ipynb)',
+  maxResultSizeChars: 100_000,
+  shouldDefer: true,
+  async description() {
+    return DESCRIPTION
   },
-
-  async handler(args: Record<string, unknown>): Promise<string> {
-    const notebookPath = (args.notebook_path as string ?? '').trim();
-    const cellId = args.cell_id as string | undefined;
-    const newSource = (args.new_source as string ?? '');
-    const cellTypeArg = args.cell_type as 'code' | 'markdown' | undefined;
-    const editMode = (args.edit_mode as string ?? 'replace') as 'replace' | 'insert' | 'delete';
-
-    // 1. Validate extension
-    if (extname(notebookPath).toLowerCase() !== '.ipynb') {
-      return `[NotebookEdit] Error: file must have .ipynb extension, got "${extname(notebookPath)}"`;
+  async prompt() {
+    return PROMPT
+  },
+  userFacingName() {
+    return 'Edit Notebook'
+  },
+  getToolUseSummary,
+  getActivityDescription(input) {
+    const summary = getToolUseSummary(input)
+    return summary ? `Editing notebook ${summary}` : 'Editing notebook'
+  },
+  get inputSchema(): InputSchema {
+    return inputSchema()
+  },
+  get outputSchema(): OutputSchema {
+    return outputSchema()
+  },
+  toAutoClassifierInput(input) {
+    if (feature('TRANSCRIPT_CLASSIFIER')) {
+      const mode = input.edit_mode ?? 'replace'
+      return `${input.notebook_path} ${mode}: ${input.new_source}`
     }
-
-    const absPath = resolve(process.cwd(), notebookPath);
-
-    // 2. File existence
-    if (!existsSync(absPath)) {
-      return `[NotebookEdit] Error: file not found: ${absPath}`;
-    }
-
-    // 3. Read-before-Edit check
-    const lastReadMtime = _readTimestamps.get(absPath);
-    if (lastReadMtime === undefined) {
-      return (
-        `[NotebookEdit] Error: you must read the notebook with the Read tool before editing.\n` +
-        `  Use Read tool on: ${absPath}`
-      );
-    }
-
-    // 4. mtime check — reject if file was modified externally since our last read
-    let currentMtime: number;
-    try {
-      currentMtime = statSync(absPath).mtimeMs;
-    } catch (e) {
-      return `[NotebookEdit] Error: cannot stat file: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    if (currentMtime > lastReadMtime + 100) { // 100ms grace period
-      return (
-        `[NotebookEdit] Error: notebook was modified externally since your last read.\n` +
-        `  Last read: ${new Date(lastReadMtime).toISOString()}\n` +
-        `  Current:   ${new Date(currentMtime).toISOString()}\n` +
-        `  Please re-read the file before editing.`
-      );
-    }
-
-    // 5. Validate insert mode requirements
-    if (editMode === 'insert' && !cellTypeArg) {
-      return '[NotebookEdit] Error: cell_type is required for insert mode';
-    }
-
-    // 6. Parse notebook JSON
-    let notebook: Notebook;
-    let rawContent: string;
-    try {
-      rawContent = readFileSync(absPath, 'utf-8');
-      notebook = JSON.parse(rawContent) as Notebook;
-    } catch (e) {
-      return `[NotebookEdit] Error: invalid notebook JSON: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    if (!Array.isArray(notebook.cells)) {
-      return '[NotebookEdit] Error: invalid notebook format: missing cells array';
-    }
-
-    // 7. Perform edit
-    let operationDescription = '';
-
-    if (editMode === 'delete') {
-      if (!cellId) return '[NotebookEdit] Error: cell_id is required for delete mode';
-      const idx = findCellIndex(notebook.cells, cellId);
-      if (idx < 0) return `[NotebookEdit] Error: cell "${cellId}" not found`;
-      const deletedType = notebook.cells[idx]!.cell_type;
-      notebook.cells.splice(idx, 1);
-      operationDescription = `Deleted ${deletedType} cell "${cellId}" (was at index ${idx})`;
-
-    } else if (editMode === 'insert') {
-      const cellType = cellTypeArg!;
-      // Determine insertion index: after cellId, or at end
-      let insertIdx = notebook.cells.length;
-      if (cellId) {
-        const refIdx = findCellIndex(notebook.cells, cellId);
-        if (refIdx >= 0) insertIdx = refIdx + 1;
+    return ''
+  },
+  getPath(input): string {
+    return input.notebook_path
+  },
+  async checkPermissions(input, context): Promise<PermissionDecision> {
+    const appState = context.getAppState()
+    return checkWritePermissionForTool(
+      NotebookEditTool,
+      input,
+      appState.toolPermissionContext,
+    )
+  },
+  mapToolResultToToolResultBlockParam(
+    { cell_id, edit_mode, new_source, error },
+    toolUseID,
+  ) {
+    if (error) {
+      return {
+        tool_use_id: toolUseID,
+        type: 'tool_result',
+        content: error,
+        is_error: true,
       }
+    }
+    switch (edit_mode) {
+      case 'replace':
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: `Updated cell ${cell_id} with ${new_source}`,
+        }
+      case 'insert':
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: `Inserted cell ${cell_id} with ${new_source}`,
+        }
+      case 'delete':
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: `Deleted cell ${cell_id}`,
+        }
+      default:
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: 'Unknown edit mode',
+        }
+    }
+  },
+  renderToolUseMessage,
+  renderToolUseRejectedMessage,
+  renderToolUseErrorMessage,
+  renderToolResultMessage,
+  async validateInput(
+    { notebook_path, cell_type, cell_id, edit_mode = 'replace' },
+    toolUseContext: ToolUseContext,
+  ) {
+    const fullPath = isAbsolute(notebook_path)
+      ? notebook_path
+      : resolve(getCwd(), notebook_path)
 
-      // Generate cell ID for nbformat >= 4.5
-      const supportsId = notebook.nbformat > 4 ||
-        (notebook.nbformat === 4 && (notebook.nbformat_minor ?? 0) >= 5);
-      const newCell: NotebookCell = {
-        cell_type: cellType,
-        source: splitSource(newSource),
-        metadata: {},
-        ...(supportsId ? { id: `cell-${Date.now().toString(36)}` } : {}),
-        ...(cellType === 'code' ? { execution_count: null, outputs: [] } : {}),
-      };
+    // SECURITY: Skip filesystem operations for UNC paths to prevent NTLM credential leaks.
+    if (fullPath.startsWith('\\\\') || fullPath.startsWith('//')) {
+      return { result: true }
+    }
 
-      notebook.cells.splice(insertIdx, 0, newCell);
-      operationDescription = `Inserted ${cellType} cell at index ${insertIdx}`;
+    if (extname(fullPath) !== '.ipynb') {
+      return {
+        result: false,
+        message:
+          'File must be a Jupyter notebook (.ipynb file). For editing other file types, use the FileEdit tool.',
+        errorCode: 2,
+      }
+    }
 
+    if (
+      edit_mode !== 'replace' &&
+      edit_mode !== 'insert' &&
+      edit_mode !== 'delete'
+    ) {
+      return {
+        result: false,
+        message: 'Edit mode must be replace, insert, or delete.',
+        errorCode: 4,
+      }
+    }
+
+    if (edit_mode === 'insert' && !cell_type) {
+      return {
+        result: false,
+        message: 'Cell type is required when using edit_mode=insert.',
+        errorCode: 5,
+      }
+    }
+
+    // Require Read-before-Edit (matches FileEditTool/FileWriteTool). Without
+    // this, the model could edit a notebook it never saw, or edit against a
+    // stale view after an external change — silent data loss.
+    const readTimestamp = toolUseContext.readFileState.get(fullPath)
+    if (!readTimestamp) {
+      return {
+        result: false,
+        message:
+          'File has not been read yet. Read it first before writing to it.',
+        errorCode: 9,
+      }
+    }
+    if (getFileModificationTime(fullPath) > readTimestamp.timestamp) {
+      return {
+        result: false,
+        message:
+          'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
+        errorCode: 10,
+      }
+    }
+
+    let content: string
+    try {
+      content = readFileSyncWithMetadata(fullPath).content
+    } catch (e) {
+      if (isENOENT(e)) {
+        return {
+          result: false,
+          message: 'Notebook file does not exist.',
+          errorCode: 1,
+        }
+      }
+      throw e
+    }
+    const notebook = safeParseJSON(content) as NotebookContent | null
+    if (!notebook) {
+      return {
+        result: false,
+        message: 'Notebook is not valid JSON.',
+        errorCode: 6,
+      }
+    }
+    if (!cell_id) {
+      if (edit_mode !== 'insert') {
+        return {
+          result: false,
+          message: 'Cell ID must be specified when not inserting a new cell.',
+          errorCode: 7,
+        }
+      }
     } else {
-      // replace (default)
-      if (!cellId) return '[NotebookEdit] Error: cell_id is required for replace mode';
-      const idx = findCellIndex(notebook.cells, cellId);
+      // First try to find the cell by its actual ID
+      const cellIndex = notebook.cells.findIndex(cell => cell.id === cell_id)
 
-      if (idx < 0) {
-        // If cell_id points beyond end → treat as append
-        if (/^cell-(\d+)$/.exec(cellId)?.[1] && parseInt(/^cell-(\d+)$/.exec(cellId)![1]!, 10) - 1 === notebook.cells.length) {
-          const cellType = cellTypeArg ?? 'code';
-          const supportsId = notebook.nbformat > 4 || (notebook.nbformat === 4 && (notebook.nbformat_minor ?? 0) >= 5);
-          const newCell: NotebookCell = {
-            cell_type: cellType,
-            source: splitSource(newSource),
-            metadata: {},
-            ...(supportsId ? { id: `cell-${Date.now().toString(36)}` } : {}),
-            ...(cellType === 'code' ? { execution_count: null, outputs: [] } : {}),
-          };
-          notebook.cells.push(newCell);
-          operationDescription = `Appended new ${cellType} cell`;
+      if (cellIndex === -1) {
+        // If not found, try to parse as a numeric index (cell-N format)
+        const parsedCellIndex = parseCellId(cell_id)
+        if (parsedCellIndex !== undefined) {
+          if (!notebook.cells[parsedCellIndex]) {
+            return {
+              result: false,
+              message: `Cell with index ${parsedCellIndex} does not exist in notebook.`,
+              errorCode: 7,
+            }
+          }
         } else {
-          return `[NotebookEdit] Error: cell "${cellId}" not found`;
+          return {
+            result: false,
+            message: `Cell with ID "${cell_id}" not found in notebook.`,
+            errorCode: 8,
+          }
         }
-      } else {
-        const cell = notebook.cells[idx]!;
-        const oldSource = getCellSource(cell);
-        cell.source = splitSource(newSource);
-
-        // Change cell type if requested
-        if (cellTypeArg && cellTypeArg !== cell.cell_type) {
-          cell.cell_type = cellTypeArg;
-        }
-
-        // Clear execution state for code cells
-        if (cell.cell_type === 'code') {
-          cell.execution_count = null;
-          cell.outputs = [];
-        }
-
-        const sourceChanged = oldSource !== newSource;
-        operationDescription = `Replaced cell "${cellId}" source (${sourceChanged ? 'changed' : 'unchanged'})`;
       }
     }
 
-    // 8. Write back with original encoding and line endings preserved
-    try {
-      // A30: read original content for encoding/line-ending detection
-      const rawContentForEnc  = readFileSync(absPath, 'utf-8');
-      const lineEndings = detectLineEndings(rawContentForEnc);
-      const encoding    = detectEncoding(absPath);
-
-      let toWrite = JSON.stringify(notebook, null, 1);
-      // A30: preserve CRLF line endings — Windows ipynb files should not be converted to LF
-      if (lineEndings === 'CRLF') {
-        toWrite = toWrite.replace(/\n/g, '\r\n');
-      }
-      writeFileSync(absPath, toWrite, { encoding });
-      // Update read timestamp to current mtime
-      markNotebookRead(absPath);
-    } catch (e) {
-      return `[NotebookEdit] Error writing file: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    return `[NotebookEdit] ${operationDescription}. Notebook saved: ${absPath}`;
+    return { result: true }
   },
-};
+  async call(
+    {
+      notebook_path,
+      new_source,
+      cell_id,
+      cell_type,
+      edit_mode: originalEditMode,
+    },
+    { readFileState, updateFileHistoryState },
+    _,
+    parentMessage,
+  ) {
+    const fullPath = isAbsolute(notebook_path)
+      ? notebook_path
+      : resolve(getCwd(), notebook_path)
+
+    if (fileHistoryEnabled()) {
+      await fileHistoryTrackEdit(
+        updateFileHistoryState,
+        fullPath,
+        parentMessage.uuid,
+      )
+    }
+
+    try {
+      // readFileSyncWithMetadata gives content + encoding + line endings in
+      // one safeResolvePath + readFileSync pass, replacing the previous
+      // detectFileEncoding + readFile + detectLineEndings chain (each of
+      // which redid safeResolvePath and/or a 4KB readSync).
+      const { content, encoding, lineEndings } =
+        readFileSyncWithMetadata(fullPath)
+      // Must use non-memoized jsonParse here: safeParseJSON caches by content
+      // string and returns a shared object reference, but we mutate the
+      // notebook in place below (cells.splice, targetCell.source = ...).
+      // Using the memoized version poisons the cache for validateInput() and
+      // any subsequent call() with the same file content.
+      let notebook: NotebookContent
+      try {
+        notebook = jsonParse(content) as NotebookContent
+      } catch {
+        return {
+          data: {
+            new_source,
+            cell_type: cell_type ?? 'code',
+            language: 'python',
+            edit_mode: 'replace',
+            error: 'Notebook is not valid JSON.',
+            cell_id,
+            notebook_path: fullPath,
+            original_file: '',
+            updated_file: '',
+          },
+        }
+      }
+
+      let cellIndex
+      if (!cell_id) {
+        cellIndex = 0 // Default to inserting at the beginning if no cell_id is provided
+      } else {
+        // First try to find the cell by its actual ID
+        cellIndex = notebook.cells.findIndex(cell => cell.id === cell_id)
+
+        // If not found, try to parse as a numeric index (cell-N format)
+        if (cellIndex === -1) {
+          const parsedCellIndex = parseCellId(cell_id)
+          if (parsedCellIndex !== undefined) {
+            cellIndex = parsedCellIndex
+          }
+        }
+
+        if (originalEditMode === 'insert') {
+          cellIndex += 1 // Insert after the cell with this ID
+        }
+      }
+
+      // Convert replace to insert if trying to replace one past the end
+      let edit_mode = originalEditMode
+      if (edit_mode === 'replace' && cellIndex === notebook.cells.length) {
+        edit_mode = 'insert'
+        if (!cell_type) {
+          cell_type = 'code' // Default to code if no cell_type specified
+        }
+      }
+
+      const language = notebook.metadata.language_info?.name ?? 'python'
+      let new_cell_id = undefined
+      if (
+        notebook.nbformat > 4 ||
+        (notebook.nbformat === 4 && notebook.nbformat_minor >= 5)
+      ) {
+        if (edit_mode === 'insert') {
+          new_cell_id = Math.random().toString(36).substring(2, 15)
+        } else if (cell_id !== null) {
+          new_cell_id = cell_id
+        }
+      }
+
+      if (edit_mode === 'delete') {
+        // Delete the specified cell
+        notebook.cells.splice(cellIndex, 1)
+      } else if (edit_mode === 'insert') {
+        let new_cell: NotebookCell
+        if (cell_type === 'markdown') {
+          new_cell = {
+            cell_type: 'markdown',
+            id: new_cell_id,
+            source: new_source,
+            metadata: {},
+          }
+        } else {
+          new_cell = {
+            cell_type: 'code',
+            id: new_cell_id,
+            source: new_source,
+            metadata: {},
+            execution_count: null,
+            outputs: [],
+          }
+        }
+        // Insert the new cell
+        notebook.cells.splice(cellIndex, 0, new_cell)
+      } else {
+        // Find the specified cell
+        const targetCell = notebook.cells[cellIndex]! // validateInput ensures cell_number is in bounds
+        targetCell.source = new_source
+        if (targetCell.cell_type === 'code') {
+          // Reset execution count and clear outputs since cell was modified
+          targetCell.execution_count = null
+          targetCell.outputs = []
+        }
+        if (cell_type && cell_type !== targetCell.cell_type) {
+          targetCell.cell_type = cell_type
+        }
+      }
+      // Write back to file
+      const IPYNB_INDENT = 1
+      const updatedContent = jsonStringify(notebook, null, IPYNB_INDENT)
+      writeTextContent(fullPath, updatedContent, encoding, lineEndings)
+      // Update readFileState with post-write mtime (matches FileEditTool/
+      // FileWriteTool). offset:undefined breaks FileReadTool's dedup match —
+      // without this, Read→NotebookEdit→Read in the same millisecond would
+      // return the file_unchanged stub against stale in-context content.
+      readFileState.set(fullPath, {
+        content: updatedContent,
+        timestamp: getFileModificationTime(fullPath),
+        offset: undefined,
+        limit: undefined,
+      })
+      const data = {
+        new_source,
+        cell_type: cell_type ?? 'code',
+        language,
+        edit_mode: edit_mode ?? 'replace',
+        cell_id: new_cell_id || undefined,
+        error: '',
+        notebook_path: fullPath,
+        original_file: content,
+        updated_file: updatedContent,
+      }
+      return {
+        data,
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        const data = {
+          new_source,
+          cell_type: cell_type ?? 'code',
+          language: 'python',
+          edit_mode: 'replace',
+          error: error.message,
+          cell_id,
+          notebook_path: fullPath,
+          original_file: '',
+          updated_file: '',
+        }
+        return {
+          data,
+        }
+      }
+      const data = {
+        new_source,
+        cell_type: cell_type ?? 'code',
+        language: 'python',
+        edit_mode: 'replace',
+        error: 'Unknown error occurred while editing notebook',
+        cell_id,
+        notebook_path: fullPath,
+        original_file: '',
+        updated_file: '',
+      }
+      return {
+        data,
+      }
+    }
+  },
+} satisfies ToolDef<InputSchema, Output>)

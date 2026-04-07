@@ -1,52 +1,94 @@
 /**
- * memdir/memoryScan.ts — Memory directory scanning
- *
- * Mirrors claude-code's memdir/memoryScan.ts.
- * Provides utilities for scanning memory directories.
+ * Memory-directory scanning primitives. Split out of findRelevantMemories.ts
+ * so extractMemories can import the scan without pulling in sideQuery and
+ * the API-client chain (which closed a cycle through memdir.ts — #25372).
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs';
-import { join } from 'path';
-import { getProjectMemDir } from './paths.js';
-import type { MemoryItem } from './memoryTypes.js';
+import { readdir } from 'fs/promises'
+import { basename, join } from 'path'
+import { parseFrontmatter } from '../utils/frontmatterParser.js'
+import { readFileInRange } from '../utils/readFileInRange.js'
+import { type MemoryType, parseMemoryType } from './memoryTypes.js'
+
+export type MemoryHeader = {
+  filename: string
+  filePath: string
+  mtimeMs: number
+  description: string | null
+  type: MemoryType | undefined
+}
+
+const MAX_MEMORY_FILES = 200
+const FRONTMATTER_MAX_LINES = 30
 
 /**
- * Scan all memory files for a given project root.
- * Returns all valid memory items (skips malformed entries).
+ * Scan a memory directory for .md files, read their frontmatter, and return
+ * a header list sorted newest-first (capped at MAX_MEMORY_FILES). Shared by
+ * findRelevantMemories (query-time recall) and extractMemories (pre-injects
+ * the listing so the extraction agent doesn't spend a turn on `ls`).
+ *
+ * Single-pass: readFileInRange stats internally and returns mtimeMs, so we
+ * read-then-sort rather than stat-sort-read. For the common case (N ≤ 200)
+ * this halves syscalls vs a separate stat round; for large N we read a few
+ * extra small files but still avoid the double-stat on the surviving 200.
  */
-export function scanProjectMemory(projectRoot: string): MemoryItem[] {
-  const memDir = getProjectMemDir(projectRoot);
-  if (!existsSync(memDir)) return [];
+export async function scanMemoryFiles(
+  memoryDir: string,
+  signal: AbortSignal,
+): Promise<MemoryHeader[]> {
+  try {
+    const entries = await readdir(memoryDir, { recursive: true })
+    const mdFiles = entries.filter(
+      f => f.endsWith('.md') && basename(f) !== 'MEMORY.md',
+    )
 
-  const items: MemoryItem[] = [];
-  const files = readdirSync(memDir).filter(f => f.endsWith('.jsonl'));
+    const headerResults = await Promise.allSettled(
+      mdFiles.map(async (relativePath): Promise<MemoryHeader> => {
+        const filePath = join(memoryDir, relativePath)
+        const { content, mtimeMs } = await readFileInRange(
+          filePath,
+          0,
+          FRONTMATTER_MAX_LINES,
+          undefined,
+          signal,
+        )
+        const { frontmatter } = parseFrontmatter(content, filePath)
+        return {
+          filename: relativePath,
+          filePath,
+          mtimeMs,
+          description: frontmatter.description || null,
+          type: parseMemoryType(frontmatter.type),
+        }
+      }),
+    )
 
-  for (const file of files) {
-    const filePath = join(memDir, file);
-    try {
-      const lines = readFileSync(filePath, 'utf-8').split('\n').filter(Boolean);
-      for (const line of lines) {
-        try {
-          const item = JSON.parse(line) as MemoryItem;
-          if (item.id && item.content && item.type) {
-            items.push(item);
-          }
-        } catch { /* skip malformed */ }
-      }
-    } catch { /* skip unreadable */ }
+    return headerResults
+      .filter(
+        (r): r is PromiseFulfilledResult<MemoryHeader> =>
+          r.status === 'fulfilled',
+      )
+      .map(r => r.value)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .slice(0, MAX_MEMORY_FILES)
+  } catch {
+    return []
   }
-
-  return items;
 }
 
 /**
- * Count memory items by type for a given project.
+ * Format memory headers as a text manifest: one line per file with
+ * [type] filename (timestamp): description. Used by both the recall
+ * selector prompt and the extraction-agent prompt.
  */
-export function countMemoryByType(projectRoot: string): Record<string, number> {
-  const items = scanProjectMemory(projectRoot);
-  const counts: Record<string, number> = {};
-  for (const item of items) {
-    counts[item.type] = (counts[item.type] ?? 0) + 1;
-  }
-  return counts;
+export function formatMemoryManifest(memories: MemoryHeader[]): string {
+  return memories
+    .map(m => {
+      const tag = m.type ? `[${m.type}] ` : ''
+      const ts = new Date(m.mtimeMs).toISOString()
+      return m.description
+        ? `- ${tag}${m.filename} (${ts}): ${m.description}`
+        : `- ${tag}${m.filename} (${ts})`
+    })
+    .join('\n')
 }

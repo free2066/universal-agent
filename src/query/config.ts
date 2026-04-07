@@ -1,47 +1,46 @@
-/**
- * query/config.ts — Query-layer configuration constants
- *
- * Mirrors claude-code's query/config.ts.
- * Provides configuration for the agent query loop and LLM call behavior.
- */
+import { getSessionId } from '../bootstrap/state.js'
+import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
+import type { SessionId } from '../types/ids.js'
+import { isEnvTruthy } from '../utils/envUtils.js'
 
-// ── Token limits ──────────────────────────────────────────────────────────────
+// -- config
 
-/** Maximum tokens for agent output in a single turn */
-export const MAX_OUTPUT_TOKENS = 32_000;
+// Immutable values snapshotted once at query() entry. Separating these from
+// the per-iteration State struct and the mutable ToolUseContext makes future
+// step() extraction tractable — a pure reducer can take (state, event, config)
+// where config is plain data.
+//
+// Intentionally excludes feature() gates — those are tree-shaking boundaries
+// and must stay inline at the guarded blocks for dead-code elimination.
+export type QueryConfig = {
+  sessionId: SessionId
 
-/** Maximum tokens for compact (context compression) output */
-export const COMPACT_MAX_OUTPUT_TOKENS = 8_096;
+  // Runtime gates (env/statsig). NOT feature() gates — see above.
+  gates: {
+    // Statsig — CACHED_MAY_BE_STALE already admits staleness, so snapshotting
+    // once per query() call stays within the existing contract.
+    streamingToolExecution: boolean
+    emitToolUseSummaries: boolean
+    isAnt: boolean
+    fastModeEnabled: boolean
+  }
+}
 
-/** Maximum context window tokens before triggering reactive compact */
-export const MAX_CONTEXT_WINDOW_TOKENS = 200_000;
-
-/** Fraction of context window at which compact is triggered (90%) */
-export const COMPACT_TRIGGER_THRESHOLD = 0.9;
-
-/** Fraction of context window at which token warning is shown (80%) */
-export const TOKEN_WARNING_THRESHOLD = 0.8;
-
-// ── Retry configuration ───────────────────────────────────────────────────────
-
-/** Maximum number of API retry attempts */
-export const MAX_API_RETRIES = 3;
-
-/** Base delay between retries in ms */
-export const API_RETRY_BASE_DELAY_MS = 1_000;
-
-/** Maximum retry delay in ms */
-export const API_RETRY_MAX_DELAY_MS = 30_000;
-
-// ── Foreground sources (retry on 529/rate-limit) ──────────────────────────────
-// Mirrors claude-code's FOREGROUND_529_RETRY_SOURCES
-
-export const FOREGROUND_RETRY_SOURCES = new Set<import('../core/agent/types.js').QuerySource>([
-  'repl_main_thread',
-  'repl_main_thread:compact',
-  'agent_main',
-  'compact',
-  'agent:coordinator',
-  'hook_agent',
-  'side_question',
-]);
+export function buildQueryConfig(): QueryConfig {
+  return {
+    sessionId: getSessionId(),
+    gates: {
+      streamingToolExecution: checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
+        'tengu_streaming_tool_execution2',
+      ),
+      emitToolUseSummaries: isEnvTruthy(
+        process.env.CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES,
+      ),
+      isAnt: process.env.USER_TYPE === 'ant',
+      // Inlined from fastMode.ts to avoid pulling its heavy module graph
+      // (axios, settings, auth, model, oauth, config) into test shards that
+      // didn't previously load it — changes init order and breaks unrelated tests.
+      fastModeEnabled: !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_FAST_MODE),
+    },
+  }
+}
