@@ -1,19 +1,27 @@
 /**
  * SessionLogger — 自动会话日志记录模块
  *
- * 将每次 uagent 会话（输入、工具调用、LLM 输出、错误）结构化记录到
- * ~/.uagent/logs/session-<timestamp>.log 文件中。
+ * 将每次 uagent 会话完整记录到 ~/.uagent/logs/session-<timestamp>.log
  *
- * 日志格式为纯文本，方便直接粘贴给 AI 分析：
- *
- *   [2026-04-04 13:30:01] SESSION_START  model=gemini-2.0-flash  domain=auto
- *   [2026-04-04 13:30:02] USER_INPUT     "帮我做代码审查"
- *   [2026-04-04 13:30:03] TOOL_START     Read                  {"path":"src/cli/index.ts"}
- *   [2026-04-04 13:30:03] TOOL_END       Read                  ✓ 312ms
- *   [2026-04-04 13:30:05] LLM_OUTPUT     (1234 chars)
- *                          代码审查结果如下...
- *   [2026-04-04 13:30:05] ERROR          429 Too Many Requests
- *   [2026-04-04 13:30:30] SESSION_END    turns=3  tools=12  duration=29s
+ * 记录内容：
+ *   USER        用户输入
+ *   LLM_REQ     LLM 请求开始（model/iteration/tokens）
+ *   LLM_RESP    LLM 响应结束（tokens/duration）
+ *   LLM_OUTPUT  LLM 文本输出内容
+ *   TOOL_START  工具调用开始（name + args）
+ *   TOOL_RESULT 工具返回内容（前 500 chars）
+ *   TOOL_END    工具调用结束（✓/✗ + duration + 错误信息）
+ *   PERMISSION  权限决策（allow/ask/deny）
+ *   CONFIRM     用户确认操作
+ *   ABORT       用户 Esc 中止
+ *   COMPACT     上下文压缩
+ *   SESSION_RESTORE  恢复历史会话
+ *   SLASH       slash 命令
+ *   MODEL_SWAP  模型切换
+ *   FALLBACK    模型 fallback
+ *   ERROR       错误
+ *   INFO        通用信息
+ *   SESSION_END 会话结束摘要
  */
 
 import {
@@ -27,17 +35,10 @@ import {
 } from 'fs';
 import { join, resolve } from 'path';
 
-// ── 配置 ─────────────────────────────────────────────────────────────────────
-
 export const LOGS_DIR = resolve(process.env.HOME ?? '~', '.uagent', 'logs');
 
-/** 最多保留最近 N 个日志文件，超出后自动删除最旧的 */
-const MAX_LOG_FILES = 20;
-
-/** 单行最大字符（LLM 输出可能很长，截断避免日志文件过大） */
+const MAX_LOG_FILES = 50;
 const MAX_LINE_CHARS = 2000;
-
-// ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 function now(): string {
   return new Date().toISOString().replace('T', ' ').slice(0, 23);
@@ -45,18 +46,16 @@ function now(): string {
 
 function truncate(s: string, max = MAX_LINE_CHARS): string {
   if (s.length <= max) return s;
-  return s.slice(0, max) + `... [+${s.length - max} chars truncated]`;
+  return s.slice(0, max) + `... [+${s.length - max} chars]`;
 }
 
 function formatArgs(args: Record<string, unknown>): string {
   try {
-    return truncate(JSON.stringify(args), 400);
+    return truncate(JSON.stringify(args), 600);
   } catch {
     return String(args);
   }
 }
-
-// ── SessionLogger ─────────────────────────────────────────────────────────────
 
 export interface SessionLoggerOptions {
   model: string;
@@ -70,24 +69,17 @@ export class SessionLogger {
   private turnCount = 0;
   private toolCount = 0;
   private outputChars = 0;
-  /** Buffer pending LLM output chunks — flush on next separator or session end */
   private _outputBuffer = '';
 
   constructor(opts: SessionLoggerOptions) {
     this.startMs = Date.now();
-
-    // 确保日志目录存在（权限 700：只有当前用户可读）
     mkdirSync(LOGS_DIR, { recursive: true, mode: 0o700 });
-
-    // 轮转旧日志
     this._rotate();
 
-    // 构建日志文件路径：session-YYYYMMDD-HHmmss-<shortId>.log
     const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
     const short = opts.sessionId?.slice(-6) ?? Math.random().toString(36).slice(2, 8);
     this.logPath = join(LOGS_DIR, `session-${ts}-${short}.log`);
 
-    // 写入文件头
     writeFileSync(
       this.logPath,
       [
@@ -105,83 +97,162 @@ export class SessionLogger {
     );
   }
 
-  /** 当前日志文件的绝对路径 */
   get path(): string {
     return this.logPath;
   }
 
-  // ── 公开 API ────────────────────────────────────────────────────────────────
+  // ── 用户输入 ───────────────────────────────────────────────────────────────
 
-  /** 用户输入了一条消息 */
   logInput(text: string): void {
     this.turnCount++;
     this._flushOutput();
-    this._write(`[${now()}] USER        > ${truncate(text, 500)}`);
+    this._write(`[${now()}] USER        > ${truncate(text, 800)}`);
     this._write('');
   }
 
-  /** 工具调用开始 */
+  // ── LLM 请求/响应 ─────────────────────────────────────────────────────────
+
+  logLLMRequest(opts: { model: string; iteration: number; historyLen: number; tools?: number }): void {
+    this._write(
+      `[${now()}] LLM_REQ     model=${opts.model}  iter=${opts.iteration}  history=${opts.historyLen} msgs${opts.tools !== undefined ? `  tools=${opts.tools}` : ''}`,
+    );
+  }
+
+  logLLMResponse(opts: { durationMs: number; inputTokens?: number; outputTokens?: number; stopReason?: string }): void {
+    const dur = opts.durationMs < 1000 ? `${opts.durationMs}ms` : `${(opts.durationMs / 1000).toFixed(1)}s`;
+    const toks = (opts.inputTokens || opts.outputTokens)
+      ? `  in=${opts.inputTokens ?? '?'} out=${opts.outputTokens ?? '?'}`
+      : '';
+    const stop = opts.stopReason ? `  stop=${opts.stopReason}` : '';
+    this._write(`[${now()}] LLM_RESP    ${dur}${toks}${stop}`);
+  }
+
+  // ── 工具调用 ──────────────────────────────────────────────────────────────
+
   logToolStart(name: string, args: Record<string, unknown>): void {
     this.toolCount++;
     this._write(`[${now()}] TOOL_START  ${name.padEnd(20)} ${formatArgs(args)}`);
   }
 
-  /** 工具调用结束 */
-  logToolEnd(name: string, success: boolean, durationMs: number, errorMsg?: string): void {
-    const status = success ? '✓' : '✗';
-    this._write(`[${now()}] TOOL_END    ${name.padEnd(20)} ${status} ${durationMs}ms`);
-    if (!success && errorMsg) {
-      this._write(`             ERROR: ${truncate(errorMsg, 500)}`);
+  logToolResult(name: string, result: string): void {
+    const preview = truncate(result.trim(), 800);
+    const lines = preview.split('\n');
+    this._write(`[${now()}] TOOL_RESULT ${name.padEnd(20)} (${result.length} chars)`);
+    for (const line of lines.slice(0, 20)) {
+      this._write(`             ${truncate(line, 400)}`);
+    }
+    if (lines.length > 20) {
+      this._write(`             ... [${lines.length - 20} more lines]`);
     }
   }
 
-  /** 接收一个 LLM 文本 chunk（内部缓冲，避免每个 chunk 都写磁盘） */
+  logToolEnd(name: string, success: boolean, durationMs: number, errorMsg?: string): void {
+    const status = success ? '✓' : '✗';
+    const dur = durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`;
+    this._write(`[${now()}] TOOL_END    ${name.padEnd(20)} ${status} ${dur}`);
+    if (!success && errorMsg) {
+      this._write(`             ERROR: ${truncate(errorMsg, 800)}`);
+    }
+    this._write('');
+  }
+
+  // ── 权限 ──────────────────────────────────────────────────────────────────
+
+  logPermission(opts: { tool: string; decision: 'allow' | 'ask' | 'deny'; pattern?: string; mode?: string }): void {
+    const pat = opts.pattern ? `  pattern="${opts.pattern}"` : '';
+    const mode = opts.mode ? `  mode=${opts.mode}` : '';
+    this._write(`[${now()}] PERMISSION  ${opts.decision.toUpperCase().padEnd(6)} tool=${opts.tool}${pat}${mode}`);
+  }
+
+  logConfirm(tool: string, approved: boolean, command?: string): void {
+    const verdict = approved ? 'APPROVED' : 'REJECTED';
+    const cmd = command ? `  cmd=${truncate(command, 200)}` : '';
+    this._write(`[${now()}] CONFIRM     ${verdict}  tool=${tool}${cmd}`);
+  }
+
+  // ── 控制流 ────────────────────────────────────────────────────────────────
+
+  logAbort(): void {
+    this._flushOutput();
+    this._write(`[${now()}] ABORT       user pressed Esc — streaming interrupted`);
+    this._write('');
+  }
+
+  logCompact(opts: { before: number; after: number; method?: string }): void {
+    this._flushOutput();
+    this._write(
+      `[${now()}] COMPACT     ${opts.before} → ${opts.after} msgs  method=${opts.method ?? 'auto'}`,
+    );
+  }
+
+  logSessionRestore(opts: { sessionId: string; msgCount: number }): void {
+    this._write(
+      `[${now()}] SESSION_RESTORE  id=${opts.sessionId}  msgs=${opts.msgCount}`,
+    );
+  }
+
+  logSlash(cmd: string): void {
+    this._flushOutput();
+    this._write(`[${now()}] SLASH       ${cmd}`);
+    this._write('');
+  }
+
+  logModelSwitch(from: string, to: string): void {
+    this._write(`[${now()}] MODEL_SWAP  ${from} → ${to}`);
+  }
+
+  logFallback(opts: { from: string; to: string; reason: string }): void {
+    this._write(`[${now()}] FALLBACK    ${opts.from} → ${opts.to}  reason=${truncate(opts.reason, 200)}`);
+  }
+
+  logIterationLimit(limit: number): void {
+    this._flushOutput();
+    this._write(`[${now()}] ITER_LIMIT  max=${limit}  turns=${this.turnCount}  tools=${this.toolCount}`);
+    this._write('');
+  }
+
+  logInfo(msg: string): void {
+    this._write(`[${now()}] INFO        ${truncate(msg, 500)}`);
+  }
+
+  logSystemPrompt(prompt: string): void {
+    const lines = prompt.split('\n');
+    this._write(`[${now()}] SYS_PROMPT  (${prompt.length} chars, ${lines.length} lines)`);
+    for (const line of lines.slice(0, 10)) {
+      this._write(`             ${truncate(line, 400)}`);
+    }
+    if (lines.length > 10) {
+      this._write(`             ... [${lines.length - 10} more lines]`);
+    }
+    this._write('');
+  }
+
+  // ── LLM 输出缓冲 ──────────────────────────────────────────────────────────
+
   logChunk(chunk: string): void {
     this._outputBuffer += chunk;
     this.outputChars += chunk.length;
   }
 
-  /** 一轮 LLM 输出结束 — flush 缓冲到日志 */
   flushOutput(): void {
     this._flushOutput();
   }
 
-  /** 记录错误 */
+  // ── 错误 ──────────────────────────────────────────────────────────────────
+
   logError(err: unknown): void {
     this._flushOutput();
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     this._write(`[${now()}] ERROR       ${truncate(msg, 800)}`);
     if (err instanceof Error && err.stack) {
-      const stackLines = err.stack.split('\n').slice(0, 5).join('\n             ');
+      const stackLines = err.stack.split('\n').slice(0, 8).join('\n             ');
       this._write(`             STACK: ${stackLines}`);
     }
     this._write('');
   }
 
-  /** 记录 slash 命令（/continue、/compact 等） */
-  logSlash(cmd: string): void {
-    this._flushOutput();
-    this._write(`[${now()}] SLASH       ${cmd}`);
-  }
+  // ── 会话结束 ──────────────────────────────────────────────────────────────
 
-  /** 记录迭代上限命中 */
-  logIterationLimit(limit: number): void {
-    this._flushOutput();
-    this._write(`[${now()}] ITER_LIMIT  max=${limit}  turns_so_far=${this.turnCount}  tools_so_far=${this.toolCount}`);
-    this._write('');
-  }
-
-  /** 记录模型切换 */
-  logModelSwitch(from: string, to: string): void {
-    this._write(`[${now()}] MODEL_SWAP  ${from} → ${to}`);
-  }
-
-  /** 记录一条通用信息（适合记录特殊事件） */
-  logInfo(msg: string): void {
-    this._write(`[${now()}] INFO        ${truncate(msg, 500)}`);
-  }
-
-  /** 会话结束 — 写入摘要 */
   close(): void {
     this._flushOutput();
     const durationSec = Math.round((Date.now() - this.startMs) / 1000);
@@ -201,7 +272,7 @@ export class SessionLogger {
   private _write(line: string): void {
     try {
       appendFileSync(this.logPath, line + '\n', 'utf-8');
-    } catch { /* non-fatal — 日志失败不能让 agent 崩溃 */ }
+    } catch { /* non-fatal */ }
   }
 
   private _flushOutput(): void {
@@ -209,23 +280,21 @@ export class SessionLogger {
     if (!buf) return;
     this._outputBuffer = '';
     const lines = buf.split('\n');
-    this._write(`[${now()}] LLM_OUTPUT  (${this.outputChars} chars total)`);
-    const preview = lines.slice(0, 40);
-    for (const line of preview) {
+    this._write(`[${now()}] LLM_OUTPUT  (${this.outputChars} chars)`);
+    for (const line of lines.slice(0, 60)) {
       this._write(`             ${truncate(line, 400)}`);
     }
-    if (lines.length > 40) {
-      this._write(`             ... [${lines.length - 40} more lines]`);
+    if (lines.length > 60) {
+      this._write(`             ... [${lines.length - 60} more lines]`);
     }
     this._write('');
   }
 
-  /** 删除最旧的日志文件，保留最近 MAX_LOG_FILES 个 */
   private _rotate(): void {
     try {
       const files = readdirSync(LOGS_DIR)
         .filter((f) => f.startsWith('session-') && f.endsWith('.log'))
-        .sort(); // ISO 时间前缀 → 字母序 = 时间序
+        .sort();
       const extra = files.length - MAX_LOG_FILES + 1;
       if (extra > 0) {
         for (const f of files.slice(0, extra)) {
@@ -245,7 +314,6 @@ export interface LogEntry {
   mtime: string;
 }
 
-/** 列出所有日志文件（最新的在前） */
 export function listLogs(): LogEntry[] {
   if (!existsSync(LOGS_DIR)) return [];
   return readdirSync(LOGS_DIR)

@@ -1326,6 +1326,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
             await triggerHook(createHookEvent('tool', 'after', { callId, toolName: call.name, success: true }));
             events?.onToolEnd?.(call.name, true, durationMs);
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+            events?.onToolResult?.(call.name, resultStr);
             // Round 8: fire tool_post_use (PostToolUse parity)
             // H17: updatedMCPToolOutput — allows hook to modify MCP tool output
             // B21: hook_stopped_continuation + hook_blocking_error (claude-code toolHooks.ts parity)

@@ -273,6 +273,7 @@ export function App({
     const cmd = input.trim();
     const parts = cmd.split(/\s+/);
     const sub = parts[1];
+    sessionLogger.current.logSlash(cmd);
 
     // ── /exit /quit ─────────────────────────────────────────────────────────
     if (cmd === '/exit' || cmd === '/quit') {
@@ -354,6 +355,7 @@ export function App({
         setCurrentModelDisplay(label);
         setStatusInfo((s) => ({ ...s, contextLength: newCtxLen }));
         appendSystem(`Model switched to: ${label}`);
+        sessionLogger.current.logModelSwitch(prevModel, sub);
         // Emit model_switch hook (Batch 2)
         import('../../core/hooks.js').then(({ emitHook }) => {
           emitHook('model_switch', { prevValue: prevModel, newValue: sub });
@@ -573,6 +575,7 @@ export function App({
           agent.clearHistory();
           setMessages([]);
           appendSystem(`Compacted ${history.length} turns. Insights saved (+${result.added} memories). History cleared.`);
+          sessionLogger.current.logCompact({ before: history.length, after: 0, method: 'manual' });
         } finally {
           if (origEnv === undefined) delete process.env.AGENT_COMPACT_THRESHOLD;
           else process.env.AGENT_COMPACT_THRESHOLD = origEnv;
@@ -734,6 +737,7 @@ export function App({
             }));
           setMessages(restored);
           appendSystem(`Restored session "${snapId}" (${snap.messages.length} messages)`);
+          sessionLogger.current.logSessionRestore({ sessionId: snapId, msgCount: snap.messages.length });
         } else {
           appendSystem(`Session "${snapId}" not found or empty.`);
         }
@@ -2336,6 +2340,12 @@ Begin with a scope summary then list findings. If none found, say so.`;
         }
 
         if (finalInput) {
+          const _llmReqStart = Date.now();
+          sessionLogger.current.logLLMRequest({
+            model: modelManager.getCurrentModel('main'),
+            iteration: 1,
+            historyLen: agent.getHistory().length,
+          });
           await agent.runStream(
           finalInput,
           (chunk) => {
@@ -2389,6 +2399,9 @@ Begin with a scope summary then list findings. If none found, say so.`;
               ]);
               setStatusInfo((s) => ({ ...s, isThinking: 'medium' }));
             },
+            onToolResult: (name, result) => {
+              sessionLogger.current.logToolResult(name, result);
+            },
             onToolEnd: (name, success, durationMs, errorMsg) => {
               const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
               if (seqKey) toolStartRef.current.delete(seqKey);
@@ -2412,6 +2425,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
           undefined,
           abortRef.current.signal,
         );
+        sessionLogger.current.logLLMResponse({ durationMs: Date.now() - _llmReqStart });
         } // end if (finalInput)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2490,6 +2504,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
                 autoCompact(h, (msg) => appendSystem(msg)).then((result) => {
                   if (result.wasCompacted) {
                     appendSystem(`Auto-compact complete: ${result.compactedTurns} turns compressed.`);
+                    sessionLogger.current.logCompact({ before: h.length, after: h.length - result.compactedTurns, method: 'auto' });
                   }
                 }).catch(() => { /* non-fatal */ });
               }
@@ -2516,6 +2531,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
       abortRef.current.abort();
       abortRef.current = null;
       appendAssistant('\n[aborted]');
+      sessionLogger.current.logAbort();
       stopStreaming();
       setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
     }
@@ -2605,6 +2621,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
           setCurrentModelDisplay(chosen.label);
           setStatusInfo((s) => ({ ...s, contextLength: ctxLen }));
           appendSystem(`Model switched to: ${chosen.label}`);
+          sessionLogger.current.logModelSwitch(modelManager.getCurrentModel('main'), chosen.id);
         }
         setModelPicker(null);
         return;
@@ -2899,6 +2916,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
     try {
       const logPath = sessionLogger.current.path;
       if (logPath) appendSystem(`Session log: ${logPath}`);
+      sessionLogger.current.logInfo(`startup  domain=${initialDomain}  model=${modelDisplayName}  cwd=${process.cwd()}`);
     } catch { /* non-fatal */ }
     // Show hook-defined custom slash commands at startup
     // (readline parity: repl.ts line 437-440 lists hookRunner.listSlashCommands() on start)
