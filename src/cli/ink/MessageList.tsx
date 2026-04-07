@@ -23,9 +23,9 @@ export interface ChatMessage {
 /** How many messages to show in the visible window */
 export const MSG_WINDOW_SIZE = 30;
 /** Max chars to show per assistant message before truncating */
-const MAX_ASSISTANT_CHARS = 6000;
+const MAX_ASSISTANT_CHARS = 20000;
 /** Max lines to show per assistant message */
-const MAX_ASSISTANT_LINES = 80;
+const MAX_ASSISTANT_LINES = 500;
 
 function truncateAssistant(text: string): { display: string; truncated: boolean } {
   const lines = text.split('\n');
