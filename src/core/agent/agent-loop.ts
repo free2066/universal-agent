@@ -1198,6 +1198,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           // the cached result immediately without re-executing.
           if (preExecutedResults?.has(call.id)) {
             const preResult = preExecutedResults.get(call.id)!;
+            events?.onToolStart?.(call.name, call.arguments as Record<string, unknown>);
+            events?.onToolResult?.(call.name, preResult);
             events?.onToolEnd?.(call.name, true, 0);
             return { role: 'tool' as const, toolCallId: call.id, content: preResult };
           }
