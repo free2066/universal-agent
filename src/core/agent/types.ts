@@ -76,6 +76,11 @@ export interface AgentEvents {
    * Mirrors claude-code toolUseSummaryGenerator.ts batch-level summary
    */
   onToolBatchSummary?: (summary: string) => void;
+  /**
+   * C35: onCtxEvent — 上下文管理诊断事件（由 repl.ts 注入 SessionLogger 方法）
+   * 在 editContextIfNeeded/autoCompact/reactiveCompact/HistorySnip/tokenWarning/apiUsage 触发
+   */
+  onCtxEvent?: (event: import('./agent-loop.js').CtxEvent) => void;
 }
 
 export interface AgentOptions {

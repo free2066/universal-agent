@@ -746,6 +746,54 @@ export async function runREPL(
 
             sessionLogger.logToolEnd(name, success, durationMs);
           },
+          // C35: onCtxEvent — 上下文管理诊断事件 → sessionLogger
+          // 将 agent-loop 内部的 CTX 事件路由到 SessionLogger 的 logCtx* 方法
+          onCtxEvent: (event) => {
+            try {
+              if (event.type === 'llm_req') {
+                // D35: LLM_REQ 日志（含 estimatedTokens）
+                sessionLogger.logLLMRequest({
+                  model: event.model,
+                  iteration: event.iteration,
+                  historyLen: event.historyLen,
+                  tools: event.toolCount,
+                  estimatedTokens: event.estimatedTokens,
+                });
+              } else if (event.type === 'clear') {
+                sessionLogger.logCtxClear({
+                  count: event.count,
+                  tokensFreed: event.tokensFreed,
+                  toolNames: event.toolNames,
+                  estimatedTokensBefore: event.estimatedBefore,
+                });
+              } else if (event.type === 'compact') {
+                sessionLogger.logCtxCompact({
+                  type: event.compactType,
+                  tokensBefore: event.before,
+                  tokensAfter: event.after,
+                  msgsBefore: event.msgsBefore,
+                  msgsAfter: event.msgsAfter,
+                });
+              } else if (event.type === 'warning') {
+                sessionLogger.logCtxWarning({
+                  state: event.state,
+                  estimatedTokens: event.est,
+                  contextWindow: event.ctx,
+                  pct: event.pct,
+                });
+              } else if (event.type === 'api_usage') {
+                sessionLogger.logCtxApiUsage({
+                  iteration: event.iteration,
+                  input: event.input,
+                  output: event.output,
+                  cacheWrite: event.cacheWrite,
+                  cacheRead: event.cacheRead,
+                  totalInput: event.totalInput,
+                  estimatedHistory: event.histEst,
+                });
+              }
+            } catch { /* C35: fail-open */ }
+          },
         },
         undefined,
         _currentAbort.signal,

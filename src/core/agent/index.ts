@@ -354,6 +354,8 @@ export class AgentCore {
       router: this.router,
       getLLM: () => this._getLLM(),
       fallbackChain: this.fallbackChain,
+      // C35: 透传 onCtxEvent 到 runStreamLoop
+      onCtxEvent: events?.onCtxEvent,
     });
   }
 }

@@ -381,7 +381,25 @@ export interface RunStreamOptions {
    * 键值对以 "key: value" 格式追加到 systemPrompt 末尾。
    */
   systemContext?: Record<string, string>;
+  /**
+   * B35: onCtxEvent — 上下文管理事件回调（由 repl.ts 注入 SessionLogger 方法）
+   * 在 agent-loop 内部的关键上下文管理路径（editContextIfNeeded/autoCompact/
+   * reactiveCompact/HistorySnip/tokenWarning/apiUsage）触发。
+   * fail-open：不影响主流程。
+   */
+  onCtxEvent?: (event: CtxEvent) => void;
 }
+
+/**
+ * B35: CtxEvent — 上下文管理诊断事件联合类型
+ * 传递给 RunStreamOptions.onCtxEvent 回调，由 repl.ts 路由到 SessionLogger。
+ */
+export type CtxEvent =
+  | { type: 'clear';   count: number; tokensFreed: number; toolNames: string[]; estimatedBefore: number }
+  | { type: 'compact'; compactType: 'auto' | 'reactive' | 'snip'; before: number; after: number; msgsBefore: number; msgsAfter: number }
+  | { type: 'warning'; state: 'ok' | 'warning' | 'blocking'; est: number; ctx: number; pct: number }
+  | { type: 'api_usage'; iteration: number; input: number; output: number; cacheWrite: number; cacheRead: number; totalInput: number; histEst: number }
+  | { type: 'llm_req'; iteration: number; historyLen: number; estimatedTokens: number; toolCount: number; model: string };
 
 export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopResult> {
   const {
@@ -399,6 +417,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   // F22: userContext/systemContext 分离注入（claude-code query.ts L184-185 + api.ts L437-474 parity）
   const _userContext = opts.userContext ?? {};
   const _systemContext = opts.systemContext ?? {};
+  // B35: onCtxEvent — 上下文管理诊断事件回调（由 repl.ts 注入，fail-open）
+  const _onCtxEvent = opts.onCtxEvent;
 
   // ── Pending confirmation check ─────────────────────────────────────────────
   if (pendingConfirmationRef.value) {
@@ -547,9 +567,23 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   if (_snipResult.tokensFreed > 0) {
     history.splice(0, history.length, ..._snipResult.messages);
     onChunk(`\n  HistorySnip: freed ~${_snipResult.tokensFreed} tokens (${_snipResult.messages.length} messages remain)\n`);
+    // B35-1: HistorySnip CTX_COMPACT 日志
+    try {
+      const _afterSnip = estimateHistoryTokens(history);
+      _onCtxEvent?.({ type: 'compact', compactType: 'snip', before: _afterSnip + _snipResult.tokensFreed, after: _afterSnip, msgsBefore: history.length + (_snipResult.messages.length - history.length), msgsAfter: history.length });
+    } catch { /* B35: fail-open */ }
   }
   const _adjustedBlockingTokens = Math.max(0, estimateHistoryTokens(history) - _snipResult.tokensFreed);
   const _warningState = calculateTokenWarningState(_adjustedBlockingTokens, _currentModel);
+  // B35-2: CTX_WARNING 日志（在调用前记录一次初始状态）
+  try {
+    const _ctxProfile = [...modelManager.listProfiles()].find(
+      (p) => p.name === _currentModel || p.modelName === _currentModel,
+    );
+    const _ctxWindow = _ctxProfile?.contextLength ?? 128000;
+    const _pct = _ctxWindow > 0 ? Math.round((_adjustedBlockingTokens / _ctxWindow) * 100) : 0;
+    _onCtxEvent?.({ type: 'warning', state: _warningState === 'blocking' ? 'blocking' : _warningState === 'warning' ? 'warning' : 'ok', est: _adjustedBlockingTokens, ctx: _ctxWindow, pct: _pct });
+  } catch { /* B35: fail-open */ }
   if (_warningState === 'blocking') {
     onChunk(`\n[SYSTEM] Context window critical (${_adjustedBlockingTokens.toLocaleString()} tokens after snip adjustment) — stopping to prevent prompt_too_long error.\n`);
     // B13: blocking_limit 终止
@@ -576,6 +610,11 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     if (compacted.isRecompactionInChain) {
       onChunk(`  Warning: rapid re-compaction detected (chain compaction).\n`);
     }
+    // B35-3: autoCompact CTX_COMPACT 日志
+    try {
+      const _afterCompact = estimateHistoryTokens(history);
+      _onCtxEvent?.({ type: 'compact', compactType: 'auto', before: compacted.preTokens ?? (_afterCompact + 1), after: _afterCompact, msgsBefore: compacted.compactedTurns ?? history.length, msgsAfter: history.length });
+    } catch { /* B35: fail-open */ }
     // E22: taskBudget cross-compact tracking (claude-code query.ts L508-514 parity)
     // 在每次 compact 后更新 _taskBudgetRemaining（累减 preCompact token 消耗）
     // 防止 compact 后 taskBudget 仍然计算压缩前的 token 消耗。
@@ -707,6 +746,11 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               _withheldPtlError = null;
               _lastTransition = { reason: 'reactive_compact_retry' };
               onChunk('  Reactive compact succeeded — retrying with compacted context…\n');
+              // B35-4: PTL reactiveCompact CTX_COMPACT 日志
+              try {
+                const _afterRC = estimateHistoryTokens(history);
+                _onCtxEvent?.({ type: 'compact', compactType: 'reactive', before: _afterRC + 10000, after: _afterRC, msgsBefore: history.length, msgsAfter: history.length });
+              } catch { /* B35: fail-open */ }
               continue; // retry LLM with compacted history
             }
           } catch { /* reactiveCompact failure → fall through to terminal */ }
@@ -791,6 +835,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           ? ` (${clearedNames.join(', ')}) — re-run tools if needed`
           : ' to free context space';
         onChunk(`\n✂️  Cleared ${cleared} old tool result(s)${namesSuffix}\n`);
+        // B35-5: editContextIfNeeded CTX_CLEAR 日志
+        try {
+          const _estBefore = estimateHistoryTokens(history);
+          const _freed = clearedNames ? cleared * 3000 : 0; // 粗估
+          _onCtxEvent?.({
+            type: 'clear',
+            count: cleared,
+            tokensFreed: _freed,
+            toolNames: clearedNames ?? [],
+            estimatedBefore: _estBefore + _freed,
+          });
+        } catch { /* B35: fail-open */ }
       }
 
       await triggerHook(createHookEvent('agent', 'turn', {
@@ -825,6 +881,18 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
 
       let response;
       const _llmCallStart = Date.now();
+      // D35/B35: LLM_REQ 日志 — 在每轮 LLM 调用前触发 llm_req 事件
+      try {
+        const _estForReq = estimateHistoryTokens(history);
+        _onCtxEvent?.({
+          type: 'llm_req',
+          iteration,
+          historyLen: history.length,
+          estimatedTokens: _estForReq,
+          toolCount: tools?.length ?? 0,
+          model: modelManager.getCurrentModel('main'),
+        });
+      } catch { /* D35: fail-open */ }
       // ── StreamingToolExecutor: eagerly execute read-only tools during streaming ──
       // Mirrors claude-code's StreamingToolExecutor.  Create a new executor per
       // iteration (reset state).  The executor is fed tool call deltas via
@@ -1016,6 +1084,20 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
               cacheReadTokens: cacheReadTokens,
             });
           } catch { /* non-fatal: StatusBar update is best-effort */ }
+          // B35-6: CTX_API_USAGE 日志（API token 完整统计）
+          try {
+            const _histEst = estimateHistoryTokens(history);
+            _onCtxEvent?.({
+              type: 'api_usage',
+              iteration,
+              input: inputTokens,
+              output: outputTokens,
+              cacheWrite: cacheWriteTokens,
+              cacheRead: cacheReadTokens,
+              totalInput: totalInputTokens,
+              histEst: _histEst,
+            });
+          } catch { /* B35: fail-open */ }
         }
       }
 

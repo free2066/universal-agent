@@ -66,9 +66,11 @@ export const REASONING_EFFORT: Record<string, string> = { low: 'low', medium: 'm
 const _parsed = parseInt(process.env.UAGENT_INFERENCE_TIMEOUT_MS ?? '', 10);
 /**
  * Hard wall-clock timeout for streaming LLM calls.
- * Default: 3 minutes. Override with env var UAGENT_INFERENCE_TIMEOUT_MS.
+ * Default: 10 minutes (raised from 3min — complex tasks with tool execution
+ * like mvn compile/tsc can easily consume 3+ minutes during streaming).
+ * Override with env var UAGENT_INFERENCE_TIMEOUT_MS.
  */
-export const INFERENCE_TIMEOUT_MS = Number.isFinite(_parsed) && _parsed > 0 ? _parsed : 3 * 60 * 1000;
+export const INFERENCE_TIMEOUT_MS = Number.isFinite(_parsed) && _parsed > 0 ? _parsed : 10 * 60 * 1000;
 
 /**
  * Run `fn(signal)` with a hard wall-clock timeout.

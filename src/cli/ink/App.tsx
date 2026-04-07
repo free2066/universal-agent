@@ -2484,7 +2484,12 @@ Begin with a scope summary then list findings. If none found, say so.`;
         // ── API 401/403: auto-trigger configureAgent ─────────────────────
         const isAbortError = msg.includes('aborted') || msg.includes('AbortError') || msg.includes('signal');
         if (isAbortError) {
-          // Abort is handled by handleAbort (Esc key), don't show error
+          // Distinguish user-initiated abort (Esc) from inference timeout abort.
+          // Inference timeout message contains "Inference timeout" — show to user.
+          if (msg.includes('Inference timeout') || msg.includes('llm-client')) {
+            appendSystem(`[timeout] ${msg.replace(/\[llm-client\]\s*/, '')}`);
+          }
+          // User Esc abort is handled by handleAbort — don't show error
           return;
         }
         const isAuthError = /401|403|unauthorized|invalid.api.key|authentication|API_KEY|api.key|No API key/i.test(msg);

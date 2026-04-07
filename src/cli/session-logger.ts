@@ -73,6 +73,10 @@ export class SessionLogger {
   private toolCount = 0;
   private outputChars = 0;
   private _outputBuffer = '';
+  // A35: CTX 诊断计数器
+  private _ctxClears = 0;
+  private _ctxCompacts = 0;
+  private _maxCtxPct = 0;
 
   constructor(opts: SessionLoggerOptions) {
     this.startMs = Date.now();
@@ -122,9 +126,10 @@ export class SessionLogger {
 
   // ── LLM 请求/响应 ─────────────────────────────────────────────────────────
 
-  logLLMRequest(opts: { model: string; iteration: number; historyLen: number; tools?: number }): void {
+  logLLMRequest(opts: { model: string; iteration: number; historyLen: number; tools?: number; estimatedTokens?: number }): void {
+    const estTok = opts.estimatedTokens !== undefined ? `  est=~${opts.estimatedTokens}tok` : '';
     this._write(
-      `[${now()}] LLM_REQ     model=${opts.model}  iter=${opts.iteration}  history=${opts.historyLen} msgs${opts.tools !== undefined ? `  tools=${opts.tools}` : ''}`,
+      `[${now()}] LLM_REQ     model=${opts.model}  iter=${opts.iteration}  history=${opts.historyLen} msgs${estTok}${opts.tools !== undefined ? `  tools=${opts.tools}` : ''}`,
     );
   }
 
@@ -192,6 +197,87 @@ export class SessionLogger {
     this._flushOutput();
     this._write(
       `[${now()}] COMPACT     ${opts.before} → ${opts.after} msgs  method=${opts.method ?? 'auto'}`,
+    );
+  }
+
+  // ── A35: 上下文管理诊断日志 ──────────────────────────────────────────────────
+
+  /**
+   * A35: CTX_CLEAR — editContextIfNeeded 触发时记录
+   * 帮助诊断：何时清除、清除了哪些工具 result、释放了多少 token
+   */
+  logCtxClear(opts: {
+    count: number;
+    tokensFreed: number;
+    toolNames: string[];
+    estimatedTokensBefore: number;
+  }): void {
+    const names = opts.toolNames.length > 0 ? `tools=[${opts.toolNames.join(',')}]` : 'tools=[]';
+    this._write(
+      `[${now()}] CTX_CLEAR   count=${opts.count}  freed=~${opts.tokensFreed}tok  ${names}  before=~${opts.estimatedTokensBefore}tok`,
+    );
+    this._ctxClears++;
+  }
+
+  /**
+   * A35: CTX_COMPACT — autoCompact / reactiveCompact / HistorySnip 触发时记录
+   * 帮助诊断：何时压缩、压缩前后 token 差、消息数变化
+   */
+  logCtxCompact(opts: {
+    type: 'auto' | 'reactive' | 'snip';
+    tokensBefore: number;
+    tokensAfter: number;
+    msgsBefore: number;
+    msgsAfter: number;
+  }): void {
+    this._flushOutput();
+    const freed = opts.tokensBefore - opts.tokensAfter;
+    this._write(
+      `[${now()}] CTX_COMPACT type=${opts.type.padEnd(8)}  before=${opts.tokensBefore}tok(${opts.msgsBefore}msgs)` +
+      `  after=${opts.tokensAfter}tok(${opts.msgsAfter}msgs)  freed=~${freed}tok`,
+    );
+    this._ctxCompacts++;
+  }
+
+  /**
+   * A35: CTX_WARNING — token 用量告警状态变化时记录
+   * 帮助诊断：何时接近 context 上限、pct 峰值
+   */
+  logCtxWarning(opts: {
+    state: 'ok' | 'warning' | 'blocking';
+    estimatedTokens: number;
+    contextWindow: number;
+    pct: number;
+  }): void {
+    if (opts.pct > this._maxCtxPct) this._maxCtxPct = opts.pct;
+    // 只在非 ok 状态或 pct 变化较大时写入（避免每轮都写）
+    if (opts.state === 'ok' && opts.pct < 40) return;
+    this._write(
+      `[${now()}] CTX_WARNING state=${opts.state.padEnd(8)}  est=${opts.estimatedTokens}tok` +
+      `  ctx=${opts.contextWindow}  pct=${opts.pct}%`,
+    );
+  }
+
+  /**
+   * A35: CTX_API — 每轮 LLM API token 统计（含 cache tokens）
+   * 帮助诊断：实际 API token 消耗、cache 命中率
+   */
+  logCtxApiUsage(opts: {
+    iteration: number;
+    input: number;
+    output: number;
+    cacheWrite: number;
+    cacheRead: number;
+    totalInput: number;
+    estimatedHistory: number;
+  }): void {
+    const cacheHit = opts.totalInput > 0
+      ? Math.round((opts.cacheRead / opts.totalInput) * 100)
+      : 0;
+    this._write(
+      `[${now()}] CTX_API     iter=${opts.iteration}  in=${opts.input}  out=${opts.output}` +
+      `  cacheW=${opts.cacheWrite}  cacheR=${opts.cacheRead}  total=${opts.totalInput}` +
+      `  histEst=~${opts.estimatedHistory}tok  cacheHit=${cacheHit}%`,
     );
   }
 
@@ -273,7 +359,9 @@ export class SessionLogger {
     this._write('───────────────────────────────────────────────────────────────');
     this._write(`[${now()}] SESSION_END`);
     this._write(`             turns=${this.turnCount}  tools=${this.toolCount}  output_chars=${this.outputChars}  duration=${dur}`);
-    this._write(`             log=${this.logPath}`);
+    // A35: CTX 诊断摘要
+    this._write(`             ctx_clears=${this._ctxClears}  ctx_compacts=${this._ctxCompacts}  max_pct=${this._maxCtxPct}%`);
+    this._write(`             log=${this.logPath}`);;
     this._write('═══════════════════════════════════════════════════════════════');
   }
 
