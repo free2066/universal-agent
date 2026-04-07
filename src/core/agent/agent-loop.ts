@@ -1551,6 +1551,21 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
 
         history.push(...toolResults);
 
+        // Auto-verify reminder: if this batch contained write operations (Write/Edit/MultiEdit),
+        // inject a lightweight reminder so the LLM proactively runs build/test verification.
+        // Only fires when the system prompt doesn't already contain explicit verify instructions,
+        // preventing duplicate reminders from CLAUDE.md.
+        const _hasWriteOps = response.toolCalls.some((tc) =>
+          tc.name === 'Write' || tc.name === 'Edit' || tc.name === 'MultiEdit',
+        );
+        if (_hasWriteOps && !systemPrompt.includes('After Every Code Change') && !systemPrompt.includes('mvn compile')) {
+          history.push({
+            role: 'user',
+            content: '<reminder>You just modified files. If this is a compiled language (Java, TypeScript, Go, etc.), run the build/compile command to verify no errors were introduced before continuing.</reminder>',
+            isMeta: true,
+          });
+        }
+
         // C31: ToolUseSummary D29 集成 — tool batch 完成后生成 commit-style 摘要标题
         // D29 的 generateToolUseSummary 模块已创建但未被调用。
         // 在这里集成：每批 tool 全部执行完后，若开启 ENABLE_TOOL_SUMMARY，

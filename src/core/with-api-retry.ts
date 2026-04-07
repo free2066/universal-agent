@@ -151,11 +151,20 @@ export async function withApiRetry<T>(
       if (isRateLimitError(err)) {
         attempt429++;
         const retryAfterMs = parseRetryAfterMs(err) ?? Math.min(30_000 * attempt429, 300_000);
+        const waitSec = Math.round(retryAfterMs / 1000);
+        const elapsedSec = Math.round((Date.now() - startMs) / 1000);
 
-        onRetryMessage?.(
-          `\n⏳ Rate-limited — waiting ${Math.round(retryAfterMs / 1000)}s… ` +
-          `(attempt ${attempt429}, elapsed ${Math.round((Date.now() - startMs) / 1000)}s)\n`,
-        );
+        if (attempt429 === 1) {
+          onRetryMessage?.(
+            `\n⏳ Rate-limited by API — waiting ${waitSec}s before retry` +
+            ` (Press Esc to cancel)\n`,
+          );
+        } else {
+          onRetryMessage?.(
+            `\n⏳ Rate-limited — waiting ${waitSec}s… ` +
+            `(attempt ${attempt429}, elapsed ${elapsedSec}s)\n`,
+          );
+        }
 
         await new Promise<void>((resolve) => {
           const t = setTimeout(resolve, retryAfterMs);

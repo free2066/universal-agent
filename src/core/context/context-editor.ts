@@ -61,15 +61,26 @@ export function microcompact(history: Message[]): number {
   const now = Date.now();
   let cleared = 0;
 
+  // Build toolCallId → toolName map from assistant messages
+  const toolCallIdToName = new Map<string, string>();
+  for (const msg of history) {
+    if (msg.role !== 'assistant') continue;
+    const tc = (msg as unknown as { toolCalls?: Array<{ id: string; name: string }> }).toolCalls;
+    if (!Array.isArray(tc)) continue;
+    for (const call of tc) {
+      if (call.id && call.name) toolCallIdToName.set(call.id, call.name);
+    }
+  }
+
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     if (msg.role !== 'tool') continue;
     if (msg.content === CLEARED_PLACEHOLDER) continue;
     if (msg.content.length < MICROCOMPACT_MIN_CHARS) continue;
 
-    // Check tool name — never clear read_file results (they're reference material)
     const rawId = msg.toolCallId ?? '';
-    const toolName = rawId.replace(/-\d+-[a-z0-9]+$/, '').replace(/-\d+$/, '');
+    const toolName = toolCallIdToName.get(rawId)
+      ?? rawId.replace(/-\d+-[a-z0-9]+$/, '').replace(/-\d+$/, '');
     if (PRESERVE_RESULT_TOOLS.has(toolName)) continue;
 
     // Age check: use _ts if available, otherwise position heuristic
@@ -126,6 +137,10 @@ export const PRESERVE_RESULT_TOOLS = new Set([
   'read_file',
   'read-file',
   'readFile',
+  'Read',
+  'Write',
+  'Edit',
+  'MultiEdit',
 ]);
 
 export const DEFAULT_CTX_EDITOR_CONFIG: ContextEditorConfig = {
@@ -161,6 +176,17 @@ function findClearableCandidates(
   history: Message[],
   cfg: ContextEditorConfig,
 ): ClearableEntry[] {
+  // Build a map from toolCallId → toolName by scanning assistant messages
+  const toolCallIdToName = new Map<string, string>();
+  for (const msg of history) {
+    if (msg.role !== 'assistant') continue;
+    const tc = (msg as unknown as { toolCalls?: Array<{ id: string; name: string }> }).toolCalls;
+    if (!Array.isArray(tc)) continue;
+    for (const call of tc) {
+      if (call.id && call.name) toolCallIdToName.set(call.id, call.name);
+    }
+  }
+
   const candidates: ClearableEntry[] = [];
 
   for (let i = 0; i < history.length; i++) {
@@ -168,12 +194,11 @@ function findClearableCandidates(
     if (msg.role !== 'tool') continue;
     if (msg.content === CLEARED_PLACEHOLDER) continue;
 
-    // Identify tool name from toolCallId.
-    // callId format is "${toolName}-${timestamp}-${random5chars}" (see agent.ts).
-    // toolName may itself contain hyphens (e.g. "web-search"), so we strip only
-    // the trailing "-<digits>-<alphanum>" or "-<digits>" suffix.
+    // Resolve tool name: prefer lookup from assistant's toolCalls map,
+    // fall back to legacy callId parsing (format: "${toolName}-${ts}-${rand}")
     const rawId = msg.toolCallId ?? 'unknown';
-    const toolName = rawId.replace(/-\d+-[a-z0-9]+$/, '').replace(/-\d+$/, '');
+    const toolName = toolCallIdToName.get(rawId)
+      ?? rawId.replace(/-\d+-[a-z0-9]+$/, '').replace(/-\d+$/, '');
     if (cfg.excludeTools.has(toolName)) continue;
 
     candidates.push({
