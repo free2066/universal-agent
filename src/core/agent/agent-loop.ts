@@ -669,7 +669,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
           const interruptContent = toolsWereRunning
             ? INTERRUPT_MESSAGE_FOR_TOOL_USE
             : INTERRUPT_MESSAGE;
-          history.push({ role: 'user', content: interruptContent });
+          history.push({ role: 'user', content: interruptContent, isMeta: true });
         }
         _terminalReason = 'aborted';
         _earlyExit = true;

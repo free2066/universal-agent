@@ -36,17 +36,47 @@ const MCP_AUTH_TOOL_SUFFIX = '__authenticate';
  * @param authorizeCallback  触发 OAuth 授权的回调函数
  * @returns ToolRegistration 可注册到工具注册表的伪工具
  */
+/**
+ * A22 + C27: createMcpAuthTool — 为未认证的 MCP 服务器创建伪工具
+ *
+ * 对标 claude-code McpAuthTool.ts:
+ *   - 工具名格式: mcp__<serverName>__authenticate
+ *   - 描述: 告知 LLM 此服务器需要 OAuth 认证，调用工具触发授权
+ *   - 执行: 调用 auth.authorize() 打开浏览器完成 OAuth 流程
+ *   - 成功后: 返回成功消息（正常 MCP 工具自动可用）
+ *   - 失败: 返回结构化错误消息（不抛出，保持 LLM 对话稳定）
+ *
+ * C27: skipBrowserOpen 模式 — 对标 claude-code McpAuthTool.ts L126-132
+ *   - headless/CI 环境（!process.stdout.isTTY）自动启用
+ *   - skipBrowserOpen=true 时返回 auth URL 而非打开浏览器
+ *   - 后台等待 OAuth 完成后通知 reconnect
+ *
+ * @param serverName  MCP 服务器名称
+ * @param authorizeCallback  触发 OAuth 授权的回调函数
+ * @param options    C27: 可选配置项
+ * @returns ToolRegistration 可注册到工具注册表的伪工具
+ */
 export function createMcpAuthTool(
   serverName: string,
   authorizeCallback: () => Promise<void>,
+  options?: {
+    /** C27: skipBrowserOpen — return auth URL instead of opening browser (for headless/SDK use) */
+    getAuthUrl?: () => Promise<string | null>;
+    /** C27: onReconnect — called after OAuth completes to reconnect the MCP server */
+    onReconnect?: () => Promise<void>;
+  },
 ): ToolRegistration {
   const toolName = `${MCP_AUTH_TOOL_PREFIX}${serverName}${MCP_AUTH_TOOL_SUFFIX}`;
+
+  // C27: auto-detect headless environment
+  const isHeadless = !process.stdout.isTTY || process.env.CI === '1';
+
   return {
     definition: {
       name: toolName,
       description:
         `This MCP server (${serverName}) requires OAuth authentication before its tools can be used. ` +
-        `Call this tool to open the browser and complete the authorization flow. ` +
+        `Call this tool to ${isHeadless ? 'get the authorization URL to complete authentication' : 'open the browser and complete the authorization flow'}. ` +
         `After authentication succeeds, the server's actual tools will become available. ` +
         `Only call this tool once — it will wait for the OAuth flow to complete.`,
       parameters: {
@@ -56,8 +86,39 @@ export function createMcpAuthTool(
       },
     },
     handler: async (): Promise<string> => {
+      // C27: headless/SDK mode — return URL instead of opening browser
+      // Mirrors claude-code McpAuthTool.ts L126-132: skipBrowserOpen + Promise.race
+      if (isHeadless && options?.getAuthUrl) {
+        try {
+          const authUrl = await options.getAuthUrl();
+          if (authUrl) {
+            // C27: Background wait for OAuth completion + auto-reconnect
+            // Mirrors McpAuthTool.ts L137-173: background reconnect after oauth completes
+            (async () => {
+              try {
+                await authorizeCallback();
+                if (options?.onReconnect) {
+                  await options.onReconnect();
+                }
+              } catch { /* non-fatal background reconnect failure */ }
+            })().catch(() => {});
+
+            return (
+              `🔗 OAuth authentication required for MCP server "${serverName}".\n\n` +
+              `Visit this URL to authenticate:\n${authUrl}\n\n` +
+              `After completing authentication in your browser, the server's tools will become available automatically.`
+            );
+          }
+        } catch { /* fallthrough to browser mode */ }
+      }
+
+      // Default: open browser (interactive TTY mode)
       try {
         await authorizeCallback();
+        // C27: trigger reconnect after successful auth
+        if (options?.onReconnect) {
+          await options.onReconnect().catch(() => {});
+        }
         return (
           `✅ OAuth authentication for MCP server "${serverName}" completed successfully. ` +
           `The server's tools are now available — you can use them directly in your next tool call.`

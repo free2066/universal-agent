@@ -125,6 +125,9 @@ export const exitPlanModeTool: ToolRegistration = {
       'Call this after you have fully analyzed the codebase and built a complete plan.',
       'The plan will be shown to the user who can then approve execution.',
       '',
+      'B27: Prefer reading the plan from .uagent/plan.md if it exists.',
+      'Only pass the plan parameter if you have NOT written it to a file.',
+      '',
       'Include in the plan:',
       '  - Summary of what will be changed and why',
       '  - List of files with the specific edits for each',
@@ -136,27 +139,75 @@ export const exitPlanModeTool: ToolRegistration = {
       properties: {
         plan: {
           type: 'string',
-          description: 'The complete plan to present to the user before execution',
+          description: 'The complete plan to present. If .uagent/plan.md exists, it will be used instead.',
         },
         title: {
           type: 'string',
           description: 'Short title for the plan (1 line)',
         },
       },
-      required: ['plan'],
+      required: [],
     },
   },
 
   async handler(args: unknown): Promise<string> {
-    const input = args as { plan: string; title?: string };
-    const plan = (input.plan ?? '').trim();
+    const input = args as { plan?: string; title?: string };
     const title = input.title?.trim();
 
+    // B27: Prefer reading plan from .uagent/plan.md (claude-code ExitPlanModeV2 parity)
+    // Mirrors ExitPlanModeV2Tool.ts L246-253: getPlan() reads from plan file first
+    let plan = (input.plan ?? '').trim();
+    const planFilePath = _getPlanFilePath();
+    if (planFilePath) {
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        if (existsSync(planFilePath)) {
+          const filePlan = readFileSync(planFilePath, 'utf-8').trim();
+          if (filePlan) {
+            plan = filePlan;
+          }
+        }
+      } catch { /* fallback to plan parameter */ }
+    }
+
     if (!plan) {
-      return '[ExitPlanMode] Error: plan is required';
+      return '[ExitPlanMode] Error: plan is required. Either pass plan parameter or write to .uagent/plan.md';
     }
 
     exitPlanMode();
+
+    // B27: teammate 流程 — 若当前是子 agent（有 parentAgentId），发送 plan_approval_request
+    // Mirrors claude-code ExitPlanModeV2Tool.ts L264-312: isTeammate() && isPlanModeRequired()
+    // Non-fatal: only available in swarm/multi-agent environments
+    const parentAgentId = process.env['__UAGENT_PARENT_AGENT_ID'];
+    if (parentAgentId) {
+      try {
+        // Use dynamic eval-based require to avoid TypeScript module resolution errors
+        // (mailbox-manager only exists in swarm environments)
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const mailboxMod = require('../agents/mailbox-manager.js') as { mailboxManager?: { send: (id: string, msg: unknown) => Promise<void> } };
+        if (mailboxMod?.mailboxManager) {
+          await mailboxMod.mailboxManager.send(parentAgentId, {
+            type: 'plan_approval_request',
+            plan,
+            title: title ?? '(untitled plan)',
+            fromAgentId: process.env['__UAGENT_AGENT_ID'] ?? 'unknown',
+            timestamp: Date.now(),
+          });
+          // B27: Set awaitingLeaderApproval flag (prevents continuation until leader approves)
+          process.env['__UAGENT_AWAITING_LEADER_APPROVAL'] = '1';
+          return [
+            '📋 Plan submitted to parent agent for approval.',
+            '',
+            title ? `**${title}**\n` : '',
+            plan,
+            '',
+            '⏳ Waiting for leader approval before proceeding.',
+            'The parent agent will review and approve execution.',
+          ].filter(Boolean).join('\n');
+        }
+      } catch { /* non-fatal: mailboxManager not available in non-swarm environments */ }
+    }
 
     const lines = [
       '📋  Plan Mode — Ready for Review',
@@ -179,3 +230,12 @@ export const exitPlanModeTool: ToolRegistration = {
     return { ...ctx, planModeActive: false, approvalMode: restoredMode };
   },
 };
+
+/**
+ * B27: _getPlanFilePath — returns .uagent/plan.md path relative to cwd.
+ * Mirrors claude-code ExitPlanModeV2Tool getPlanFilePath().
+ */
+function _getPlanFilePath(): string {
+  const { join: pjoin, resolve: presolve } = require('path') as typeof import('path');
+  return presolve(process.cwd(), '.uagent', 'plan.md');
+}

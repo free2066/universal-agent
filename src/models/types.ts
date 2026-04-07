@@ -42,6 +42,22 @@ export interface Message {
    * parallel tool_use produces multiple assistant records sharing the same messageId.
    */
   messageId?: string;
+  /**
+   * E27: isMeta — marks system-injected messages that are NOT user-visible.
+   * Mirrors claude-code messages.ts isMeta field on UserMessage.
+   *
+   * Messages with isMeta=true are:
+   *   - compact boundary markers (type='compact_boundary')
+   *   - stop hook injection messages
+   *   - interrupt messages injected on Ctrl+C (B26)
+   *   - tool_summary system annotations
+   *
+   * These messages are filtered from:
+   *   - session snapshot persistence (avoid polluting replayed sessions)
+   *   - /history display
+   *   - session title extraction
+   */
+  isMeta?: boolean;
 }
 
 /** Extract the plain-text portion of a message's content (for logging / display). */

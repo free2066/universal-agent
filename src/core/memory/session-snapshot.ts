@@ -143,7 +143,11 @@ export function saveSnapshot(sessionId: string, messages: Message[], cwd?: strin
     const sessionsDir = getProjectSessionsDir(cwd);
     ensureDir(sessionsDir);
     const filePath = jsonlPath(sessionId, cwd);
-    const toSave = messages.slice(-MAX_MESSAGES);
+    // E27: filter isMeta=true messages before persisting
+    // (compact boundary markers, interrupt messages, system annotations)
+    // Mirrors claude-code sessionStorage.ts L2403, L4832: skip isMeta:true on save
+    const filteredMessages = messages.filter((m) => !m.isMeta);
+    const toSave = filteredMessages.slice(-MAX_MESSAGES);
 
     if (!existsSync(filePath)) {
       const header: HeaderEntry = {

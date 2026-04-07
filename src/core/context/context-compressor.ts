@@ -714,6 +714,8 @@ export async function autoCompact(
     content: `[COMPACT BOUNDARY ${new Date().toISOString()}] turns=${toCompact.length} preTokens=${preTokens} warningState=${decision.warningState}`,
     // Attach type metadata without breaking Message type compatibility
     ...({ type: 'compact_boundary', uuid: _boundaryUuid } as Record<string, unknown>),
+    // E27: isMeta=true — compact boundary is a system-injected marker, not user-visible
+    isMeta: true,
   };
 
   history.splice(0, history.length, boundaryMarker, summaryMessage, ...toKeep);

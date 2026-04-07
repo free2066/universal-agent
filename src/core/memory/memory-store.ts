@@ -157,8 +157,19 @@ export class MemoryStore {
   add(input: Omit<MemoryItem, 'id' | 'createdAt' | 'updatedAt' | 'accessCount' | 'project'>): string {
     const items = this.load(input.type);
     const now = Date.now();
+
+    // A27: secretScanner — redact secrets before writing to persistent memory
+    // Mirrors claude-code secretScanner.ts: prevents API keys/tokens from entering
+    // long-term memory where they could leak across sessions or into AI context.
+    let safeContent = input.content;
+    try {
+      const { redactSecrets } = require('../../utils/secret-scanner.js') as typeof import('../../utils/secret-scanner.js');
+      safeContent = redactSecrets(input.content);
+    } catch { /* non-fatal: scanner import failure must not block memory writes */ }
+
     const item: MemoryItem = {
       ...input,
+      content: safeContent,
       id: generateId(),
       project: this.project,
       createdAt: now,

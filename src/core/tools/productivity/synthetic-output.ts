@@ -31,6 +31,74 @@ function sanitizeLabel(label: string): string {
   return label.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
 }
 
+/**
+ * G27: _validateAgainstSchema — lightweight JSON Schema structural validation.
+ * Validates required fields and basic type checks without a full AJV dependency.
+ * Mirrors claude-code SyntheticOutputTool.ts L131-153 AJV validation pattern.
+ *
+ * Returns an array of error strings (empty = valid).
+ */
+function _validateAgainstSchema(data: unknown, schema: Record<string, unknown>): string[] {
+  const errors: string[] = [];
+  const schemaType = schema['type'] as string | undefined;
+
+  // Check top-level type
+  if (schemaType) {
+    const actualType = Array.isArray(data) ? 'array' : typeof data;
+    if (actualType !== schemaType) {
+      errors.push(`Expected type "${schemaType}" but got "${actualType}"`);
+      return errors; // no point checking further
+    }
+  }
+
+  // Check required fields on objects
+  if (schemaType === 'object' && typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    const required = schema['required'] as string[] | undefined;
+    const dataRecord = data as Record<string, unknown>;
+    if (Array.isArray(required)) {
+      for (const field of required) {
+        if (!(field in dataRecord) || dataRecord[field] === undefined || dataRecord[field] === null) {
+          errors.push(`Missing required field: "${field}"`);
+        }
+      }
+    }
+
+    // Check property types if properties schema is provided
+    const properties = schema['properties'] as Record<string, Record<string, unknown>> | undefined;
+    if (properties) {
+      for (const [key, propSchema] of Object.entries(properties)) {
+        if (key in dataRecord && dataRecord[key] !== undefined && dataRecord[key] !== null) {
+          const expectedType = propSchema['type'] as string | undefined;
+          if (expectedType) {
+            const actualPropType = Array.isArray(dataRecord[key]) ? 'array' : typeof dataRecord[key];
+            if (actualPropType !== expectedType) {
+              errors.push(`Field "${key}": expected type "${expectedType}" but got "${actualPropType}"`);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Check array items type
+  if (schemaType === 'array' && Array.isArray(data)) {
+    const items = schema['items'] as Record<string, unknown> | undefined;
+    if (items) {
+      const expectedItemType = items['type'] as string | undefined;
+      if (expectedItemType) {
+        for (let i = 0; i < data.length; i++) {
+          const actualItemType = Array.isArray(data[i]) ? 'array' : typeof data[i];
+          if (actualItemType !== expectedItemType) {
+            errors.push(`Array item [${i}]: expected type "${expectedItemType}" but got "${actualItemType}"`);
+          }
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
 export const syntheticOutputTool: ToolRegistration = {
   definition: {
     name: 'synthetic_output',
@@ -71,6 +139,29 @@ export const syntheticOutputTool: ToolRegistration = {
 
     if (data === undefined || data === null) {
       return 'Error: data is required and must be a JSON-serializable value.';
+    }
+
+    // G27: AJV runtime schema validation — mirrors claude-code SyntheticOutputTool.ts L131-153
+    // If a schema is provided, validate data against it before writing.
+    // Mirrors claude-code: "ajv.compile(schema) — output 不符合时抛结构化错误"
+    if (schema) {
+      try {
+        const parsedSchema = JSON.parse(schema) as Record<string, unknown>;
+        // Minimal structural validation without full AJV dependency:
+        // Validate required fields and basic type checking
+        const schemaErrors = _validateAgainstSchema(data, parsedSchema);
+        if (schemaErrors.length > 0) {
+          return (
+            `Error: Output data does not conform to the provided schema.\n\n` +
+            `Validation errors:\n${schemaErrors.map((e) => `  - ${e}`).join('\n')}\n\n` +
+            `Provided schema:\n${schema}\n\n` +
+            `Provided data:\n${JSON.stringify(data, null, 2)}`
+          );
+        }
+      } catch (schemaParseErr) {
+        // Schema parsing failed — warn but don't block output
+        console.error(`[synthetic_output] Warning: schema parsing failed: ${schemaParseErr instanceof Error ? schemaParseErr.message : String(schemaParseErr)}`);
+      }
     }
 
     let jsonStr: string;

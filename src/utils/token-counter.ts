@@ -188,10 +188,67 @@ export async function countTokensViaApi(
     if (typeof data.input_tokens !== 'number') throw new Error('Invalid response');
 
     return { inputTokens: data.input_tokens, method: 'api' };
-  } catch (err) {
-    // Fallback to local computation
+  } catch (_primaryErr) {
+    // F27: Haiku fallback — mirrors claude-code tokenEstimation.ts countTokensViaHaikuFallback()
+    // When the count_tokens beta API fails, use the compact/quick model with max_tokens:1
+    // to get precise input token count from the response usage field.
+    // Three-segment chain: API → Haiku(compact) → local estimate
+    try {
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) throw new Error('no api key');
+
+      const { modelManager: mgr } = await import('../models/model-manager.js');
+      const compactModel = mgr.getCurrentModel('compact');
+      if (!compactModel.includes('claude')) throw new Error('non-anthropic compact model');
+
+      const apiMessages = messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        }));
+      if (!apiMessages.length) throw new Error('no messages');
+
+      const haikuBody: Record<string, unknown> = {
+        model: compactModel,
+        messages: apiMessages,
+        max_tokens: 1,  // F27: we only need the usage, not the response
+      };
+      if (options.systemPrompt) haikuBody.system = options.systemPrompt;
+
+      const haikuRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(haikuBody),
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (!haikuRes.ok) throw new Error(`Haiku HTTP ${haikuRes.status}`);
+      const haikuData = await haikuRes.json() as {
+        usage?: {
+          input_tokens?: number;
+          cache_creation_input_tokens?: number;
+          cache_read_input_tokens?: number;
+        }
+      };
+      const usage = haikuData.usage;
+      if (!usage || typeof usage.input_tokens !== 'number') throw new Error('Invalid haiku response');
+
+      const totalInputTokens =
+        usage.input_tokens +
+        (usage.cache_creation_input_tokens ?? 0) +
+        (usage.cache_read_input_tokens ?? 0);
+
+      return { inputTokens: totalInputTokens, method: 'api' };
+    } catch { /* fall through to local estimate */ }
+
+    // Segment 3: local estimate fallback
     const fallback = countTokensFromHistory(messages as MessageWithUsage[]);
-    return { ...fallback, error: err instanceof Error ? err.message : String(err) };
+    return { ...fallback, error: _primaryErr instanceof Error ? _primaryErr.message : String(_primaryErr) };
   }
 }
 
