@@ -11,9 +11,129 @@
  *   - 仅允许 SAFE_CONFIG_KEYS 集合中的 key（防止 LLM 修改系统关键配置）
  *   - 写入前验证 key 合法性
  *   - 读取可以读取任意 key（但敏感 key 会被遮蔽）
+ *
+ * E29: 新增 CONFIG_VALIDATORS 钩子体系，对标 claude-code supportedSettings.ts:
+ *   - validateOnWrite: 写入前枚举/布尔校验（mirrors supportedSettings.ts L24 validateOnWrite）
+ *   - options: 允许的枚举值列表（mirrors supportedSettings.ts L21 getOptions）
+ *   - formatRead: 读取时格式化（mirrors supportedSettings.ts L26 formatOnRead）
  */
 
 import type { ToolRegistration } from '../../../models/types.js';
+
+// ── E29: per-key validation config ───────────────────────────────────────────
+// Mirrors claude-code supportedSettings.ts SettingConfig type + entries
+
+/** E29: Setting validator definition — mirrors supportedSettings.ts L15-27 */
+interface SettingValidator {
+  /** Sync validation function — called before write */
+  validate?: (value: string) => { valid: boolean; error?: string };
+  /** Allowed enum values — shown in error messages */
+  options?: string[];
+  /** Format raw config value for display (e.g. null → 'default') */
+  formatRead?: (raw: unknown) => string;
+}
+
+/** E29: Per-key validators — mirrors supportedSettings.ts SUPPORTED_SETTINGS entries */
+const CONFIG_VALIDATORS: Record<string, SettingValidator> = {
+  // Boolean flags
+  alwaysThinkingEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  autoCompactEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  autoMemoryEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  autoDreamEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  showTurnDuration: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  terminalProgressBarEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  todoFeatureEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  fileCheckpointingEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  taskCompleteNotifEnabled: {
+    options: ['true', 'false'],
+    validate: (v) =>
+      ['true', 'false'].includes(v.toLowerCase())
+        ? { valid: true }
+        : { valid: false, error: 'Must be "true" or "false"' },
+  },
+  // Enum keys
+  teammateMode: {
+    options: ['disabled', 'enabled', 'auto'],
+    validate: (v) =>
+      ['disabled', 'enabled', 'auto'].includes(v)
+        ? { valid: true }
+        : { valid: false, error: 'Must be one of: disabled, enabled, auto' },
+  },
+  'permissions.defaultMode': {
+    options: ['default', 'autoEdit', 'yolo', 'plan'],
+    validate: (v) =>
+      ['default', 'autoEdit', 'yolo', 'plan'].includes(v)
+        ? { valid: true }
+        : { valid: false, error: 'Must be one of: default, autoEdit, yolo, plan' },
+  },
+  approvalMode: {
+    options: ['default', 'autoEdit', 'yolo'],
+    validate: (v) =>
+      ['default', 'autoEdit', 'yolo'].includes(v)
+        ? { valid: true }
+        : { valid: false, error: 'Must be one of: default, autoEdit, yolo' },
+  },
+  thinkingLevel: {
+    options: ['low', 'medium', 'high', 'max', 'xhigh', 'maxOrXhigh'],
+    validate: (v) =>
+      ['low', 'medium', 'high', 'max', 'xhigh', 'maxOrXhigh'].includes(v)
+        ? { valid: true }
+        : { valid: false, error: 'Must be one of: low, medium, high, max, xhigh, maxOrXhigh' },
+  },
+  // formatOnRead examples
+  model: {
+    formatRead: (raw) =>
+      raw === null || raw === undefined || raw === '' ? 'default' : String(raw),
+  },
+};
 
 /** D22/B28: 允许 LLM 通过 config_set 修改的安全 key 集合
  * B28: 扩充至 19 个实用 key，对标 claude-code supportedSettings.ts
@@ -80,7 +200,12 @@ export const configGetTool: ToolRegistration = {
         return JSON.stringify({ key, value: value ? '***' : null });
       }
 
-      return JSON.stringify({ key, value });
+      // E29: formatOnRead — mirrors supportedSettings.ts L26 formatOnRead
+      // Example: model=null displays as 'default'
+      const validator = CONFIG_VALIDATORS[key];
+      const formatted = validator?.formatRead ? validator.formatRead(value) : value;
+
+      return JSON.stringify({ key, value: formatted });
     } catch (err) {
       return `[ConfigGet] Failed to read config: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -123,6 +248,17 @@ export const configSetTool: ToolRegistration = {
         `[ConfigSet] Key "${key}" is not in the allowed list. ` +
         `Safe keys: ${[...SAFE_CONFIG_KEYS].join(', ')}`
       );
+    }
+
+    // E29: validateOnWrite hook — mirrors supportedSettings.ts L24 validateOnWrite
+    // Validates enum constraints and boolean values before persisting
+    const validator = CONFIG_VALIDATORS[key];
+    if (validator?.validate) {
+      const validation = validator.validate(value);
+      if (!validation.valid) {
+        const opts = validator.options ? ` (allowed: ${validator.options.join(', ')})` : '';
+        return `[ConfigSet] Validation failed for "${key}": ${validation.error}${opts}`;
+      }
     }
 
     try {

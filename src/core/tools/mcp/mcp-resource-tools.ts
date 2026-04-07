@@ -7,8 +7,37 @@
  * G28: 改为单例 MCPManager + TTL 缓存（5分钟），对标
  *      claude-code ListMcpResourcesTool.ts L79-94 fetchResourcesForClient LRU 缓存 +
  *      ensureConnectedClient 重连逻辑。单个 server 失败不影响其他 server 返回。
+ *
+ * C29: ReadMcpResource 新增 blob 二进制资源持久化，对标
+ *      claude-code ReadMcpResourceTool.ts L103-138 persistBinaryContent 机制。
  */
 import type { ToolRegistration } from '../../../models/types.js';
+
+// ── C29: MIME type → file extension mapping ────────────────────────────────
+// Mirrors ReadMcpResourceTool.ts mimeType handling
+function mimeToExt(mime: string): string {
+  const map: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+    'application/pdf': 'pdf',
+    'application/json': 'json',
+    'text/plain': 'txt',
+    'text/html': 'html',
+    'text/csv': 'csv',
+    'text/xml': 'xml',
+    'application/xml': 'xml',
+    'audio/mpeg': 'mp3',
+    'audio/wav': 'wav',
+    'video/mp4': 'mp4',
+    'application/zip': 'zip',
+    'application/octet-stream': 'bin',
+  };
+  return map[mime] ?? mime.split('/').pop()?.replace(/[^a-z0-9]/gi, '') ?? 'bin';
+}
 
 // ── G28: 模块级单例 MCPManager + TTL 缓存 ─────────────────────────────────────
 // Mirrors claude-code ListMcpResourcesTool.ts L79-94:
@@ -141,10 +170,51 @@ export const ReadMcpResourceRegistration: ToolRegistration = {
       const client = mgr.getStdioClient(s.name);
       if (!client) continue;
       try {
-        const content = await client.readResource(uri);
-        if (content !== null) {
-          return `[Resource: ${uri} from ${s.name}]\n\n${content}`;
+        // C29: use readResourceRaw to handle blob binary resources
+        // Mirrors ReadMcpResourceTool.ts L103-138 blob persistence logic
+        const rawContents = await client.readResourceRaw(uri);
+        if (rawContents.length === 0) continue;
+
+        for (const content of rawContents) {
+          // C29: blob binary resource — decode base64 → write to disk
+          if (content.blob) {
+            try {
+              const { writeFileSync, mkdirSync, existsSync } = await import('fs');
+              const { tmpdir } = await import('os');
+              const { join } = await import('path');
+
+              const buf = Buffer.from(content.blob, 'base64');
+              const ext = mimeToExt(content.mimeType ?? 'application/octet-stream');
+              const dir = join(tmpdir(), 'uagent-mcp-blobs');
+              if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+              const filename = `blob-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+              const blobPath = join(dir, filename);
+              writeFileSync(blobPath, buf);
+
+              return (
+                `[Resource: ${uri} from ${s.name}]\n` +
+                `blobSavedTo: ${blobPath}\n` +
+                `mimeType: ${content.mimeType ?? 'application/octet-stream'}\n` +
+                `size: ${buf.length} bytes`
+              );
+            } catch (blobErr) {
+              // Fallback: return blob as base64 string if disk write fails
+              return (
+                `[Resource: ${uri} from ${s.name}]\n` +
+                `[binary blob, base64]\n` +
+                `mimeType: ${content.mimeType ?? 'application/octet-stream'}\n` +
+                content.blob.slice(0, 2000) + (content.blob.length > 2000 ? '\n...(truncated)' : '')
+              );
+            }
+          }
+          // text resource
+          if (content.text) {
+            return `[Resource: ${uri} from ${s.name}]\n\n${content.text}`;
+          }
         }
+
+        // All contents processed but nothing returned — content exists but empty
+        return `[Resource: ${uri} from ${s.name}]\n(empty resource)`;
       } catch { continue; }
     }
 

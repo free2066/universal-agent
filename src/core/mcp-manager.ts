@@ -324,7 +324,20 @@ class StdioMCPClient {
     } catch { return null; }
   }
 
-  /** E14/A15: 旧接口保留（仅用于 session 过期场景的兼容调用） */
+  /**
+   * C29: Read raw resource contents including blob fields.
+   * Returns the raw contents array for callers that need to handle binary data.
+   * Mirrors ReadMcpResourceTool.ts L103-138 blob persistence logic.
+   */
+  async readResourceRaw(uri: string): Promise<Array<{ text?: string; blob?: string; mimeType?: string }>> {
+    if (!this.proc) return [];
+    try {
+      const res = await this.request('resources/read', { uri });
+      if (res.error) return [];
+      return (res.result as { contents?: Array<{ text?: string; blob?: string; mimeType?: string }> })?.contents ?? [];
+    } catch { return []; }
+  }
+
   async reconnect(): Promise<void> {
     this.stop();
     await new Promise((res) => setTimeout(res, 500));

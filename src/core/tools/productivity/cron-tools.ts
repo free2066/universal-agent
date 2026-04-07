@@ -176,6 +176,14 @@ export const cronCreateTool: ToolRegistration = {
     if (!cron) return '[CronCreate] cron expression is required';
     if (!prompt) return '[CronCreate] prompt is required';
 
+    // A29: durable + teammate conflict check — mirrors CronCreateTool.ts L105-114
+    // Teammate agents are ephemeral; durable crons survive restart but agentId won't match
+    const isTeammate = !!process.env['__UAGENT_PARENT_AGENT_ID'];
+    if (durable && isTeammate) {
+      return '[CronCreate] durable crons are not allowed for teammate agents ' +
+        '(the agentId becomes invalid after restart, causing orphan tasks that cannot be cleaned up)';
+    }
+
     // 验证 cron 表达式
     const valid = validateCronExpression(cron);
     if (valid !== true) return `[CronCreate] ${valid}`;
@@ -248,6 +256,21 @@ export const cronDeleteTool: ToolRegistration = {
     const taskId = String(args['taskId'] ?? '').trim();
     if (!taskId) return '[CronDelete] taskId is required';
 
+    // A29: agentId ownership check — mirrors CronDeleteTool.ts L71-79
+    // Teammate agents can only delete their own tasks (防止跨 agent 删除竞态)
+    const { getCronTask } = await import('../../cron/cron-tasks.js');
+    const task = getCronTask(taskId);
+    if (task) {
+      const currentAgentId = process.env['AGENT_ID'] ?? process.env['__UAGENT_AGENT_ID'];
+      if (task.agentId && currentAgentId && task.agentId !== currentAgentId) {
+        return JSON.stringify({
+          taskId,
+          status: 'forbidden',
+          message: `Cannot delete: task "${taskId}" is owned by agent "${task.agentId}"`,
+        });
+      }
+    }
+
     const deleted = removeCronTask(taskId);
     if (!deleted) {
       return JSON.stringify({ taskId, status: 'not_found', message: `No task found with ID "${taskId}"` });
@@ -285,7 +308,7 @@ export const cronListTool: ToolRegistration = {
 
     // F28: lazy expiry cleanup — remove tasks older than DEFAULT_MAX_AGE_DAYS
     const now = Date.now();
-    const tasks = allTasks.filter((t) => {
+    const activeTasks = allTasks.filter((t) => {
       const age = now - t.createdAt;
       if (age > DEFAULT_MAX_AGE_MS) {
         removeCronTask(t.id);
@@ -293,6 +316,13 @@ export const cronListTool: ToolRegistration = {
       }
       return true;
     });
+
+    // A29: teammate filter — mirrors CronListTool.ts L67-69
+    // Teammates only see their own tasks; team lead sees all
+    const currentAgentId = process.env['AGENT_ID'] ?? process.env['__UAGENT_AGENT_ID'];
+    const tasks = currentAgentId
+      ? activeTasks.filter((t) => !t.agentId || t.agentId === currentAgentId)
+      : activeTasks;
 
     if (tasks.length === 0) {
       return JSON.stringify({ tasks: [], count: 0, maxJobs: MAX_CRON_JOBS });

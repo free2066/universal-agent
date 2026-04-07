@@ -106,6 +106,17 @@ program
     // ── Read config defaults (CLI flags take precedence over config file) ──
     const cfg = loadConfig();
 
+    // ── B29: Fetch remote config on startup (fail-open, only if UAGENT_REMOTE_CONFIG_URL set) ──
+    // Mirrors claude-code remoteManagedSettings startup path (cache-first + If-None-Match ETag)
+    let resolvedCfg = cfg;
+    try {
+      const { fetchRemoteConfigOnce, applyRemoteConfig } = await import('./remote-config.js');
+      const remoteSettings = await fetchRemoteConfigOnce();
+      if (remoteSettings && Object.keys(remoteSettings).length > 0) {
+        resolvedCfg = applyRemoteConfig(cfg as Record<string, unknown>, remoteSettings) as typeof cfg;
+      }
+    } catch { /* B29: non-fatal — remote config is best-effort */ }
+
     // ── Resolve --plan-model / --small-model / --vision-model ──────────────
     // These map to model-manager pointers: task, quick/compact, and a env hint
     if (options.planModel) modelManager.setPointer('task', options.planModel);
@@ -167,7 +178,7 @@ program
     // Priority: CLI --tools > project config.tools > global config.tools
     // loadConfig() already merges project + global (project wins), so cfg.tools
     // represents the merged baseline; CLI --tools is applied on top.
-    let resolvedDisabledTools: Record<string, boolean> | undefined = cfg.tools;
+    let resolvedDisabledTools: Record<string, boolean> | undefined = resolvedCfg.tools;
     if (options.tools) {
       let cliTools: Record<string, boolean>;
       try {
@@ -177,14 +188,14 @@ program
         process.exit(1);
       }
       // Merge: CLI overrides config (CLI wins for same keys)
-      resolvedDisabledTools = { ...(cfg.tools ?? {}), ...cliTools };
+      resolvedDisabledTools = { ...(resolvedCfg.tools ?? {}), ...cliTools };
     }
 
     // Model: CLI flag > config file > auto-select
     // Note: wanqing/* model names in config are CodeFlicker-internal service-discovery IDs.
     // uagent has its own wanqing endpoint detector (autoSelectFreeModel) that finds the
     // correct ep-* endpoint at runtime — skip the config value and let it auto-detect.
-    const cfgModel = cfg.model;
+    const cfgModel = resolvedCfg.model;
     const skipCfgModel = typeof cfgModel === 'string' && cfgModel.startsWith('wanqing/');
     let resolvedModel = options.model ?? (skipCfgModel ? '' : cfgModel ?? '');
     if (!resolvedModel) {
@@ -195,10 +206,10 @@ program
     }
 
     // Other options resolved from config
-    const resolvedSystemPrompt   = options.systemPrompt  ?? cfg.systemPrompt;
-    const resolvedLanguage       = options.language       ?? cfg.language;
-    const resolvedApprovalMode   = options.approvalMode   ?? cfg.approvalMode  ?? 'default';
-    const resolvedThinkingLevel  = (options.thinking      ?? cfg.thinkingLevel) as
+    const resolvedSystemPrompt   = options.systemPrompt  ?? resolvedCfg.systemPrompt;
+    const resolvedLanguage       = options.language       ?? resolvedCfg.language;
+    const resolvedApprovalMode   = options.approvalMode   ?? resolvedCfg.approvalMode  ?? 'default';
+    const resolvedThinkingLevel  = (options.thinking      ?? resolvedCfg.thinkingLevel) as
       import('./config-store.js').ThinkingLevelExtended | undefined;
 
     // ── Resolve --output-style → appendSystemPrompt ─────────────────────────
