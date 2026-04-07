@@ -785,7 +785,12 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
       // Context editing
       const cleared = editContextIfNeeded(history);
       if (cleared > 0) {
-        onChunk(`\n✂️  Cleared ${cleared} old tool result(s) to free context space\n`);
+        // C34: 展示被清除工具的名称列表，帮助用户了解哪些信息被释放
+        const clearedNames = (editContextIfNeeded as { lastClearedToolNames?: string[] }).lastClearedToolNames;
+        const namesSuffix = clearedNames && clearedNames.length > 0
+          ? ` (${clearedNames.join(', ')}) — re-run tools if needed`
+          : ' to free context space';
+        onChunk(`\n✂️  Cleared ${cleared} old tool result(s)${namesSuffix}\n`);
       }
 
       await triggerHook(createHookEvent('agent', 'turn', {

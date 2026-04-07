@@ -12,6 +12,55 @@ import { fireFileChanged, maybeFireCwdChanged } from '../../hooks.js';
 
 // ─── Path Safety Helper ──────────────────────────────────────────────────────
 /**
+ * E34: _quickCompileCheck — 轻量编译校验（同步，10s超时）
+ *
+ * 对 .ts/.tsx 文件：运行 tsc --noEmit（仅检查，不生成文件）
+ * 对 .java 文件：运行 javac 单文件语法检查
+ *
+ * 设计原则：
+ *   - 仅检查刚修改的文件，不做全量构建
+ *   - 超时 10s 强制返回（不阻塞 tool 结果）
+ *   - fail-open：编译工具不存在时静默跳过
+ *   - 返回 null = 无错误；返回字符串 = 摘要（最多3条）
+ */
+function _quickCompileCheck(filePath: string, ext: string): string | null {
+  const TIMEOUT_MS = 10_000;
+  try {
+    if (ext === '.java') {
+      // Java: 仅语法检查（-nowarn -proc:none 快速模式）
+      execSync(`javac -nowarn -proc:none "${filePath}" 2>&1`, {
+        timeout: TIMEOUT_MS,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return null; // no errors
+    }
+
+    if (ext === '.ts' || ext === '.tsx') {
+      // TypeScript: tsc --noEmit 仅检查目标文件
+      // --allowJs 防止 .js 报错, --skipLibCheck 跳过 d.ts 检查（速度优先）
+      const output = execSync(
+        `npx tsc --noEmit --strict false --skipLibCheck --allowJs --isolatedModules "${filePath}" 2>&1 || true`,
+        { timeout: TIMEOUT_MS, cwd: process.cwd(), encoding: 'utf-8' },
+      );
+      if (!output.trim()) return null;
+      // 返回前3行错误
+      const lines = output.trim().split('\n').slice(0, 3);
+      return `⚠️  TypeScript: ${lines.join(' | ')}`;
+    }
+  } catch (e) {
+    const errOutput = (e as { stdout?: string; stderr?: string; message?: string }).stdout
+      ?? (e as { stderr?: string }).stderr
+      ?? (e as Error).message ?? '';
+    if (!errOutput.trim()) return null;
+    const lines = errOutput.trim().split('\n').slice(0, 3);
+    if (ext === '.java') return `⚠️  Java compile: ${lines.join(' | ')}`;
+    return `⚠️  TS check: ${lines.join(' | ')}`;
+  }
+  return null;
+}
+
+
+/**
  * Resolve `userPath` relative to `baseDir` and assert the result stays inside
  * `baseDir` (prevents path-traversal: `../../etc/passwd`, absolute paths, etc.).
  *
@@ -564,7 +613,16 @@ export const editFileTool: ToolRegistration = {
         writeFileSync(filePath, replaced, 'utf-8');
         // G12-1: Fire file_changed hook
         setImmediate(() => { try { fireFileChanged(filePath); } catch { /* non-fatal */ } });
-        return `✓ Edit applied to ${filePath} (replaced ${occurrences} occurrence${occurrences !== 1 ? 's' : ''})`;
+        // B34: diff 摘要展示
+        const oldLines = content.split('\n').length;
+        const newLines = replaced.split('\n').length;
+        const addedLines = Math.max(0, newLines - oldLines);
+        const removedLines = Math.max(0, oldLines - newLines);
+        const changedChars = Math.abs(replaced.length - content.length);
+        const diffSummary = (addedLines === 0 && removedLines === 0)
+          ? `${changedChars} chars changed`
+          : `+${addedLines} -${removedLines} lines, ${changedChars} chars`;
+        return `✓ Edit applied to ${filePath} (${occurrences} occurrence${occurrences !== 1 ? 's' : ''}, ${diffSummary})`;
       }
 
       // ── single-occurrence mode (default) ─────────────────────────────────────
@@ -588,7 +646,26 @@ export const editFileTool: ToolRegistration = {
         writeFileSync(filePath, result, 'utf-8');
         // G12-1: Fire file_changed hook
         setImmediate(() => { try { fireFileChanged(filePath); } catch { /* non-fatal */ } });
-        return `✓ Edit applied to ${filePath}`;
+        // B34: diff 摘要展示（+N -M lines, Kchars changed）
+        const oldLines = content.split('\n').length;
+        const newLines = result.split('\n').length;
+        const addedLines = Math.max(0, newLines - oldLines);
+        const removedLines = Math.max(0, oldLines - newLines);
+        const changedChars = Math.abs(result.length - content.length);
+        const diffSummary = (addedLines === 0 && removedLines === 0)
+          ? `${changedChars} chars changed`
+          : `+${addedLines} -${removedLines} lines, ${changedChars} chars`;
+        // E34: 异步编译校验 hook（.java/.ts/.tsx，非阻塞，5s超时）
+        // fail-open：校验失败不阻塞 tool 结果
+        const fileExt = extname(filePath).toLowerCase();
+        let compileNote = '';
+        if (['.ts', '.tsx', '.java'].includes(fileExt)) {
+          try {
+            const checkResult = _quickCompileCheck(filePath, fileExt);
+            if (checkResult) compileNote = `\n  ${checkResult}`;
+          } catch { /* E34: non-fatal */ }
+        }
+        return `✓ Edit applied to ${filePath}\n  (${diffSummary})${compileNote}`;
       }
 
       return (

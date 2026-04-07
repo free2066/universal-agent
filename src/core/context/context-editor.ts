@@ -47,10 +47,11 @@ const CLEARED_PLACEHOLDER = '[cleared]';
  * Returns the number of tool results cleared.
  */
 
-/** Age threshold for microcompact — lowered to 15min for high-frequency tasks (code review, refactor).
- *  Original: 60min. Reduced to prevent context buildup during long-running sessions.
+/** Age threshold for microcompact — C34: 提升到 30min（从 15min），减少过早清除 tool results 导致的信息丢失。
+ *  日志分析：复杂 Java 代码重构会话中，15min 阈值导致大量 Read 结果被清，LLM 被迫重复读取文件。
+ *  可通过 AGENT_MICROCOMPACT_AGE_MS 环境变量覆盖（单位：毫秒）。
  */
-const MICROCOMPACT_AGE_MS = parseInt(process.env.AGENT_MICROCOMPACT_AGE_MS ?? String(15 * 60 * 1000), 10);
+const MICROCOMPACT_AGE_MS = parseInt(process.env.AGENT_MICROCOMPACT_AGE_MS ?? String(30 * 60 * 1000), 10);
 
 /** Only microcompact tool results over this char count (small results stay).
  *  Lowered from 500 → 200 to catch medium-sized LS/Grep results earlier.
@@ -93,7 +94,7 @@ export function microcompact(history: Message[]): number {
     if (isStaleByTime || isStaleByPosition) {
       history[i] = {
         ...msg,
-        content: `[microcompact: tool result cleared after ${Math.round((now - (msgTs ?? now)) / 60000)}min — re-run tool if needed]`,
+        content: `[cleared: ${toolName} result — re-run tool if needed (age: ${Math.round((now - (msgTs ?? now)) / 60000)}min)]`,
       };
       cleared++;
     }
@@ -214,6 +215,8 @@ function findClearableCandidates(
 }
 
 /**
+ * C34: editContextIfNeeded — 返回清除摘要（包含工具名列表）供调用方显示更有意义的消息。
+ *
  * Edit conversation history in-place by clearing old tool results.
  *
  * @param history  Mutable message array
@@ -247,20 +250,49 @@ export function editContextIfNeeded(
 
   let clearedTokens = 0;
   let clearedCount = 0;
+  // C34: track which tool names were cleared for user-facing message
+  const clearedToolNames: string[] = [];
 
   for (const candidate of candidates) {
     if (cfg.clearAtLeast > 0 && clearedTokens >= cfg.clearAtLeast) break;
 
+    const msg = history[candidate.index]!;
+    const originalContent = typeof msg.content === 'string' ? msg.content : '';
+
+    // D34: 清除前将 tool result 写入持久化存储（同步写，fail-open）
+    // 仅对 >500chars 的有意义内容写入；LLM 可通过 Read 工具按路径恢复。
+    // Mirrors claude-code toolResultStorage.ts + context-editor clearing pattern.
+    let persistHint = '';
+    if (originalContent.length > 500) {
+      try {
+        const { mkdirSync: _mkdir, writeFileSync: _write } = require('fs') as typeof import('fs');
+        const { join: _join, resolve: _resolve } = require('path') as typeof import('path');
+        const toolResultsDir = _resolve(process.env['HOME'] ?? '~', '.uagent', 'tool-results');
+        const safeId = (msg.toolCallId ?? candidate.toolName)
+          .replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+        _mkdir(toolResultsDir, { recursive: true });
+        const filePath = _join(toolResultsDir, `${safeId}_cleared.txt`);
+        _write(filePath, originalContent, 'utf-8');
+        persistHint = `\n  Full content saved: ${filePath} (use Read tool to retrieve)`;
+      } catch { /* D34: fail-open */ }
+    }
+
     history[candidate.index] = {
-      ...history[candidate.index],
-      content: CLEARED_PLACEHOLDER,
+      ...msg,
+      content: `[cleared: ${candidate.toolName} result — re-run tool if needed${persistHint}]`,
     };
     clearedTokens += candidate.estimatedTokens;
     clearedCount++;
+    // C34: accumulate distinct tool names (limit to 5 for readability)
+    if (!clearedToolNames.includes(candidate.toolName) && clearedToolNames.length < 5) {
+      clearedToolNames.push(candidate.toolName);
+    }
   }
 
   log.info(
-    `Cleared ${clearedCount} tool results (~${clearedTokens} tokens freed)`,
+    `Cleared ${clearedCount} tool results (~${clearedTokens} tokens freed): ${clearedToolNames.join(', ')}`,
   );
+  // C34: store cleared tool names for callers to surface in UI
+  (editContextIfNeeded as { lastClearedToolNames?: string[] }).lastClearedToolNames = clearedToolNames;
   return clearedCount;
 }

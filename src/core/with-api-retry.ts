@@ -92,6 +92,35 @@ function parseRetryAfterMs(err: unknown): number | null {
 }
 
 /**
+ * A34: waitWithCountdown — 带倒计时的等待函数
+ *
+ * 每 5s 向用户输出剩余等待时间（\r 同行覆盖）。
+ * 避免 "waiting 30s" 后用户完全不知道进度的问题。
+ */
+async function waitWithCountdown(
+  ms: number,
+  onProgress: (msg: string) => void,
+): Promise<void> {
+  const TICK_MS = 5_000;
+  let remaining = ms;
+  while (remaining > TICK_MS) {
+    await new Promise<void>((r) => {
+      const t = setTimeout(r, TICK_MS);
+      if (typeof t.unref === 'function') t.unref();
+    });
+    remaining -= TICK_MS;
+    const remSec = Math.ceil(remaining / 1000);
+    onProgress(`\r  ⏳ ${remSec}s remaining…   `);
+  }
+  if (remaining > 0) {
+    await new Promise<void>((r) => {
+      const t = setTimeout(r, remaining);
+      if (typeof t.unref === 'function') t.unref();
+    });
+  }
+}
+
+/**
  * C20: withApiRetry — wrap an LLM call with 529/429 retry logic.
  *
  * Usage:
@@ -111,6 +140,7 @@ export async function withApiRetry<T>(
 ): Promise<T> {
   let attempt529 = 0;
   let attempt429 = 0;
+  // A34: startMs 用于计算本次重试总等待时间（不是 epoch 秒）
   const startMs = Date.now();
 
   // eslint-disable-next-line no-constant-condition
@@ -140,36 +170,34 @@ export async function withApiRetry<T>(
           : `(${attempt529}/${MAX_529_RETRIES})`;
         onRetryMessage?.(`\n⏳ Claude is overloaded — retrying in ${Math.round(actualDelay / 1000)}s… ${retryLabel}\n`);
 
-        await new Promise<void>((resolve) => {
-          const t = setTimeout(resolve, actualDelay);
-          if (typeof t.unref === 'function') t.unref();
-        });
+        await waitWithCountdown(actualDelay, onRetryMessage ?? (() => {}));
+        onRetryMessage?.(`\r  ✅ Retrying now…\n`);
         continue;
       }
 
       // ── 429 Rate Limit handling ─────────────────────────────────────────
       if (isRateLimitError(err)) {
         attempt429++;
-        const retryAfterMs = parseRetryAfterMs(err) ?? Math.min(30_000 * attempt429, 300_000);
+        // A34: 优先读取 retry-after 响应头，fallback 到指数退避（max 5min）
+        const retryAfterMs = parseRetryAfterMs(err) ?? Math.min(30_000 * Math.pow(1.5, attempt429 - 1), 300_000);
         const waitSec = Math.round(retryAfterMs / 1000);
-        const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+        // A34: BUG 修复 — elapsed 是从本次调用开始的已等待总秒数（不是 epoch 时间戳）
+        const totalElapsedSec = Math.round((Date.now() - startMs) / 1000);
 
         if (attempt429 === 1) {
           onRetryMessage?.(
-            `\n⏳ Rate-limited by API — waiting ${waitSec}s before retry` +
-            ` (Press Esc to cancel)\n`,
+            `\n⏳ Rate-limited — waiting ${waitSec}s (press Esc to cancel)\n`,
           );
         } else {
           onRetryMessage?.(
-            `\n⏳ Rate-limited — waiting ${waitSec}s… ` +
-            `(attempt ${attempt429}, elapsed ${elapsedSec}s)\n`,
+            `\n⏳ Rate-limited again — waiting ${waitSec}s` +
+            ` (attempt ${attempt429}, ${totalElapsedSec}s elapsed total)\n`,
           );
         }
 
-        await new Promise<void>((resolve) => {
-          const t = setTimeout(resolve, retryAfterMs);
-          if (typeof t.unref === 'function') t.unref();
-        });
+        // A34: 倒计时等待（每5s更新剩余时间）
+        await waitWithCountdown(retryAfterMs, onRetryMessage ?? (() => {}));
+        onRetryMessage?.(`\r  ✅ Resuming after ${waitSec}s rate-limit wait\n`);
         continue;
       }
 
