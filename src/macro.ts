@@ -12,11 +12,30 @@ declare global {
 }
 
 // Runtime fallback when MACRO is not injected by Bun build
-// This file must be imported early, before any MACRO usage
-;(globalThis as any).MACRO ??= {
-  VERSION: '0.5.23',
-  VERSION_CHANGELOG: '',
-  ISSUES_EXPLAINER: 'visit https://github.com/free2066/universal-agent/issues',
-}
-
-export {}
+// Read version dynamically from package.json to avoid stale hardcoded value
+;(function initMACRO() {
+  if ((globalThis as any).MACRO) return
+  let version = '0.5.25'
+  try {
+    // In Bun runtime, __dirname is available
+    const { readFileSync } = require('fs')
+    const { resolve } = require('path')
+    // Try to read package.json next to the dist file
+    const pkgPaths = [
+      resolve(__dirname, '../../package.json'),
+      resolve(__dirname, '../package.json'),
+      resolve(process.cwd(), 'package.json'),
+    ]
+    for (const p of pkgPaths) {
+      try {
+        const pkg = JSON.parse(readFileSync(p, 'utf8'))
+        if (pkg.version) { version = pkg.version; break }
+      } catch {}
+    }
+  } catch {}
+  ;(globalThis as any).MACRO = {
+    VERSION: version,
+    VERSION_CHANGELOG: '',
+    ISSUES_EXPLAINER: 'visit https://github.com/free2066/universal-agent/issues',
+  }
+})()
