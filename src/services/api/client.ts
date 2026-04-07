@@ -1,6 +1,7 @@
 // @ts-nocheck
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
+import { MultiModelAnthropicAdapter, isNonAnthropicModel } from './multiModelAdapter.js'
 import type { GoogleAuth } from 'google-auth-library'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
@@ -99,6 +100,14 @@ export async function getAnthropicClient({
   fetchOverride?: ClientOptions['fetch']
   source?: string
 }): Promise<Anthropic> {
+  // ── UA Multi-Model Router ─────────────────────────────────────────────────
+  // If the active model is not a native Anthropic model (e.g. OpenAI/Gemini/
+  // Ollama/万擎), route to the MultiModelAnthropicAdapter instead.
+  const resolvedModel = model ?? process.env.ANTHROPIC_MODEL ?? ''
+  if (isNonAnthropicModel(resolvedModel)) {
+    return new MultiModelAnthropicAdapter(resolvedModel) as unknown as Anthropic
+  }
+  // ── /UA Multi-Model Router ────────────────────────────────────────────────
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP

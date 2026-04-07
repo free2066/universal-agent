@@ -5,6 +5,81 @@ import '../macro.js';
 // eslint-disable-next-line custom-rules/no-top-level-side-effects
 process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
+// ── UA Multi-Model Bootstrap ──────────────────────────────────────────────────
+// Read ~/.uagent/models.json and set ANTHROPIC_MODEL to the active main model
+// so CC's engine routes to the correct provider via MultiModelAnthropicAdapter.
+// Also loads per-profile apiKey and baseURL into the correct env vars.
+;(function bootstrapUAModel() {
+  try {
+    const { readFileSync, existsSync } = require('fs')
+    const { resolve } = require('path')
+    const configFile = resolve(process.env.HOME || '~', '.uagent', 'models.json')
+    if (!existsSync(configFile)) return
+
+    const config = JSON.parse(readFileSync(configFile, 'utf8'))
+    const mainModel = config?.pointers?.main
+    if (!mainModel) return
+
+    // Set the model for CC engine
+    if (!process.env.ANTHROPIC_MODEL) {
+      process.env.ANTHROPIC_MODEL = mainModel
+    }
+
+    const isAnthropicModel =
+      mainModel.startsWith('claude-') || mainModel.includes('anthropic.claude')
+
+    if (!isAnthropicModel) {
+      // Suppress Anthropic auth requirement
+      if (!process.env.ANTHROPIC_API_KEY) {
+        process.env.ANTHROPIC_API_KEY = 'ua-multi-model-placeholder'
+      }
+
+      // Load per-profile credentials if the profile has them
+      const profiles: any[] = config.profiles || []
+      const profile = profiles.find((p: any) => p.name === mainModel || p.modelName === mainModel)
+      if (profile) {
+        const { provider, apiKey, baseURL } = profile
+
+        // Anthropic
+        if ((provider === 'anthropic' || mainModel.startsWith('claude'))) {
+          if (apiKey && !process.env.ANTHROPIC_API_KEY_REAL) {
+            process.env.ANTHROPIC_API_KEY = apiKey
+          }
+        }
+        // Gemini
+        else if (provider === 'gemini' || mainModel.startsWith('gemini')) {
+          if (apiKey && !process.env.GEMINI_API_KEY) process.env.GEMINI_API_KEY = apiKey
+        }
+        // OpenAI / Wanqing ep-* / DeepSeek / Moonshot / Qwen / Mistral / Groq / SiliconFlow / OpenRouter
+        else {
+          if (apiKey) {
+            if (!process.env.WQ_API_KEY) process.env.WQ_API_KEY = apiKey
+            if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = apiKey
+          }
+          if (baseURL && !process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = baseURL
+        }
+      }
+
+      // Wanqing ep-* models: load global WQ config if no per-profile key
+      if ((mainModel.startsWith('ep-') || mainModel.startsWith('api-')) &&
+          !process.env.WQ_API_KEY && !process.env.OPENAI_API_KEY) {
+        const globalKey = config.wqApiKey || config.openaiApiKey
+        const globalBase = config.openaiBaseUrl || config.wqBaseUrl
+        if (globalKey) {
+          process.env.WQ_API_KEY = globalKey
+          process.env.OPENAI_API_KEY = globalKey
+        }
+        if (globalBase && !process.env.OPENAI_BASE_URL) {
+          process.env.OPENAI_BASE_URL = globalBase
+        }
+      }
+    }
+  } catch (_e) {
+    // silently ignore config read errors
+  }
+})()
+// ── /UA Multi-Model Bootstrap ─────────────────────────────────────────────────
+
 // Set max heap size for child processes in CCR environments
 // eslint-disable-next-line custom-rules/no-top-level-side-effects, custom-rules/no-process-env-top-level, custom-rules/safe-env-boolean-check
 if (process.env.CLAUDE_CODE_REMOTE === 'true') {
