@@ -86,6 +86,29 @@ export function App({
   // Keep ref in sync with state
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // ── Streaming throttle buffer ─────────────────────────────────────────────
+  // Accumulate streaming chunks in a ref and flush to state at most once per
+  // STREAM_FLUSH_MS. This prevents a full Ink re-render on every single chunk,
+  // eliminating the "flicker" visible during long streaming responses.
+  const STREAM_FLUSH_MS = 80;
+  const streamBufRef = useRef('');
+  const streamFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushStreamBuf = useCallback(() => {
+    streamFlushTimer.current = null;
+    const buf = streamBufRef.current;
+    if (!buf) return;
+    streamBufRef.current = '';
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.role === 'assistant') {
+        return [...prev.slice(0, -1), { ...last, content: last.content + buf }];
+      }
+      return [...prev, { role: 'assistant' as const, content: buf, timestamp: new Date().toISOString() }];
+    });
+    setMsgScrollOffset(0);
+  }, []);
   // Scroll offset for virtualized message list (0=latest, higher=older)
   const [msgScrollOffset, setMsgScrollOffset] = useState(0);
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([]);
@@ -203,19 +226,47 @@ export function App({
   // ── Helper: append message ──────────────────────────────────────────────
   const appendMessage = useCallback((role: ChatMessage['role'], text: string) => {
     if (!text.trim()) return;
+
+    // Assistant streaming chunks: buffer and throttle-flush to avoid per-chunk re-renders
+    if (role === 'assistant') {
+      streamBufRef.current += text;
+      if (!streamFlushTimer.current) {
+        streamFlushTimer.current = setTimeout(flushStreamBuf, STREAM_FLUSH_MS);
+      }
+      return;
+    }
+
+    // Non-assistant (user, system, tool): flush any pending stream buf first, then append immediately
+    if (streamBufRef.current) {
+      if (streamFlushTimer.current) {
+        clearTimeout(streamFlushTimer.current);
+        streamFlushTimer.current = null;
+      }
+      flushStreamBuf();
+    }
+
     setMessages((prev) => {
       const last = prev[prev.length - 1];
-      if (last?.role === role && role === 'assistant') {
+      if (last?.role === role) {
         return [...prev.slice(0, -1), { ...last, content: last.content + text }];
       }
       return [...prev, { role, content: text, timestamp: new Date().toISOString() }];
     });
-    // Auto-scroll to bottom when new message arrives
     setMsgScrollOffset(0);
-  }, []);
+  }, [flushStreamBuf]);
 
   const appendAssistant = useCallback((text: string) => appendMessage('assistant', text), [appendMessage]);
   const appendSystem = useCallback((text: string) => appendMessage('system', text), [appendMessage]);
+
+  // Flush pending stream buf and stop streaming — call instead of bare stopStreaming()
+  const stopStreaming = useCallback(() => {
+    if (streamFlushTimer.current) {
+      clearTimeout(streamFlushTimer.current);
+      streamFlushTimer.current = null;
+    }
+    flushStreamBuf();
+    stopStreaming();
+  }, [flushStreamBuf]);
 
   // ── Slash command handler — real implementations, no console.log capture ──
   const handleSlashCommand = useCallback(async (input: string) => {
@@ -1332,7 +1383,7 @@ export function App({
           appendSystem(`Brainstorm failed: ${err instanceof Error ? err.message : String(err)}`);
         });
       } finally {
-        setIsStreaming(false);
+        stopStreaming();
       }
       return;
     }
@@ -1595,12 +1646,12 @@ export function App({
           if (!diff.trim()) diff = _inkExec('git diff HEAD', { cwd: process.cwd(), encoding: 'utf-8', timeout: 10_000 }) as string;
         } catch (e) {
           appendSystem(`/commit: git error — ${e instanceof Error ? e.message : String(e)}`);
-          setIsStreaming(false);
+          stopStreaming();
           return;
         }
         if (!diff.trim()) {
           appendSystem('/commit: No changes to commit (git diff is empty).');
-          setIsStreaming(false);
+          stopStreaming();
           return;
         }
         // Generate commit message
@@ -1626,7 +1677,7 @@ export function App({
       } catch (e) {
         appendSystem(`/commit error: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
-        setIsStreaming(false);
+        stopStreaming();
       }
       return;
     }
@@ -1654,7 +1705,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
       } catch (e) {
         appendSystem(`/security-review error: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
-        setIsStreaming(false);
+        stopStreaming();
       }
       return;
     }
@@ -1883,7 +1934,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
         appendSystem(`Plan generation failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         abortRef.current = null;
-        setIsStreaming(false);
+        stopStreaming();
         setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
       }
       return;
@@ -1911,7 +1962,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
         appendSystem(`Plan execution failed: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         abortRef.current = null;
-        setIsStreaming(false);
+        stopStreaming();
         setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
       }
       return;
@@ -2111,7 +2162,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
               appendSystem(`Skill error: ${e instanceof Error ? e.message : String(e)}`);
             });
           } finally {
-            setIsStreaming(false);
+            stopStreaming();
           }
           return;
         }
@@ -2403,7 +2454,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
           }).catch(() => {});
         } catch { /* non-fatal */ }
         abortRef.current = null;
-        setIsStreaming(false);
+        stopStreaming();
         setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
         // Flush buffered output to log
         sessionLogger.current.flushOutput();
@@ -2457,7 +2508,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
       abortRef.current.abort();
       abortRef.current = null;
       appendAssistant('\n[aborted]');
-      setIsStreaming(false);
+      stopStreaming();
       setStatusInfo((s) => ({ ...s, isThinking: 'none' }));
     }
   }, [appendAssistant]);

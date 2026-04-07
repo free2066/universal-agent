@@ -75,10 +75,6 @@ export function PromptInput({
   // Guard: prevent double-submit from rapid key events
   const lastSubmitTime = useRef(0);
 
-  // Paste batching: buffer for coalescing rapid character input
-  const pasteBuffer = useRef('');
-  const pasteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const promptColor = MODE_COLORS[mode] ?? 'cyan';
 
   // Update inline suggestion based on current value
@@ -287,20 +283,12 @@ export function PromptInput({
 
     // Regular character input — ignore control/meta sequences
     if (input && !key.ctrl && !key.meta) {
-      // Paste batching: defer update to coalesce rapid character bursts
-      pasteBuffer.current += input;
-      if (pasteTimer.current) clearTimeout(pasteTimer.current);
-      pasteTimer.current = setTimeout(() => {
-        const batch = pasteBuffer.current;
-        pasteBuffer.current = '';
-        pasteTimer.current = null;
-        setValue((prev) => {
-          const newVal = prev + batch;
-          updateSuggestion(newVal);
-          onValueChange?.(newVal);
-          return newVal;
-        });
-      }, 16); // ~1 frame, batches rapid paste events
+      setValue((prev) => {
+        const newVal = prev + input;
+        updateSuggestion(newVal);
+        onValueChange?.(newVal);
+        return newVal;
+      });
     }
   });
 
