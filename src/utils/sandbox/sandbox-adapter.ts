@@ -10,18 +10,23 @@ export type SandboxDependencyCheck = { name: string; check: () => boolean }
 export type SandboxViolationEvent = { type: string; command: string }
 
 export class SandboxManager {
-  // Platform & availability
+  // ── Platform & availability ────────────────────────────────────────────────
   static isSupportedPlatform(): boolean { return false }
   static isPlatformInEnabledList(): boolean { return false }
   static isSandboxingEnabled(): boolean { return false }
+  static isSandboxRequired(): boolean { return false }
   static areSandboxSettingsLockedByPolicy(): boolean { return false }
+  static getSandboxUnavailableReason(): string | null { return null }
+  static getSandboxRequiredReason(): string | null { return null }
 
-  // Commands
+  // ── Commands ───────────────────────────────────────────────────────────────
   static areUnsandboxedCommandsAllowed(): boolean { return true }
   static isAutoAllowBashIfSandboxedEnabled(): boolean { return false }
   static isUnsandboxedCommandAllowed(_cmd: string): boolean { return true }
+  static getExcludedCommands(): string[] { return [] }
+  static addToExcludedCommands(_cmd: string): void {}
 
-  // Profile & config
+  // ── Profile & config ───────────────────────────────────────────────────────
   static getSandboxProfile(): null { return null }
   static shouldAllowManagedSandboxDomainsOnly(): boolean { return false }
   static getFsReadConfig(): { allowOnly: string[]; denyWithinAllow: string[] } {
@@ -36,12 +41,20 @@ export class SandboxManager {
   static getProxyPort(): null { return null }
   static getLinuxGlobPatternWarnings(): string[] { return [] }
 
-  // Lifecycle
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
   static initialize(): void {}
   static async waitForNetworkInitialization(): Promise<void> {}
   static async wrapWithSandbox(cmd: string, _opts?: unknown): Promise<string> { return cmd }
   static cleanupAfterCommand(): void {}
+  static shutdown(): void {}
 
-  // Diagnostics
+  // ── Diagnostics ────────────────────────────────────────────────────────────
   static checkDependencies(): { errors: string[] } { return { errors: [] } }
+  static getDiagnostics(): Record<string, unknown> { return {} }
+  static getViolations(): SandboxViolationEvent[] { return [] }
+  static clearViolations(): void {}
+
+  // ── Event handlers ─────────────────────────────────────────────────────────
+  static onViolation(_cb: (evt: SandboxViolationEvent) => void): void {}
+  static offViolation(_cb: (evt: SandboxViolationEvent) => void): void {}
 }
