@@ -91,7 +91,7 @@ export function App({
   // Accumulate streaming chunks in a ref and flush to state at most once per
   // STREAM_FLUSH_MS. This prevents a full Ink re-render on every single chunk,
   // eliminating the "flicker" visible during long streaming responses.
-  const STREAM_FLUSH_MS = 80;
+  const STREAM_FLUSH_MS = 150;
   const streamBufRef = useRef('');
   const streamFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -128,6 +128,7 @@ export function App({
   const abortRef = useRef<AbortController | null>(null);
   const toolSeqRef = useRef(0);
   const toolStartRef = useRef<Map<string, number>>(new Map());
+  const toolArgsRef = useRef<Map<string, string>>(new Map()); // seqKey → argsStr summary
   const isSubmittingRef = useRef(false); // debounce guard
 
   // ── Thinking level cycle (Ctrl+T) ────────────────────────────────────────
@@ -2392,6 +2393,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
                 ? bestVal.slice(0, maxArgLen) + (truncated ? '…' : '')
                 : '';
               sessionLogger.current.logToolStart(name, args as Record<string, unknown>);
+              toolArgsRef.current.set(seqKey, argsStr);
               setToolCalls((prev) => [
                 ...prev,
                 { id: seqKey, name, args: argsStr, status: 'running' },
@@ -2404,6 +2406,8 @@ Begin with a scope summary then list findings. If none found, say so.`;
             onToolEnd: (name, success, durationMs, errorMsg) => {
               const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
               if (seqKey) toolStartRef.current.delete(seqKey);
+              const argsSummary = seqKey ? (toolArgsRef.current.get(seqKey) ?? '') : '';
+              if (seqKey) toolArgsRef.current.delete(seqKey);
               sessionLogger.current.logToolEnd(name, success, durationMs ?? 0, errorMsg);
               setToolCalls((prev) =>
                 prev.map((tc) =>
@@ -2415,9 +2419,12 @@ Begin with a scope summary then list findings. If none found, say so.`;
               const dur = durationMs !== undefined
                 ? durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
                 : '';
+              const cols = process.stdout.columns ?? 120;
+              const maxSummary = Math.max(0, cols - name.length - 20);
+              const summary = argsSummary.length > maxSummary ? argsSummary.slice(0, maxSummary) + '…' : argsSummary;
               const resultLine = success
-                ? `↳ ${name} done${dur ? ` (${dur})` : ''}.`
-                : `[failed] ↳ ${name} failed${dur ? ` (${dur})` : ''}${errorMsg ? `: ${errorMsg.slice(0, 120)}` : ''}.`;
+                ? `↳ ${name}${summary ? `(${summary})` : ''} done${dur ? ` (${dur})` : ''}.`
+                : `[failed] ↳ ${name}${summary ? `(${summary})` : ''} failed${dur ? ` (${dur})` : ''}${errorMsg ? `: ${errorMsg.slice(0, 120)}` : ''}.`;
               appendSystem(resultLine);
             },
           },

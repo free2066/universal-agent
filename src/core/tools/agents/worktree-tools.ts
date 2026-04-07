@@ -538,18 +538,53 @@ export const worktreeExitTool: ToolRegistration = {
     name: 'worktree_exit',
     description:
       'Exit the current git worktree and return to the original working directory. ' +
-      'Clears worktree session state and rebuilds context for the original directory.',
+      'Clears worktree session state and rebuilds context for the original directory. ' +
+      'Use force=true to exit even if there are uncommitted changes.',
     parameters: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        force: {
+          type: 'boolean',
+          description: 'Force exit even if there are uncommitted changes (default: false). ' +
+            'By default, exits are blocked when uncommitted changes exist to prevent accidental data loss.',
+        },
+      },
     },
   },
-  handler: async (_args: Record<string, unknown>): Promise<string> => {
+  handler: async (args: Record<string, unknown>): Promise<string> => {
     const originalCwd = process.env['__UAGENT_WORKTREE_ORIGINAL_CWD'];
     const activePath = process.env['__UAGENT_WORKTREE_ACTIVE'];
+    const force = (args.force as boolean | undefined) ?? false;
 
     if (!originalCwd) {
       return 'Not in a worktree session (no active worktree_enter recorded). Current directory: ' + process.cwd();
+    }
+
+    // F32: fail-closed — check for uncommitted changes before exiting
+    // Mirrors claude-code ExitWorktreeTool.ts countWorktreeChanges()
+    if (!force) {
+      try {
+        const wtPath = activePath ?? process.cwd();
+        const result = spawnSync('git', ['status', '--porcelain'], {
+          cwd: wtPath, encoding: 'utf-8',
+        });
+        const changedLines = (result.stdout ?? '').trim().split('\n').filter(Boolean);
+        if (changedLines.length > 0) {
+          const preview = changedLines.slice(0, 5).map((l) => `  ${l}`);
+          const extra = changedLines.length > 5 ? [`  ... and ${changedLines.length - 5} more`] : [];
+          return [
+            `Error: Worktree has ${changedLines.length} uncommitted change(s).`,
+            `Changed files:`,
+            ...preview,
+            ...extra,
+            ``,
+            `Options:`,
+            `  1. Commit your changes: git commit -am "message"`,
+            `  2. Stash changes: git stash`,
+            `  3. Force exit (may lose work): worktree_exit force=true`,
+          ].join('\n');
+        }
+      } catch { /* git not available or not a git repo — proceed without check */ }
     }
 
     if (!existsSync(originalCwd)) {

@@ -270,18 +270,45 @@ let _lastSessionCount = 0;
  *
  * @param domain  当前 agent 域（用于 LLM prompt）
  * @param config  可选门控参数覆盖
+ * @param onProgress D32: 进度回调（Mirrors claude-code makeDreamProgressWatcher）
+ * @param appendSystemMessage D32: 整合完成后向主会话注入通知（Mirrors claude-code appendSystemMessage）
  */
+
+// D32: 进度事件类型（Mirrors claude-code DreamTask interface）
+export type DreamProgressEvent =
+  | { type: 'dream_turn'; text: string }
+  | { type: 'dream_file_touched'; path: string }
+  | { type: 'dream_completed'; filesTouched: string[] }
+  | { type: 'dream_failed'; error: string };
+
+export type DreamProgressCallback = (event: DreamProgressEvent) => void;
+
+// D32: appendSystemMessage 类型（Mirrors claude-code ToolUseContext.appendSystemMessage）
+export type AppendSystemMessageFn = (msg: {
+  content: string;
+  verb?: string;
+  isMemorySaved?: boolean;
+}) => void;
+
 export function executeAutoDream(
   domain: string,
   config: Partial<AutoDreamConfig> = {},
+  onProgress?: DreamProgressCallback,
+  appendSystemMessage?: AppendSystemMessageFn,
 ): void {
   // 异步执行，不阻塞主循环
-  _doAutoDream(domain, { ...DEFAULT_CONFIG, ...config }).catch((err) => {
+  _doAutoDream(domain, { ...DEFAULT_CONFIG, ...config }, onProgress, appendSystemMessage).catch((err) => {
+    onProgress?.({ type: 'dream_failed', error: err instanceof Error ? err.message : String(err) });
     process.stderr.write(`[AutoDream] Unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
   });
 }
 
-async function _doAutoDream(domain: string, config: AutoDreamConfig): Promise<void> {
+async function _doAutoDream(
+  domain: string,
+  config: AutoDreamConfig,
+  onProgress?: DreamProgressCallback,
+  appendSystemMessage?: AppendSystemMessageFn,
+): Promise<void> {
   // A31: use lock file mtime as lastConsolidatedAt (mirrors claude-code consolidationLock.ts)
   const lastConsolidatedAt = readLastConsolidatedAt();
   const state = readDreamState(); // still needed for sessionScanAt / lastSessionCount
@@ -329,8 +356,30 @@ async function _doAutoDream(domain: string, config: AutoDreamConfig): Promise<vo
       return;
     }
 
+    // D32: 进度追踪 — 收集触及的文件路径
+    const touchedPaths: string[] = [];
+
     // LLM 整合
     await consolidateMemories(summaries, domain);
+
+    // D32: 检测整合后写入的文件（DREAM_OUTPUT_FILE）
+    if (existsSync(DREAM_OUTPUT_FILE)) {
+      touchedPaths.push(DREAM_OUTPUT_FILE);
+      onProgress?.({ type: 'dream_file_touched', path: DREAM_OUTPUT_FILE });
+    }
+
+    // D32: 发送完成事件（Mirrors claude-code autoDream.ts 整合完成通知）
+    onProgress?.({ type: 'dream_completed', filesTouched: touchedPaths });
+
+    // D32: appendSystemMessage — 向主会话 transcript 注入整合完成通知
+    // Mirrors claude-code autoDream.ts L238-248 "Improved N memory files"
+    if (appendSystemMessage && touchedPaths.length > 0) {
+      appendSystemMessage({
+        content: `Improved ${touchedPaths.length} memory file(s): ${touchedPaths.map((p) => `\`${p}\``).join(', ')}`,
+        verb: 'Improved',
+        isMemorySaved: true,
+      });
+    }
 
     // 更新 state（session scan 相关字段）— mtime 由 releaseDreamLock 的写入时间自然更新
     writeDreamState({

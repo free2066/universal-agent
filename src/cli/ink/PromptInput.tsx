@@ -293,8 +293,11 @@ export function PromptInput({
 
     // Regular character input — ignore control/meta sequences
     if (input && !key.ctrl && !key.meta) {
+      // 过滤控制字符（粘贴时可能夹带 ANSI 转义序列、\r 等）
+      const sanitized = input.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\r\n?/g, '\n');
+      if (!sanitized) return;
       setValue((prev) => {
-        const newVal = prev + input;
+        const newVal = prev + sanitized;
         updateSuggestion(newVal);
         onValueChange?.(newVal);
         return newVal;

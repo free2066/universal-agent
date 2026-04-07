@@ -10,7 +10,7 @@
  * passes the scrollOffset state down here.
  */
 
-import React from 'react';
+import React, { memo } from 'react';
 import { Box, Text } from 'ink';
 
 export interface ChatMessage {
@@ -26,7 +26,7 @@ function truncateAssistant(text: string): { display: string; truncated: boolean 
   return { display: text, truncated: false };
 }
 
-function UserMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
+function UserMessageInner({ msg }: { msg: ChatMessage }): React.JSX.Element {
   return (
     <Box flexDirection="row" gap={1}>
       <Text color="cyan" bold>you</Text>
@@ -35,8 +35,9 @@ function UserMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
     </Box>
   );
 }
+const UserMessage = memo(UserMessageInner, (a, b) => a.msg.content === b.msg.content);
 
-function AssistantMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
+function AssistantMessageInner({ msg }: { msg: ChatMessage }): React.JSX.Element {
   const { display, truncated } = truncateAssistant(msg.content);
   return (
     <Box flexDirection="column">
@@ -57,6 +58,7 @@ function AssistantMessage({ msg }: { msg: ChatMessage }): React.JSX.Element {
     </Box>
   );
 }
+const AssistantMessage = memo(AssistantMessageInner, (a, b) => a.msg.content === b.msg.content);
 
 export interface MessageListProps {
   messages: ChatMessage[];

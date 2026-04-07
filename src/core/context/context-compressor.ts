@@ -461,6 +461,31 @@ export interface CompactionResult {
    * Used by getMessagesAfterCompactBoundary() for precise re-compaction positioning.
    */
   boundaryUuid?: string;
+  /**
+   * E32 (claude-code CompactionResult.truePostCompactTokenCount parity):
+   * Actual token count of the context after compaction (from LLM usage response).
+   * Unlike postTokens (rough estimate), this is the true measured count.
+   * Used to detect if compaction would immediately re-trigger on the next turn.
+   */
+  truePostCompactTokenCount?: number;
+  /**
+   * E32: Whether the compacted context would trigger another compaction immediately.
+   * True when truePostCompactTokenCount >= autoCompact threshold.
+   * Mirrors claude-code compact.ts post-compact re-trigger detection.
+   */
+  willRetriggerNextTurn?: boolean;
+  /**
+   * E32 (claude-code CompactionResult.compactionUsage parity):
+   * Token usage consumed by the LLM compaction call itself (not the resulting context).
+   * Used for cost tracking and cache token analysis.
+   */
+  compactionUsage?: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheCreationTokens?: number };
+  /**
+   * E32 (claude-code CompactionResult.userDisplayMessage parity):
+   * Optional user-visible message from a pre_compact hook, shown in the REPL after compaction.
+   * Mirrors the hook result injection mechanism in claude-code compact.ts.
+   */
+  userDisplayMessage?: string;
 }
 
 /**
@@ -804,6 +829,13 @@ export async function autoCompact(
 
   // C14: 返回 CompactionResult 结构化结果
   const postTokens = estimateHistoryTokens(history);
+  // E32: truePostCompactTokenCount — 直接用 estimateHistoryTokens 作为 truePost
+  // （LLM client 当前未暴露 usage，此为最优估算；后续 B31 AI Limits 集成后可接入真实值）
+  const truePostTokens = postTokens;
+  // E32: willRetriggerNextTurn — 检测压缩后是否立即再次触发压缩（防级联）
+  const autoCompactThreshold = Math.floor((decision.contextLength ?? 128_000) * 0.75);
+  const willRetrigger = truePostTokens >= autoCompactThreshold;
+
   const compactionResult: CompactionResult = {
     wasCompacted: true,
     compactedTurns: toCompact.length,
@@ -813,6 +845,8 @@ export async function autoCompact(
     isRecompactionInChain,
     compactionPath: 'llm_full',
     boundaryUuid: _boundaryUuid, // B19: expose boundary UUID for caller tracking
+    truePostCompactTokenCount: truePostTokens, // E32
+    willRetriggerNextTurn: willRetrigger,       // E32
   };
 
   // F15: runPostCompactCleanup — 压缩后 5 类缓存清理（claude-code postCompactCleanup.ts 对标）

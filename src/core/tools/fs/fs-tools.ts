@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, createReadStream, mkdtempSync } from 'fs';
-import { resolve, relative, join, dirname } from 'path';
+import { resolve, relative, join, dirname, extname } from 'path';
 import { execSync, spawn as spawnProc } from 'child_process';
 import { tmpdir } from 'os';
 import { createInterface } from 'readline';
@@ -98,6 +98,33 @@ export const readFileTool: ToolRegistration = {
       const st = statSync(filePath);
       if (st.isDirectory()) {
         return `Error: Path is a directory, not a file: ${filePath}\nUse the LS tool to list directory contents.`;
+      }
+
+      // C32: Image file support — Mirrors claude-code FileReadTool.ts image branch
+      // Image files are read as base64 and returned as image content blocks for multimodal LLMs.
+      const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico']);
+      const ext = extname(filePath).toLowerCase();
+      if (IMAGE_EXTS.has(ext)) {
+        const MIME_MAP: Record<string, string> = {
+          '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+          '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+          '.ico': 'image/x-icon',
+        };
+        const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB limit
+        if (st.size > MAX_IMAGE_BYTES) {
+          return `Error: Image file too large (${(st.size / 1024 / 1024).toFixed(1)}MB). Maximum is 5MB.`;
+        }
+        const { readFileSync: readBin } = await import('fs');
+        const imgData = readBin(filePath);
+        const base64 = imgData.toString('base64');
+        const mimeType = MIME_MAP[ext] ?? 'image/png';
+        // Return as JSON-serialized image block so agent can embed in multimodal messages
+        return JSON.stringify({
+          type: 'image',
+          source: { type: 'base64', media_type: mimeType, data: base64 },
+          _filePath: filePath,
+          _size: st.size,
+        });
       }
 
       // Resolve offset / limit (new API) with fallback to start_line / end_line (legacy)

@@ -219,6 +219,58 @@ export async function handleContext(ctx: SlashContext): Promise<true> {
     console.log(chalk.yellow(`  ⚠  Context usage high — consider /compact`));
   }
 
+  // G32: +3 维度 — Mirrors claude-code analyzeContext.ts 维度 11-13
+  // 维度 11: MCP 工具 per-tool token 明细 (Mirrors analyzeContext.ts mcpTools dimension)
+  try {
+    type MCPMgrType = { listServers: () => Array<{ name: string; tools?: Array<{ name: string; description?: string; inputSchema?: unknown }> }> };
+    const globalAny = globalThis as Record<string, unknown>;
+    const mcpMgr = globalAny['__uagent_mcp_manager'] as MCPMgrType | undefined;
+    if (mcpMgr) {
+      const allTools: Array<{ name: string; description?: string; inputSchema?: unknown }> = [];
+      for (const server of mcpMgr.listServers()) {
+        allTools.push(...(server.tools ?? []));
+      }
+      if (allTools.length > 0) {
+        const mcpTokens = allTools.map((t) => ({
+          name: t.name,
+          tokens: Math.ceil(JSON.stringify({ name: t.name, description: t.description ?? '', input_schema: t.inputSchema ?? {} }).length / 4),
+        })).sort((a, b) => b.tokens - a.tokens);
+        const totalMcpTokens = mcpTokens.reduce((s, t) => s + t.tokens, 0);
+        console.log(chalk.yellow(`\n  MCP Tools (${allTools.length} loaded, ~${totalMcpTokens.toLocaleString()} tokens):`));
+        for (const t of mcpTokens.slice(0, 5)) {
+          console.log(`    ${t.name.padEnd(32)} ${chalk.gray('~' + t.tokens.toLocaleString() + ' tokens')}`);
+        }
+        if (mcpTokens.length > 5) console.log(chalk.gray(`    ... and ${mcpTokens.length - 5} more`));
+      }
+    }
+  } catch { /* G32: non-fatal */ }
+
+  // 维度 12: Built-in tools deferred 状态 (Mirrors analyzeContext.ts deferredBuiltinTools)
+  try {
+    const usedToolNames = new Set<string>();
+    for (const msg of history) {
+      if (msg.role === 'assistant' && Array.isArray((msg as { toolCalls?: Array<{ name: string }> }).toolCalls)) {
+        for (const tc of (msg as { toolCalls: Array<{ name: string }> }).toolCalls) {
+          usedToolNames.add(tc.name);
+        }
+      }
+    }
+    if (usedToolNames.size > 0) {
+      console.log(chalk.yellow(`\n  Tools used this session: ${chalk.white(String(usedToolNames.size))}`));
+      const topTools = [...usedToolNames].slice(0, 8).join(', ');
+      console.log(chalk.gray(`    ${topTools}${usedToolNames.size > 8 ? ` + ${usedToolNames.size - 8} more` : ''}`));
+    }
+  } catch { /* G32: non-fatal */ }
+
+  // 维度 13: 压缩历史 (Mirrors analyzeContext.ts compaction stats)
+  try {
+    const { isCompactBoundaryMessage } = await import('../../../core/context/context-compressor.js');
+    const boundaries = history.filter((m) => isCompactBoundaryMessage(m));
+    if (boundaries.length > 0) {
+      console.log(chalk.yellow(`\n  Compactions this session: ${chalk.white(String(boundaries.length))}`));
+    }
+  } catch { /* G32: non-fatal */ }
+
   console.log(chalk.gray('\n  Tip: /compact — compress context; /clear — start fresh\n'));
   return done(rl);
 }

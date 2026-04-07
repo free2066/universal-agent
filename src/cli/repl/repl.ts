@@ -15,6 +15,7 @@ import { initStatusBar, updateStatusBar, clearStatusBar, buildStatusPrompt, prin
 import { CliSpinner, summarizeArgs } from '../spinner.js';
 import { HookRunner } from '../../core/hooks.js';
 import { handleSlash, type SlashContext } from './slash-handlers.js';
+import { inputQueue } from '../../core/utils/input-queue.js';
 
 // ── F1: @file fuzzy completion ────────────────────────────────────────────────
 /** Recursively collect relative paths under `root` (depth-limited to 3). */
@@ -250,6 +251,12 @@ export async function runREPL(
         // Single Esc while streaming → abort LLM output
         _currentAbort.abort();
         _currentAbort = null;
+        // A32: Mirrors claude-code clearCommandQueue() on user cancel — flush any queued inputs
+        if (inputQueue.length > 0) {
+          inputQueue.clear();
+          process.stdout.write(chalk.dim('  (queued inputs cleared)\n'));
+        }
+        _isAgentRunning = false; // D31: 确保 flag 同步复位
         process.stdout.write(chalk.yellow('\n  [aborted]\n'));
         rl.resume(); rl.prompt(); printStatusBar();
         _lastEsc = 0;
@@ -576,7 +583,6 @@ export async function runREPL(
     // D31: mid-turn input queue — if agent is already running, enqueue instead of processing
     // Mirrors claude-code messageQueueManager.ts commandQueue enqueueing during active turn
     if (_isAgentRunning) {
-      const { inputQueue } = await import('../../core/utils/input-queue.js');
       inputQueue.enqueue(input);
       process.stdout.write(chalk.dim(`  ↳ queued (${inputQueue.length} pending, finish current response first)\n`));
       return;
@@ -796,7 +802,6 @@ export async function runREPL(
     // D31: consume queued input after agent completes
     // Mirrors claude-code processQueuedCommands() after turn completion
     try {
-      const { inputQueue } = await import('../../core/utils/input-queue.js');
       const nextInput = inputQueue.dequeue();
       if (nextInput) {
         const remaining = inputQueue.length;
