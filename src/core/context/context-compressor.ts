@@ -61,19 +61,19 @@ const KEEP_LAST_TURNS = 6;
 const MAX_CONSECUTIVE_FAILURES = 3;
 
 /** Session-level circuit breaker state */
-let consecutiveFailures = 0;
-let circuitOpen = false;
+// 按 sessionId 隔离 circuit breaker 状态，防止多 agent 实例互相污染
+const _compactState = new Map<string, { failures: number; circuitOpen: boolean; isCompacting: boolean }>();
 
-/**
- * Anti-recursion guard: compact calls triggered from within compact are rejected.
- * Prevents recursive deadlock when the compact LLM call itself triggers another compact.
- */
-let isCompacting = false;
+function _getState(sessionId?: string): { failures: number; circuitOpen: boolean; isCompacting: boolean } {
+  const key = sessionId ?? '__default__';
+  if (!_compactState.has(key)) _compactState.set(key, { failures: 0, circuitOpen: false, isCompacting: false });
+  return _compactState.get(key)!;
+}
 
 /** Reset circuit breaker (called at session start / manually) */
-export function resetCompactCircuitBreaker(): void {
-  consecutiveFailures = 0;
-  circuitOpen = false;
+export function resetCompactCircuitBreaker(sessionId?: string): void {
+  const key = sessionId ?? '__default__';
+  _compactState.delete(key);
 }
 
 // ── Token estimation ──────────────────────────────────────────────────────────
@@ -625,8 +625,12 @@ export async function autoCompact(
   // Environment kill switch
   if (AUTO_COMPACT_DISABLED) return _noCompact;
 
+  // 使用 per-sessionId 隔离的 circuit breaker 状态（key 由 history 引用标识）
+  const _stateKey = (postCompactCtx as Record<string, unknown> | undefined)?.['sessionId'] as string | undefined;
+  const _state = _getState(_stateKey);
+
   // Circuit breaker — stop after MAX_CONSECUTIVE_FAILURES failures
-  if (circuitOpen) return _noCompact;
+  if (_state.circuitOpen) return _noCompact;
 
   // ── Round 7: Time-based microcompact (Layer 3 enhancement) ────────────────
   // Before checking full-compact threshold, try time-based microcompact.
@@ -635,7 +639,7 @@ export async function autoCompact(
   const _now = Date.now();
   await runTimeBasedMicrocompact(history, _now, onProgress);
   // Anti-recursion guard
-  if (isCompacting) return _noCompact;
+  if (_state.isCompacting) return _noCompact;
 
   const decision = shouldCompact(history, undefined, snipTokensFreed);
   if (!decision.shouldCompact) return _noCompact;
@@ -691,7 +695,7 @@ export async function autoCompact(
   const serialized = serializeTurns(strippedToCompact);
 
   let summary = '';
-  isCompacting = true;
+  _state.isCompacting = true;
   let ptlRetries = 0;
   let currentMsgs = strippedToCompact;
   try {
@@ -706,7 +710,7 @@ export async function autoCompact(
         });
         // B12: 提取 <summary> 块（过滤 <analysis> 草稿）
         summary = parseCompactSummary(response.content);
-        consecutiveFailures = 0; // Reset on success
+        _state.failures = 0; // Reset on success
         break;
       } catch (err) {
         // C12: PTL 重试 — 截断最老 1/4 历史
@@ -721,22 +725,22 @@ export async function autoCompact(
       }
     }
   } catch (err) {
-    consecutiveFailures++;
-    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      circuitOpen = true;
+    _state.failures++;
+    if (_state.failures >= MAX_CONSECUTIVE_FAILURES) {
+      _state.circuitOpen = true;
       onProgress?.(
-        `\n⚡ Auto-compact circuit breaker opened after ${consecutiveFailures} consecutive failures — ` +
+        `\n⚡ Auto-compact circuit breaker opened after ${_state.failures} consecutive failures — ` +
         `stopping compact attempts for this session.\n`,
       );
     } else {
       onProgress?.(
-        `\n⚠️  Auto-compact failed (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ` +
+        `\n⚠️  Auto-compact failed (${_state.failures}/${MAX_CONSECUTIVE_FAILURES}): ` +
         `${err instanceof Error ? err.message : String(err)}\n`,
       );
     }
     return _noCompact;
   } finally {
-    isCompacting = false;
+    _state.isCompacting = false;
   }
 
   const summaryMessage: Message = {

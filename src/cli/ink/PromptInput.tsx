@@ -95,8 +95,9 @@ export function PromptInput({
         setSuggestion(agentMatch.slice(query.length));
         return;
       }
-      // Then @file
-      const fileMatch = fileCompletions.find((f) => f.toLowerCase().includes(query.toLowerCase()) && f !== query);
+      // Then @file — 用 startsWith 而非 includes，确保 slice 偏移正确
+      const queryLower = query.toLowerCase();
+      const fileMatch = fileCompletions.find((f) => f.toLowerCase().startsWith(queryLower) && f !== query);
       if (fileMatch) {
         setSuggestion(fileMatch.slice(query.length));
         return;

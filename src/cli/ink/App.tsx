@@ -87,6 +87,14 @@ export function App({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
+  // 组件卸载时清理 stream flush timer，防止对已卸载组件调用 setState
+  useEffect(() => () => {
+    if (streamFlushTimer.current) {
+      clearTimeout(streamFlushTimer.current);
+      streamFlushTimer.current = null;
+    }
+  }, []);
+
   // ── Streaming throttle buffer ─────────────────────────────────────────────
   // Accumulate streaming chunks in a ref and flush to state at most once per
   // STREAM_FLUSH_MS. This prevents a full Ink re-render on every single chunk,

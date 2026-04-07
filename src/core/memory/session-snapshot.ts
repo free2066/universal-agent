@@ -161,9 +161,15 @@ export function saveSnapshot(sessionId: string, messages: Message[], cwd?: strin
         appendEntry(filePath, { type: 'message', message: msg });
       }
     } else {
-      // Append only new messages (detect by reading existing count)
+      // 用消息内容做去重而非数组位置（修复 >500 条时切片错位导致消息丢失）
       const existing = _loadMessagesFromJsonl(filePath);
-      const newMessages = toSave.slice(existing.length);
+      const existingSet = new Set(existing.map((m) =>
+        `${m.role}::${typeof m.content === 'string' ? m.content.slice(0, 120) : JSON.stringify(m.content).slice(0, 120)}`
+      ));
+      const newMessages = toSave.filter((m) => {
+        const key = `${m.role}::${typeof m.content === 'string' ? m.content.slice(0, 120) : JSON.stringify(m.content).slice(0, 120)}`;
+        return !existingSet.has(key);
+      });
       for (const msg of newMessages) {
         appendEntry(filePath, { type: 'message', message: msg });
       }
@@ -270,22 +276,24 @@ export function loadSnapshot(sessionId: string, cwd?: string): SessionSnapshot |
 function readHeadTail(filePath: string, bufSize = LITE_BUF_SIZE): { head: string; tail: string } {
   try {
     const fd = openSync(filePath, 'r');
-    const stat = statSync(filePath);
-    const fileSize = stat.size;
+    try {
+      const stat = statSync(filePath);
+      const fileSize = stat.size;
 
-    const headBuf = Buffer.alloc(Math.min(bufSize, fileSize));
-    readSync(fd, headBuf, 0, headBuf.length, 0);
-    const head = headBuf.toString('utf-8');
+      const headBuf = Buffer.alloc(Math.min(bufSize, fileSize));
+      readSync(fd, headBuf, 0, headBuf.length, 0);
+      const head = headBuf.toString('utf-8');
 
-    let tail = head;
-    if (fileSize > bufSize) {
-      const tailBuf = Buffer.alloc(Math.min(bufSize, fileSize));
-      readSync(fd, tailBuf, 0, tailBuf.length, Math.max(0, fileSize - bufSize));
-      tail = tailBuf.toString('utf-8');
+      let tail = head;
+      if (fileSize > bufSize) {
+        const tailBuf = Buffer.alloc(Math.min(bufSize, fileSize));
+        readSync(fd, tailBuf, 0, tailBuf.length, Math.max(0, fileSize - bufSize));
+        tail = tailBuf.toString('utf-8');
+      }
+      return { head, tail };
+    } finally {
+      closeSync(fd);
     }
-
-    closeSync(fd);
-    return { head, tail };
   } catch {
     return { head: '', tail: '' };
   }

@@ -458,7 +458,16 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
       Object.entries(_userContext).map(([k, v]) => `# ${k}\n${v}`).join('\n'),
       '</system-reminder>',
     ].join('\n');
-    history.unshift({ role: 'user', content: userCtxContent });
+    // 只在 history 头部没有同一条 system-reminder 时才注入，防止多轮累积
+    const alreadyInjected = history[0]?.content === userCtxContent;
+    if (!alreadyInjected) {
+      // 移除上一轮注入的旧 system-reminder（内容可能已变化）
+      if (history[0]?.role === 'user' && typeof history[0].content === 'string' &&
+          history[0].content.startsWith('<system-reminder>')) {
+        history.shift();
+      }
+      history.unshift({ role: 'user', content: userCtxContent });
+    }
   }
 
   // C17: user_prompt_submit hook — fire before adding message to history
@@ -509,21 +518,22 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     const _ctxWindow = _profile?.contextLength ?? 128_000;
     const TOOL_RESULT_BUDGET_TOKENS = Math.floor(_ctxWindow * 0.4);
     let _toolBudgetUsed = 0;
+    // 从最新消息向前遍历：先累计最新工具结果，超出 budget 的旧结果才截断
     for (let _i = history.length - 1; _i >= 0; _i--) {
       const _msg = history[_i]!;
       if (_msg.role !== 'tool') continue;
       const _content = typeof _msg.content === 'string' ? _msg.content : JSON.stringify(_msg.content);
       const _tokens = Math.ceil(_content.length / 4);
-      if (_toolBudgetUsed + _tokens > TOOL_RESULT_BUDGET_TOKENS) {
-        const _allowedChars = Math.max(200, (TOOL_RESULT_BUDGET_TOKENS - _toolBudgetUsed) * 4);
+      _toolBudgetUsed += _tokens;
+      if (_toolBudgetUsed > TOOL_RESULT_BUDGET_TOKENS) {
+        // 超出 budget：截断此条旧工具结果（保留最新的）
+        const _allowedChars = Math.max(200, Math.floor((_tokens - (_toolBudgetUsed - TOOL_RESULT_BUDGET_TOKENS)) * 4));
         if (_content.length > _allowedChars) {
-          // Tool messages always have string content — safe to cast via unknown
           (_msg as unknown as { content: string }).content =
             _content.slice(0, _allowedChars) +
             `\n...[truncated by token budget, ${_content.length - _allowedChars} chars omitted]`;
         }
       }
-      _toolBudgetUsed += _tokens;
     }
   }
 

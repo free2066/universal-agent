@@ -442,6 +442,11 @@ export class StreamingToolExecutor {
     this.tools.length = 0;
     this.byIndex.clear();
     this._progressResolve = undefined;
+    // 重置 sibling-abort 状态，防止跨 iteration 污染
+    this._siblingErrored = false;
+    // 注：_siblingAbort 是 readonly AbortController，已经 abort 的无法重用
+    // 用类型断言重新赋值，确保下一轮工具调用不受上一轮 abort 影响
+    (this as unknown as { _siblingAbort: AbortController })._siblingAbort = new AbortController();
   }
 
   /** Whether sibling abort was triggered (Bash/write error occurred) */

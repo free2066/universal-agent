@@ -156,8 +156,8 @@ export async function runInkREPL(
       { exitOnCtrlC: false }, // We handle Ctrl+C ourselves
     );
 
-    // Handle Ctrl+C gracefully
-    process.on('SIGINT', () => {
+    // Handle Ctrl+C gracefully — use once() to prevent handler accumulation on re-entry
+    const sigintHandler = () => {
       // First abort any in-progress LLM stream (readline parity: repl.ts _currentAbort?.abort())
       try { abortCurrentStream?.(); } catch { /* non-fatal */ }
       const history = agent.getHistory();
@@ -195,7 +195,8 @@ export async function runInkREPL(
       process.stdout.write('Goodbye!\n');
       setTimeout(() => process.exit(0), 200);
       resolve();
-    });
+    };
+    process.once('SIGINT', sigintHandler);
 
     // A24: setupGracefulShutdown -- SIGTERM/SIGHUP with failsafe timer
     // Mirrors claude-code gracefulShutdown.ts L237+L391

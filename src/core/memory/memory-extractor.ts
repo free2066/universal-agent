@@ -29,9 +29,10 @@
 
 import type { Message } from '../../models/types.js';
 import { getMemoryStore } from './memory-store.js';
-import { resolve, join } from 'path';
+import { resolve, join, sep } from 'path';
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { getProjectSessionsDir } from './session-snapshot.js';
 
 // ── Dual-threshold configuration (claude-code parity) ────────────────────────
 
@@ -45,15 +46,14 @@ const MAX_TOOL_CALLS_CAP = 100;
 
 // ── Memory sandbox configuration (Round 3: claude-code createAutoMemCanUseTool parity) ──
 
-const MEMORY_DIR_SUFFIX = '.uagent' + require('path').sep + 'memory';
+const MEMORY_DIR_SUFFIX = '.uagent' + sep + 'memory';
 
 /**
  * Get the canonical memory directory for a project.
  * All store.add() calls from extractMemoriesIsolated() are validated against this path.
  */
 function getMemoryDirForProject(projectRoot: string): string {
-  const { createHash: ch } = require('crypto');
-  const projectHash = ch('sha256').update(resolve(projectRoot)).digest('hex').slice(0, 16);
+  const projectHash = createHash('sha256').update(resolve(projectRoot)).digest('hex').slice(0, 16);
   const home = process.env.HOME ?? '~';
   return resolve(home, '.uagent', 'memory', projectHash);
 }
@@ -325,17 +325,14 @@ export function updateMemoryMd(projectRoot: string): void {
     // (store.recall() is async, so we read the store files directly for sync operation)
     const allMemories: Array<{ type: string; content: string }> = [];
     try {
-      const { readFileSync: rfs, existsSync: efs } = require('fs') as typeof import('fs');
-      const { join: pj } = require('path') as typeof import('path');
-      const { createHash: ch } = require('crypto') as typeof import('crypto');
       const home = process.env.HOME ?? '~';
-      const projectHash = ch('sha256').update(project).digest('hex').slice(0, 16);
+      const projectHash = createHash('sha256').update(project).digest('hex').slice(0, 16);
       const memDir = resolve(home, '.uagent', 'memory', projectHash);
       const types = ['insight', 'fact', 'iteration', 'pinned'];
       for (const t of types) {
-        const file = pj(memDir, `${t}.jsonl`);
-        if (!efs(file)) continue;
-        const lines = rfs(file, 'utf-8').split('\n').filter(Boolean);
+        const file = join(memDir, `${t}.jsonl`);
+        if (!existsSync(file)) continue;
+        const lines = readFileSync(file, 'utf-8').split('\n').filter(Boolean);
         for (const line of lines) {
           try {
             const item = JSON.parse(line) as { content: string };
@@ -364,7 +361,6 @@ export function updateMemoryMd(projectRoot: string): void {
     }
 
     // Write to ~/.uagent/projects/<sanitizedCwd>/MEMORY.md
-    const { getProjectSessionsDir } = require('./session-snapshot.js') as typeof import('./session-snapshot.js');
     const sessionsDir = getProjectSessionsDir(projectRoot);
     const projectDir = join(sessionsDir, '..');
     const memoryMdPath = join(projectDir, 'MEMORY.md');

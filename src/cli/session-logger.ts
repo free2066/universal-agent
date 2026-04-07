@@ -294,7 +294,11 @@ export class SessionLogger {
     try {
       const files = readdirSync(LOGS_DIR)
         .filter((f) => f.startsWith('session-') && f.endsWith('.log'))
-        .sort();
+        .map((f) => {
+          try { return { f, mtime: statSync(join(LOGS_DIR, f)).mtimeMs }; } catch { return { f, mtime: 0 }; }
+        })
+        .sort((a, b) => a.mtime - b.mtime) // 升序：最旧的在前
+        .map(({ f }) => f);
       const extra = files.length - MAX_LOG_FILES + 1;
       if (extra > 0) {
         for (const f of files.slice(0, extra)) {
