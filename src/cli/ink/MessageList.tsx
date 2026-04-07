@@ -22,25 +22,7 @@ export interface ChatMessage {
 
 /** How many messages to show in the visible window */
 export const MSG_WINDOW_SIZE = 30;
-/** Max chars to show per assistant message before truncating */
-const MAX_ASSISTANT_CHARS = 20000;
-/** Max lines to show per assistant message */
-const MAX_ASSISTANT_LINES = 500;
-
 function truncateAssistant(text: string): { display: string; truncated: boolean } {
-  const lines = text.split('\n');
-  if (lines.length > MAX_ASSISTANT_LINES) {
-    return {
-      display: lines.slice(0, MAX_ASSISTANT_LINES).join('\n'),
-      truncated: true,
-    };
-  }
-  if (text.length > MAX_ASSISTANT_CHARS) {
-    return {
-      display: text.slice(0, MAX_ASSISTANT_CHARS),
-      truncated: true,
-    };
-  }
   return { display: text, truncated: false };
 }
 
