@@ -1661,9 +1661,16 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
 
     // F23: AutoDream — 后台记忆整合（claude-code autoDream.ts parity）
     // 非阻塞触发，三重门控（时间/会话数/进程锁），失败不影响主循环。
+    // D32/C33: 传入 onProgress 回调，整合完成时向 onChunk 输出通知
     try {
       const { executeAutoDream } = await import('../memory/auto-dream.js');
-      executeAutoDream(domain); // 异步触发，不 await
+      const dreamOnProgress: import('../memory/auto-dream.js').DreamProgressCallback = (evt) => {
+        if (evt.type === 'dream_completed' && evt.filesTouched.length > 0) {
+          onChunk(`\n[Memory] Dream consolidated: ${evt.filesTouched.length} file(s) updated\n`);
+        }
+        // dream_failed is non-fatal — suppress from user output
+      };
+      executeAutoDream(domain, {}, dreamOnProgress); // 异步触发，不 await
     } catch { /* auto-dream is non-fatal */ }
   }
 

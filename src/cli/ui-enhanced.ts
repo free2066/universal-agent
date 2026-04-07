@@ -100,20 +100,50 @@ function printDomainChips() {
 export function printHelp() {
   const sections = [
     {
-      title: '📚 Session Commands',
+      title: '📚 Session',
       commands: [
         { cmd: '/help', desc: 'Show this help message', example: '' },
         { cmd: '/clear', desc: 'Clear conversation history', example: '' },
         { cmd: '/exit', desc: 'Exit the agent', example: '' },
+        { cmd: '/log', desc: 'Show current session log path', example: '' },
+        { cmd: '/logs', desc: 'List all saved session logs', example: '' },
+        { cmd: '/resume [id]', desc: 'Resume a previous session', example: '/resume abc123' },
+        { cmd: '/branch', desc: 'Branch current session', example: '' },
+        { cmd: '/rename <name>', desc: 'Rename current session', example: '/rename my-task' },
+        { cmd: '/export [path]', desc: 'Export session transcript', example: '/export out.md' },
+        { cmd: '/copy', desc: 'Copy last response to clipboard', example: '' },
+        { cmd: '/status', desc: 'Show session status summary', example: '' },
+        { cmd: '/bug [desc]', desc: 'File a bug report', example: '/bug tool crashed' },
       ]
     },
     {
       title: '⚙️  Configuration',
       commands: [
-        { cmd: '/domain <name>', desc: 'Switch domain', example: '/domain data' },
-        { cmd: '/model [name]', desc: 'Switch or cycle model', example: '/model gpt-4o' },
-        { cmd: '/cost', desc: 'Show token usage and cost', example: '' },
+        { cmd: '/domain <name>', desc: 'Switch domain (auto/dev/data/service)', example: '/domain data' },
+        { cmd: '/model [name]', desc: 'Switch or show model', example: '/model claude-opus-4' },
+        { cmd: '/models', desc: 'List configured models', example: '' },
+        { cmd: '/config [key] [val]', desc: 'Get/set a config value', example: '/config theme dark' },
+        { cmd: '/output-style <s>', desc: 'Set output style preset or file', example: '/output-style Concise' },
+        { cmd: '/cost', desc: 'Show token usage & estimated cost', example: '' },
         { cmd: '/history [n]', desc: 'Show last n prompts', example: '/history 10' },
+        { cmd: '/upgrade', desc: 'Check for updates and upgrade', example: '' },
+      ]
+    },
+    {
+      title: '🧠 Context & Memory',
+      commands: [
+        { cmd: '/context', desc: 'Show context window stats (13 dimensions)', example: '' },
+        { cmd: '/compact', desc: 'Compress context with LLM summary', example: '' },
+        { cmd: '/tokens', desc: 'Quick token usage summary', example: '' },
+        { cmd: '/memory [op]', desc: 'View/edit memory files', example: '/memory show' },
+        { cmd: '/init', desc: 'Create AGENTS.md in current dir', example: '' },
+        { cmd: '/rules', desc: 'Show active rules (AGENTS.md chain)', example: '' },
+        { cmd: '/review', desc: 'Review recent code changes', example: '' },
+        { cmd: '/spec [topic]', desc: 'Create a feature spec', example: '/spec auth flow' },
+        { cmd: '/spec:brainstorm', desc: 'Brainstorm a spec topic', example: '' },
+        { cmd: '/spec:write-plan', desc: 'Write plan from spec', example: '' },
+        { cmd: '/spec:execute-plan', desc: 'Execute the current plan', example: '' },
+        { cmd: '/rewind [n]', desc: 'Undo last n agent turns', example: '/rewind 2' },
       ]
     },
     {
@@ -121,30 +151,67 @@ export function printHelp() {
       commands: [
         { cmd: '/inspect [path]', desc: 'Static code inspection', example: '/inspect src/' },
         { cmd: '/purify [path]', desc: 'Auto-fix code issues', example: '/purify --dry-run' },
+        { cmd: '/commit [msg]', desc: 'Commit staged changes', example: '/commit fix: typo' },
+        { cmd: '/diff', desc: 'Show current git diff', example: '' },
+        { cmd: '/effort [h]', desc: 'Set effort/time budget', example: '/effort 2h' },
+        { cmd: '/security-review', desc: 'Run security audit', example: '' },
+        { cmd: '/add-dir <path>', desc: 'Add directory to context', example: '/add-dir ./data' },
+        { cmd: '/image <path>', desc: 'Add image to context', example: '/image screenshot.png' },
+        { cmd: '/permissions', desc: 'Show permission settings', example: '' },
+        { cmd: '/thinkback [n]', desc: 'Re-examine last n turns', example: '/thinkback 3' },
+        { cmd: '/search <q>', desc: 'Search session history', example: '/search OAuth' },
+      ]
+    },
+    {
+      title: '🤖 Agents & MCP',
+      commands: [
         { cmd: '/agents', desc: 'List available subagents', example: '' },
-        { cmd: '/models', desc: 'List configured models', example: '' },
+        { cmd: '/mcp', desc: 'Show MCP server status', example: '' },
+        { cmd: '/skills', desc: 'List available skills', example: '' },
+        { cmd: '/plugin [op]', desc: 'Manage domain plugins', example: '/plugin list' },
+        { cmd: '/plugins', desc: 'Show active domain plugins', example: '' },
+        { cmd: '/hooks [op]', desc: 'Manage lifecycle hooks', example: '/hooks list' },
+        { cmd: '/team', desc: 'Show team configuration', example: '' },
+        { cmd: '/inbox', desc: 'Show incoming team messages', example: '' },
+        { cmd: '/tasks', desc: 'Show background tasks', example: '' },
+      ]
+    },
+    {
+      title: '🔐 Auth & Profile',
+      commands: [
+        { cmd: '/login', desc: 'Authenticate with provider', example: '' },
+        { cmd: '/logout', desc: 'Clear authentication tokens', example: '' },
+        { cmd: '/ide', desc: 'Show IDE integration status', example: '' },
+        { cmd: '/stats', desc: 'Show usage statistics', example: '' },
+        { cmd: '/doctor', desc: 'Run environment diagnostics', example: '' },
+        { cmd: '/plan [op]', desc: 'Enter/manage plan mode', example: '/plan start' },
+        { cmd: '/metrics', desc: 'Show session metrics', example: '' },
+        { cmd: '/insights [n]', desc: 'Show memory insights', example: '/insights 5' },
+        { cmd: '/terminal-setup', desc: 'Configure terminal integration', example: '' },
       ]
     },
   ];
 
   console.log('');
   console.log(divider('═', 70));
-  
+
   for (const section of sections) {
     console.log('');
     console.log('  ' + theme.accent(section.title));
     console.log('  ' + divider('─', 50));
-    
+
     for (const { cmd, desc, example } of section.commands) {
-      const cmdStr = theme.white(cmd.padEnd(18));
+      const cmdStr = theme.white(cmd.padEnd(22));
       const descStr = theme.muted(desc);
       console.log(`    ${cmdStr} ${descStr}`);
       if (example) {
-        console.log(`    ${' '.repeat(18)} ${theme.secondary('→ ' + example)}`);
+        console.log(`    ${' '.repeat(22)} ${theme.secondary('→ ' + example)}`);
       }
     }
   }
-  
+
+  console.log('');
+  console.log(theme.muted('  💡 Custom commands: .uagent/commands/<name>.md  |  Plugin commands: /plugins'));
   console.log('');
   console.log(divider('═', 70));
   printExamplePrompts();

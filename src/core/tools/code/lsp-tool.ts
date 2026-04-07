@@ -20,7 +20,7 @@
  * Round 6: claude-code LSPTool parity (skeleton)
  */
 
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { resolve, extname } from 'path';
 import { spawn } from 'child_process';
 import type { ToolRegistration } from '../../../models/types.js';
@@ -373,6 +373,23 @@ export const lspTool: ToolRegistration = {
     }
 
     try {
+      // G33: 优先使用持久连接池（ENABLE_LSP_POOL=false 可回退到 fire-once 模式）
+      // Mirrors claude-code LSPServerManager persistent connection pattern
+      if (process.env['ENABLE_LSP_POOL'] !== 'false') {
+        try {
+          const { sendLspRequest, openFile: poolOpenFile, changeFile } = await import('./lsp-pool.js');
+          const fileContent = readFileSync(absFilePath, 'utf-8');
+          // Ensure server is started and file is opened
+          await poolOpenFile(ext, absFilePath, fileContent, cwd);
+          const result = await sendLspRequest(ext, cwd, method, params);
+          return formatLspResult(operation, result);
+        } catch (poolErr) {
+          // Pool failed — fall through to fire-once mode
+          process.stderr.write(`[LSP] Pool unavailable (${poolErr instanceof Error ? poolErr.message : String(poolErr)}), using fire-once mode\n`);
+        }
+      }
+
+      // Fire-once fallback (original implementation)
       const result = await makeLspRequest(
         serverConfig.command,
         serverConfig.args,

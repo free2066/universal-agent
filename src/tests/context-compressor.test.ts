@@ -133,9 +133,9 @@ describe('shouldCompact', () => {
     expect(result.threshold).toBeLessThan(result.contextLength);
   });
 
-  it('threshold is ~75% of context length by default', () => {
+  it('threshold is ~60% of context length by default', () => {
     const result = shouldCompact([], 'gpt-4o');
-    const expectedThreshold = Math.floor(result.contextLength * 0.75);
+    const expectedThreshold = Math.floor(result.contextLength * 0.60);
     expect(result.threshold).toBe(expectedThreshold);
   });
 

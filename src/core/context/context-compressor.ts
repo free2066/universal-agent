@@ -489,6 +489,24 @@ export interface CompactionResult {
 }
 
 /**
+ * E33: CompactProgressEvent — 结构化进度事件类型
+ *
+ * 对标 claude-code compact.ts onCompactProgress 事件枚举（hooks_start / compact_start / compact_end）。
+ * 供外部调用方（如 agent-loop.ts）区分压缩各阶段，实现细粒度进度 UI。
+ *
+ * 当前 onProgress 是 (msg: string) => void（文本形式），此类型作为结构化枚举补充。
+ * 未来可在 autoCompact() 签名中新增 onCompactProgressEvent? 参数。
+ */
+export type CompactProgressEventType =
+  | { type: 'hooks_start' }               // pre_compact 钩子开始执行
+  | { type: 'compact_start'; turns: number }  // LLM 压缩开始，turns = 被压缩轮数
+  | { type: 'compact_end'; tokensFreed: number } // LLM 压缩完成，tokensFreed = 释放量
+  | { type: 'compact_skipped'; reason: string }; // 压缩跳过（如历史太短）
+
+/** E33: Callback type for structured compact progress events (mirrors claude-code onCompactProgress) */
+export type CompactProgressEventCallback = (evt: CompactProgressEventType) => void;
+
+/**
  * B19 (claude-code getMessagesAfterCompactBoundary parity):
  * Scan history for the last compact_boundary message and return all messages after it.
  * Used when re-compacting to identify only NEW messages since the last compact.

@@ -117,6 +117,14 @@ program
       }
     } catch { /* B29: non-fatal — remote config is best-effort */ }
 
+    // ── H32/C33: PolicyLimits — fetch enterprise policy limits at startup (fail-open) ──
+    // Mirrors claude-code policyLimits/index.ts loadPolicyLimits() at startup
+    // Starts background polling (every 60min) and caches to ~/.uagent/policy-limits.json
+    try {
+      const { loadPolicyLimits } = await import('../core/policy/policy-limits.js');
+      await loadPolicyLimits(); // fail-open: network/auth errors silently ignored
+    } catch { /* H32: non-fatal — policy limits are best-effort */ }
+
     // ── Resolve --plan-model / --small-model / --vision-model ──────────────
     // These map to model-manager pointers: task, quick/compact, and a env hint
     if (options.planModel) modelManager.setPointer('task', options.planModel);
