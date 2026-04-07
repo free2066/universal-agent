@@ -79,6 +79,21 @@ function countToolCallsIn(messages: Message[]): number {
  * Check whether dual-threshold conditions are met for a given project.
  * Returns true if extraction should be triggered.
  */
+/** 累积计数器，不做触发判断（纯更新，与 shouldTriggerExtraction 分离）*/
+export function accumulateExtractionCounters(
+  newMessages: Message[],
+  projectRoot: string,
+): void {
+  const project = resolve(projectRoot);
+  const tokenDelta = roughTokenCount(newMessages);
+  const toolCalls = countToolCallsIn(newMessages);
+  const prevTokenDelta = _tokensSinceLastIngest.get(project) ?? 0;
+  const prevToolCalls = _toolCallsSinceLastIngest.get(project) ?? 0;
+  _tokensSinceLastIngest.set(project, Math.min(prevTokenDelta + tokenDelta, MAX_TOKEN_DELTA_CAP));
+  _toolCallsSinceLastIngest.set(project, Math.min(prevToolCalls + toolCalls, MAX_TOOL_CALLS_CAP));
+}
+
+/** 纯查询：检查是否达到触发阈值，不修改任何状态 */
 export function shouldTriggerExtraction(
   newMessages: Message[],
   projectRoot: string,
@@ -90,18 +105,11 @@ export function shouldTriggerExtraction(
   const prevTokenDelta = _tokensSinceLastIngest.get(project) ?? 0;
   const prevToolCalls = _toolCallsSinceLastIngest.get(project) ?? 0;
 
-  // Cap accumulators to prevent runaway growth (Round 3: MAX_TOKEN_DELTA_CAP)
   const cumTokenDelta = Math.min(prevTokenDelta + tokenDelta, MAX_TOKEN_DELTA_CAP);
   const cumToolCalls = Math.min(prevToolCalls + toolCalls, MAX_TOOL_CALLS_CAP);
 
-  _tokensSinceLastIngest.set(project, cumTokenDelta);
-  _toolCallsSinceLastIngest.set(project, cumToolCalls);
-
-  // Large token increase without tool-call check
-  if (cumTokenDelta >= MIN_TOKEN_DELTA_NOTOOLCHECK) {
-    return true;
-  }
-  // Normal: both thresholds must be met
+  // 只查询，不修改 —— 调用方需要在决定触发后调用 accumulateExtractionCounters()
+  if (cumTokenDelta >= MIN_TOKEN_DELTA_NOTOOLCHECK) return true;
   return cumTokenDelta >= MIN_TOKEN_DELTA_TO_TRIGGER && cumToolCalls >= MIN_TOOL_CALLS_SINCE_LAST;
 }
 

@@ -2494,7 +2494,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
       } finally {
         // Trigger post_response hook with accumulated assistant content
         try {
-          const fullResponse = messages
+          const fullResponse = messagesRef.current
             .filter((m) => m.role === 'assistant')
             .slice(-1)[0]?.content ?? '';
           await hookRunner.current.run({

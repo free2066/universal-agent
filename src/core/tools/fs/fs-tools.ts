@@ -225,8 +225,8 @@ const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   { name: 'JWT Token',                pattern: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
   // npm token
   { name: 'NPM Access Token',         pattern: /npm_[A-Za-z0-9]{36,}/ },
-  // Cloudflare
-  { name: 'Cloudflare API Token',     pattern: /[A-Za-z0-9_-]{37}(?=[^A-Za-z0-9_-]|$)/ },
+  // Cloudflare — 需要上下文关键词，避免对任意37字符字母数字串误报
+  { name: 'Cloudflare API Token', pattern: /(?:CF_API_TOKEN|CLOUDFLARE_API_TOKEN|cloudflare.*token|cf.*token)[^\n]*[=:\s]["']?[A-Za-z0-9_-]{37}["']?/i },
 ];
 
 /**

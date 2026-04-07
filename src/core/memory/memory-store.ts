@@ -632,7 +632,7 @@ async function _runIncrementalIngest(
   try {
     const lastUuid = _lastIngestUuidByProject.get(project);
     // Find new messages since the cursor
-    const { getMessagesSince, shouldTriggerExtraction, resetExtractionCounters } =
+    const { getMessagesSince, shouldTriggerExtraction, accumulateExtractionCounters, resetExtractionCounters } =
       await import('./memory-extractor.js');
     const newMessages = getMessagesSince(messages, lastUuid);
 
@@ -640,11 +640,13 @@ async function _runIncrementalIngest(
     if (newMessages.length < 2) return;
 
     // ── Dual-threshold gate (claude-code parity) ──────────────────────────
-    // Only trigger extraction when both token delta AND tool call count thresholds
-    // are met, preventing too-frequent LLM extraction calls.
     if (!shouldTriggerExtraction(newMessages, project)) {
+      // 未达到触发阈值：累积计数器但不触发
+      accumulateExtractionCounters(newMessages, project);
       return;
     }
+    // 达到阈值：累积计数器（将在 resetExtractionCounters 时清零）
+    accumulateExtractionCounters(newMessages, project);
 
     // ── Isolated forked extraction (claude-code parity) ───────────────────
     // Use memory-extractor.ts which creates its own isolated LLM context

@@ -449,6 +449,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     content: filePath ? `${expandedPrompt}\n\n[File context: ${filePath}]` : expandedPrompt,
   };
 
+  // 记录调用时的 history 长度，用于后续判断是否是第一轮（session:start hook）
+  const _initialHistoryLen = history.length;
+
   // F22: prependUserContext — 将 userContext 键值对包装在 <system-reminder> 中，作为首条 user 消息注入
   // Mirrors claude-code api.ts prependUserContext() L449-474.
   // 跳过测试环境注入（与 claude-code 保持一致）。
@@ -584,8 +587,8 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
     }
   }
 
-  // session:start fires only on the first turn
-  if (history.length === 1) {
+  // session:start fires only on the first turn (before this call, history was empty)
+  if (_initialHistoryLen === 0) {
     await triggerHook(createHookEvent('session', 'start', {
       domain,
       model: modelManager.getCurrentModel('main'),
@@ -593,6 +596,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   }
 
   let iteration = 0;
+  let _ptlRetryCount = 0; // PTL retry counter — local to this invocation, never stored on opts
   let lastLLMCallAt = 0;
   const MAX_ITERATIONS = parseInt(process.env.AGENT_MAX_ITERATIONS ?? String(DEFAULT_MAX_ITERATIONS), 10);
   // C21: maxTurns 外部注入参数 (claude-code query.ts L191 parity)
@@ -886,24 +890,22 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
         // retry — up to MAX_PTL_RETRIES times before giving up.
         if (isPromptTooLong) {
           const MAX_PTL_RETRIES = 3;
-          const ptlKey = '__ptl_retry_count__';
-          const ptlCount = ((opts as unknown as Record<string, unknown>)[ptlKey] as number | undefined) ?? 0;
 
           // A13: withheld 机制 — PTL 是可恢复错误，先扣留再尝试恢复
           events?.onWithheld?.('prompt_too_long');
 
-          if (ptlCount < MAX_PTL_RETRIES) {
-            (opts as unknown as Record<string, unknown>)[ptlKey] = ptlCount + 1;
+          if (_ptlRetryCount < MAX_PTL_RETRIES) {
+            _ptlRetryCount++;
             // Remove oldest 2 messages (one user+assistant pair)
             const removeCount = Math.min(2, Math.max(0, history.length - 3));
             if (removeCount > 0) {
               history.splice(0, removeCount);
               // A13: 恢复成功 — 不向用户输出错误，只输出轻量提示
               events?.onRecovered?.('prompt_too_long');
-              onChunk(`\n  Prompt too long — truncating oldest ${removeCount} message(s) and retrying (attempt ${ptlCount + 1}/${MAX_PTL_RETRIES})…\n`);
+              onChunk(`\n  Prompt too long — truncating oldest ${removeCount} message(s) and retrying (attempt ${_ptlRetryCount}/${MAX_PTL_RETRIES})…\n`);
               history.push(createTombstone(history.length) as unknown as Message);
               // B14: 记录 continue 原因
-              _lastTransition = { reason: 'ptl_retry', attempt: ptlCount + 1 };
+              _lastTransition = { reason: 'ptl_retry', attempt: _ptlRetryCount };
               continue;
             }
           }
