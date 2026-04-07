@@ -577,10 +577,7 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
   const _warningState = calculateTokenWarningState(_adjustedBlockingTokens, _currentModel);
   // B35-2: CTX_WARNING 日志（在调用前记录一次初始状态）
   try {
-    const _ctxProfile = [...modelManager.listProfiles()].find(
-      (p) => p.name === _currentModel || p.modelName === _currentModel,
-    );
-    const _ctxWindow = _ctxProfile?.contextLength ?? 128000;
+    const _ctxWindow = 128_000; // 保守值；具体值不影响 pct 相对趋势诊断
     const _pct = _ctxWindow > 0 ? Math.round((_adjustedBlockingTokens / _ctxWindow) * 100) : 0;
     _onCtxEvent?.({ type: 'warning', state: _warningState === 'blocking' ? 'blocking' : _warningState === 'warning' ? 'warning' : 'ok', est: _adjustedBlockingTokens, ctx: _ctxWindow, pct: _pct });
   } catch { /* B35: fail-open */ }
