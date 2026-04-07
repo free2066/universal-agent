@@ -251,7 +251,8 @@ export function App({
 
     setMessages((prev) => {
       const last = prev[prev.length - 1];
-      if (last?.role === role) {
+      // system 消息不合并：每条工具结果/状态行都独立显示
+      if (role !== 'system' && last?.role === role) {
         return [...prev.slice(0, -1), { ...last, content: last.content + text }];
       }
       return [...prev, { role, content: text, timestamp: new Date().toISOString() }];
@@ -2373,7 +2374,14 @@ Begin with a scope summary then list findings. If none found, say so.`;
               const seqKey = `${name}#${toolSeqRef.current++}`;
               toolStartRef.current.set(seqKey, Date.now());
               // summarizeArgs: priority keys first (matches spinner.ts summarizeArgs)
-              const PRIO_KEYS = ['path', 'file', 'filepath', 'filename', 'dir', 'directory', 'command', 'cmd', 'script', 'query', 'url', 'text', 'content'];
+              const PRIO_KEYS = [
+                'command', 'cmd', 'script',           // Bash
+                'file_path', 'path', 'file', 'filepath', 'filename',  // Read/Write/Edit
+                'pattern',                             // Grep
+                'dir', 'directory',                    // LS
+                'old_string', 'new_string',            // Edit
+                'query', 'url', 'text', 'content',
+              ];
               const argsObj = args as Record<string, unknown>;
               let bestVal = '';
               for (const k of PRIO_KEYS) {
