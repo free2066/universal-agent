@@ -2510,7 +2510,11 @@ Begin with a scope summary then list findings. If none found, say so.`;
                 autoCompact(h, (msg) => appendSystem(msg)).then((result) => {
                   if (result.wasCompacted) {
                     appendSystem(`Auto-compact complete: ${result.compactedTurns} turns compressed.`);
-                    sessionLogger.current.logCompact({ before: h.length, after: h.length - result.compactedTurns, method: 'auto' });
+                    sessionLogger.current.logCompact({ before: h.length + result.compactedTurns, after: h.length, method: 'auto' });
+                    import('../../core/context/context-compressor.js').then(({ estimateHistoryTokens }) => {
+                      const postEst = estimateHistoryTokens(agent.getHistory());
+                      setStatusInfo((s) => ({ ...s, estimatedTokens: postEst }));
+                    }).catch(() => { /* non-fatal */ });
                   }
                 }).catch(() => { /* non-fatal */ });
               }

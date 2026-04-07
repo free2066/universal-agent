@@ -32,8 +32,8 @@ function safeResolvePath(userPath: string, baseDir: string): string {
 
 // ─── Output truncation (inspired by opencode truncate.ts) ────────────────────
 /** Lines / bytes beyond which tool output is considered "large" */
-const TRUNCATE_MAX_LINES = 2000;
-const TRUNCATE_MAX_BYTES = 50 * 1024; // 50 KB
+const TRUNCATE_MAX_LINES = 200;
+const TRUNCATE_MAX_BYTES = 20 * 1024; // 20 KB
 
 /**
  * Truncate a string to at most TRUNCATE_MAX_LINES / TRUNCATE_MAX_BYTES.
@@ -58,8 +58,8 @@ function truncateOutput(
   }
   const removedLines = lines.length - kept;
   const hint =
-    `\n\n(Output truncated: showing ${kept} of ${lines.length} lines. ` +
-    `Use Grep to search the full content, or Read with start_line/end_line to view specific sections.)`;
+    `\n\n(Output truncated: showing ${kept} of ${lines.length} lines, ${Math.round(Buffer.byteLength(preview, 'utf-8') / 1024)}KB. ` +
+    `To see more: pipe with | head -N or | tail -N, use Grep to search, or Read with offset/limit for files.)`;
   return { content: preview + hint, truncated: true, removedLines };
 }
 

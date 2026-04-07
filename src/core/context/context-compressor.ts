@@ -37,8 +37,8 @@ export const AUTO_COMPACT_DISABLED = (() => {
 
 /**
  * Override the compaction threshold fraction via AGENT_COMPACT_PCT_OVERRIDE.
- * Values: 0.0–1.0. Default: 0.75.
- * Example: AGENT_COMPACT_PCT_OVERRIDE=0.6 triggers compact earlier (60% of context window).
+ * Values: 0.0–1.0. Default: 0.60.
+ * Example: AGENT_COMPACT_PCT_OVERRIDE=0.75 triggers compact later (75% of context window).
  */
 const COMPACT_THRESHOLD_OVERRIDE = (() => {
   const v = parseFloat(process.env.AGENT_COMPACT_PCT_OVERRIDE ?? '');
@@ -46,8 +46,8 @@ const COMPACT_THRESHOLD_OVERRIDE = (() => {
   return null;
 })();
 
-/** Fraction of context window that triggers compaction (default: 75%) */
-const COMPACT_THRESHOLD = COMPACT_THRESHOLD_OVERRIDE ?? 0.75;
+/** Fraction of context window that triggers compaction (default: 60%) */
+const COMPACT_THRESHOLD = COMPACT_THRESHOLD_OVERRIDE ?? 0.60;
 
 /** Always keep at least this many recent turns intact after compaction */
 const KEEP_LAST_TURNS = 6;
