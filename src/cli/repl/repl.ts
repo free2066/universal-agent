@@ -551,6 +551,24 @@ export async function runREPL(
 
     sessionLogger.logInput(input);
 
+    // B30: awaySummary — if user was away long enough, show a quick recap
+    // Mirrors claude-code src/services/awaySummary.ts generateAwaySummary()
+    try {
+      const { shouldGenerateAwaySummary, generateAwaySummary, touchLastActivity } =
+        await import('../../core/agent/away-summary.js');
+      if (shouldGenerateAwaySummary() && agent.getHistory().length > 0) {
+        const awayResult = await generateAwaySummary(
+          agent.getHistory() as Array<{ role: string; content: string | unknown[] }>,
+        );
+        if (awayResult) {
+          const mins = Math.round(awayResult.awayDurationMs / 60_000);
+          const dur = mins < 1 ? 'just now' : `${mins}m ago`;
+          process.stdout.write(chalk.dim(`\n◈ While you were away (${dur}): ${awayResult.summary}\n\n`));
+        }
+      }
+      touchLastActivity(); // B30: reset idle timer on each user input
+    } catch { /* B30: non-fatal */ }
+
     // ── F2: !bash prefix — run shell command directly, inject output into context ──
     if (input.startsWith('!')) {
       const cmd = input.slice(1).trim();

@@ -21,6 +21,38 @@ import { readFileSync, writeFileSync, statSync, existsSync } from 'fs';
 import { resolve, extname } from 'path';
 import type { ToolRegistration } from '../../../models/types.js';
 
+// ── A30: Encoding & line-ending detection ─────────────────────────────────────
+// Mirrors claude-code NotebookEditTool.ts readFileSyncWithMetadata + writeTextContent
+// to preserve original encoding (utf-8 / utf16le) and line endings (LF / CRLF).
+
+/**
+ * A30: Detect file encoding via BOM bytes.
+ * Returns 'utf16le' for UTF-16 LE/BE BOM, otherwise 'utf-8'.
+ * Mirrors readFileSyncWithMetadata() encoding detection.
+ */
+function detectEncoding(absPath: string): BufferEncoding {
+  try {
+    const buf = readFileSync(absPath);
+    // UTF-16 LE BOM: 0xFF 0xFE
+    if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) return 'utf16le';
+    // UTF-16 BE BOM: 0xFE 0xFF (treat as utf16le for Node compatibility)
+    if (buf.length >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) return 'utf16le';
+    // Default: UTF-8 (BOM 0xEF 0xBB 0xBF is handled transparently by Node)
+  } catch { /* non-fatal — fallback to utf-8 */ }
+  return 'utf-8';
+}
+
+/**
+ * A30: Detect dominant line ending style by counting occurrences.
+ * Returns 'CRLF' if CRLF sequences outnumber bare LF, otherwise 'LF'.
+ * Mirrors writeTextContent() lineEndings parameter behavior.
+ */
+function detectLineEndings(content: string): 'CRLF' | 'LF' {
+  const crlfCount = (content.match(/\r\n/g) ?? []).length;
+  const lfCount   = (content.match(/(?<!\r)\n/g) ?? []).length;
+  return crlfCount > lfCount ? 'CRLF' : 'LF';
+}
+
 // ── Read-state tracking (Read-before-Edit guard) ──────────────────────────────
 // Maps absolute path → { mtime at read time }
 
@@ -270,9 +302,21 @@ export const notebookEditTool: ToolRegistration = {
       }
     }
 
-    // 8. Write back
+    // 8. Write back with original encoding and line endings preserved
     try {
-      writeFileSync(absPath, JSON.stringify(notebook, null, 1), 'utf-8');
+      // A30: read original content for encoding/line-ending detection
+      // Mirrors claude-code NotebookEditTool.ts L324-325 readFileSyncWithMetadata +
+      // L432 writeTextContent(fullPath, updatedContent, encoding, lineEndings)
+      const rawContent  = readFileSync(absPath, 'utf-8');
+      const lineEndings = detectLineEndings(rawContent);
+      const encoding    = detectEncoding(absPath);
+
+      let toWrite = JSON.stringify(notebook, null, 1);
+      // A30: preserve CRLF line endings — Windows ipynb files should not be converted to LF
+      if (lineEndings === 'CRLF') {
+        toWrite = toWrite.replace(/\n/g, '\r\n');
+      }
+      writeFileSync(absPath, toWrite, { encoding });
       // Update read timestamp to current mtime
       markNotebookRead(absPath);
     } catch (e) {
