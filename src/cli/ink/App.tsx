@@ -216,13 +216,15 @@ export function App({
   }, []);
 
   // ── Real SessionLogger (created once per session) ──────────────────────
-  const sessionLogger = useRef<SessionLogger>(
-    new SessionLogger({
+  // 用函数惰性初始化，避免每次 render 都执行 new SessionLogger()（会创建大量空日志文件）
+  const sessionLogger = useRef<SessionLogger>(null as unknown as SessionLogger);
+  if (!sessionLogger.current) {
+    sessionLogger.current = new SessionLogger({
       sessionId,
       model: modelDisplayName || modelManager.getCurrentModel('main'),
       domain: initialDomain,
-    })
-  );
+    });
+  }
 
   // ── Helper: append message ──────────────────────────────────────────────
   const appendMessage = useCallback((role: ChatMessage['role'], text: string) => {
