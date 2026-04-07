@@ -61,11 +61,14 @@ export interface SessionLoggerOptions {
   model: string;
   domain: string;
   sessionId?: string;
+  /** 如果为 true，跳过所有文件 IO（用于初始化失败时的 fallback 模式）*/
+  noWrite?: boolean;
 }
 
 export class SessionLogger {
   private readonly logPath: string;
   private readonly startMs: number;
+  private readonly _noWrite: boolean;
   private turnCount = 0;
   private toolCount = 0;
   private outputChars = 0;
@@ -73,6 +76,13 @@ export class SessionLogger {
 
   constructor(opts: SessionLoggerOptions) {
     this.startMs = Date.now();
+    this._noWrite = opts.noWrite ?? false;
+
+    if (this._noWrite) {
+      this.logPath = '';
+      return;
+    }
+
     mkdirSync(LOGS_DIR, { recursive: true, mode: 0o700 });
     this._rotate();
 
@@ -270,6 +280,7 @@ export class SessionLogger {
   // ── Private ────────────────────────────────────────────────────────────────
 
   private _write(line: string): void {
+    if (this._noWrite) return;
     try {
       appendFileSync(this.logPath, line + '\n', 'utf-8');
     } catch { /* non-fatal */ }

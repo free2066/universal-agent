@@ -21,13 +21,9 @@ type ShutdownCallback = () => Promise<void>;
 
 let _shuttingDown = false;
 let _cleanupFn: ShutdownCallback | undefined;
+// 跟踪已注册的 handler 引用，防止多次调用 setupGracefulShutdown 时累积 listener
+let _handlersRegistered = false;
 
-/**
- * A24: setupGracefulShutdown -- register SIGTERM/SIGHUP handlers with failsafe
- *
- * @param opts.onShutdown  Async cleanup function (save snapshots, drain ingest, close loggers, etc.)
- * @param opts.timeoutMs   Max time to wait for cleanup before force-exit (default: 5000ms)
- */
 export function setupGracefulShutdown(opts: {
   onShutdown?: ShutdownCallback;
   timeoutMs?: number;
@@ -35,27 +31,27 @@ export function setupGracefulShutdown(opts: {
   _cleanupFn = opts.onShutdown;
   const FAILSAFE_MS = opts.timeoutMs ?? 5_000;
 
+  // 避免重复注册
+  if (_handlersRegistered) return;
+  _handlersRegistered = true;
+
   function getExitCode(signal: string): number {
     if (signal === 'SIGTERM') return 143;
     if (signal === 'SIGHUP') return 129;
-    return 130; // SIGINT default
+    return 130;
   }
 
   async function shutdown(signal: string): Promise<void> {
-    if (_shuttingDown) return; // Idempotent: ignore duplicate signals
+    if (_shuttingDown) return;
     _shuttingDown = true;
 
     process.stderr.write(`\n[graceful] Received ${signal}, shutting down...\n`);
 
-    // Failsafe timer: force-exit if cleanup takes too long
     const timer = setTimeout(() => {
       process.stderr.write(`[graceful] Failsafe timeout (${FAILSAFE_MS}ms) — force exit\n`);
       process.exit(getExitCode(signal));
     }, FAILSAFE_MS);
-    // unref() prevents the timer itself from keeping the process alive
-    if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
-      (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
-    }
+    (timer as unknown as { unref?: () => void }).unref?.();
 
     try {
       await _cleanupFn?.();
@@ -63,20 +59,15 @@ export function setupGracefulShutdown(opts: {
       process.stderr.write(`[graceful] Cleanup error: ${err instanceof Error ? err.message : String(err)}\n`);
     } finally {
       clearTimeout(timer);
+      // 等待当前 event loop 中的微任务完成（drain promises）
+      await new Promise<void>((r) => setImmediate(r));
     }
 
     process.exit(getExitCode(signal));
   }
 
-  // Register SIGTERM (Kubernetes, systemd, Docker stop)
-  process.on('SIGTERM', () => {
-    shutdown('SIGTERM').catch(() => process.exit(143));
-  });
-
-  // Register SIGHUP (terminal hangup, nohup)
-  process.on('SIGHUP', () => {
-    shutdown('SIGHUP').catch(() => process.exit(129));
-  });
+  process.on('SIGTERM', () => { void shutdown('SIGTERM').catch(() => process.exit(143)); });
+  process.on('SIGHUP',  () => { void shutdown('SIGHUP').catch(() => process.exit(129)); });
 }
 
 /**

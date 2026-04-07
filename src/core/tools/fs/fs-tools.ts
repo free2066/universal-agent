@@ -237,14 +237,18 @@ const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
  * Does NOT block in non-safe mode — only warns via return value.
  */
 function detectSecrets(content: string, filePath: string): string | null {
-  // Never scan binary-like content
   if (content.includes('\x00')) return null;
-  // Skip content that looks like it's explicitly a secrets file the user is creating
   const base = filePath.split('/').pop() ?? '';
-  if (/^\.?env(?:\.|$)/.test(base)) return null; // .env files are expected to have secrets
+  if (/^\.?env(?:\.|$)/.test(base)) return null;
+
+  // 大文件只检测前后各 50KB，避免 O(fileSize × patterns) 阻塞
+  const SCAN_LIMIT = 50 * 1024;
+  const scanContent = content.length > SCAN_LIMIT * 2
+    ? content.slice(0, SCAN_LIMIT) + content.slice(-SCAN_LIMIT)
+    : content;
 
   for (const { name, pattern } of SECRET_PATTERNS) {
-    if (pattern.test(content)) {
+    if (pattern.test(scanContent)) {
       return name;
     }
   }

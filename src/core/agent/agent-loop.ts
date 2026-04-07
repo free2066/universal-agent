@@ -1447,7 +1447,20 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
             onChunk(`\n🔧 Tools (parallel): ${batch.map((t) => t.name).join(', ')}\n`);
           }
 
-          const parallelResults = await Promise.all(batch.map(runCall));
+          // 为并行 batch 添加超时保护，防止单个工具 hang 导致整个 batch 卡住
+          const BATCH_TIMEOUT_MS = 30 * 60 * 1000; // 30min（与 Bash 最大超时对齐）
+          const batchWithTimeout = Promise.all(batch.map(runCall));
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Parallel tool batch timed out after ${BATCH_TIMEOUT_MS / 60000}min`)), BATCH_TIMEOUT_MS)
+          );
+          const parallelResults = await Promise.race([batchWithTimeout, timeoutPromise]).catch((err) => {
+            // 超时时返回错误结果，不中断整个循环
+            return batch.map((call) => ({
+              role: 'tool' as const,
+              toolCallId: call.id,
+              content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+            }));
+          });
           toolResults.push(...parallelResults);
 
           for (const call of overflow) {

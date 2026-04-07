@@ -1,0 +1,367 @@
+===============================================
+代码分析报告：10个关键文件的优化机会
+===============================================
+
+标记说明: P0=critical, P1=high, P2=medium, P3=low
+维度: 性能(PERF), 稳定性(STAB), 安全(SEC), 代码质量(QC)
+
+===============================================
+1. agent-loop.ts
+===============================================
+
+问题1:
+文件: agent-loop.ts | 行号: 437-461 | 优先级: P2 PERF | 维度: 性能
+描述: 每次 iteration 调用 Object.entries(_systemContext) / Object.entries(_userContext)
+      虽然数据量小，但这两个对象在循环中不会变化，可以提前缓存
+建议: 在 runStreamLoop 外部缓存 entries 结果，或改用 for-of 遍历
+
+问题2:
+文件: agent-loop.ts | 行号: 525 | 优先级: P1 PERF | 维度: 性能
+描述: Tool result budget 截断的向后遍历 for(let i = history.length-1; i >= 0; i--)
+      如果 history 很长（千条消息），每次都要完整扫描一遍才能累计 budget
+建议: 维护一个 lastToolResultsStartIdx cursor，避免重复扫描
+
+问题3:
+文件: agent-loop.ts | 行号: 748 | 优先级: P2 PERF | 维度: 性能
+描述: 每次 iteration 调用 editContextIfNeeded(history) 可能扫描 history 查找旧工具结果
+      如果 history 频繁编辑，会有频繁的扫描开销
+建议: 缓存上次编辑的 index，只扫描增量部分
+
+问题4:
+文件: agent-loop.ts | 行号: 1450 | 优先级: P0 STAB | 维度: 稳定性/并发
+描述: Promise.all(batch.map(runCall)) 缺少超时控制
+      如果单个工具 hang（如 Bash 无限等待），整个 batch 会卡住
+      将阻塞后续 LLM 迭代，最后触发 MAX_ITERATIONS 截断
+建议: 用 Promise.race([Promise.all(...), timeout]) 或为每个 runCall 加独立 timeout
+
+问题5:
+文件: agent-loop.ts | 行号: 未明确行号但存在 | 优先级: P1 STAB | 维度: 并发
+描述: _pendingToolUseSummaryPromise 在 React component 卸载时（App.tsx unmount）
+      仍可能是 pending 状态，导致内存泄漏和后续错误
+建议: 在 AppProps.onRegisterAbort 中传入 cleanup function，清理 pendingPromise
+
+===============================================
+2. model-fallback.ts
+===============================================
+
+问题1:
+文件: model-fallback.ts | 行号: 82-95 | 优先级: P1 STAB | 维度: 稳定性
+描述: consecutive529Failures 和 primaryCircuitOpen 是模块级全局变量
+      多个 ModelFallbackChain 实例会互相污染计数器
+      例：实例A触发 circuit open，实例B 也受影响
+建议: 将 529 计数器改为实例字段（每个 chain 独立维护）
+      或增加 reset529CircuitBreaker() 的参数以支持实例级别的 reset
+
+问题2:
+文件: model-fallback.ts | 行号: 148 | 优先级: P3 QC | 维度: 代码质量
+描述: Error message 在 _tryFallbacks 中使用 lastErr 但可能未定义
+      实际上 lastErr 初始化为 primaryErr，但若 primaryErr 是 undefined
+      最后的错误信息会很奇怪
+建议: 在初始化 lastErr 时明确检查 primaryErr 类型
+
+===============================================
+3. domain-router.ts
+===============================================
+
+问题1:
+文件: domain-router.ts | 行号: 82-87 | 优先级: P2 PERF | 维度: 性能
+描述: plugin hot-reload 时先用 findIndex() 找到索引，再用 filter() 扫描整个数组
+      实际上是两次 O(n) 遍历
+      const idx = PLUGIN_HOOKS.findIndex(...);
+      if (idx !== -1) PLUGIN_HOOKS.splice(idx, PLUGIN_HOOKS.filter(...).length);
+建议: 改为单次 for loop 倒序删除：
+      for(let i = PLUGIN_HOOKS.length-1; i >= 0; i--) {
+        if(PLUGIN_HOOKS[i].pluginName === plugin.name) PLUGIN_HOOKS.splice(i, 1);
+      }
+
+问题2:
+文件: domain-router.ts | 行号: 213-230 | 优先级: P3 PERF | 维度: 性能
+描述: detectDomain() 中 Object.entries(DOMAINS) + 内层 for(const kw of plugin.keywords)
+      虽然 domain 数量小（3-4个），但可以用预计算的 keyword→domain 映射
+建议: 在模块初始化时建立 keywordMap，detectDomain 改为单次 loop
+
+===============================================
+4. StatusBar.tsx
+===============================================
+
+问题1:
+文件: StatusBar.tsx | 行号: 51-99 | 优先级: P3 PERF | 维度: 性能
+描述: 组件每次 re-render 都重新计算 fmtN()、tokenColor()
+      虽然这些函数很轻，但调用很频繁（status bar 实时更新）
+建议: 在父组件（App.tsx）用 useMemo 缓存 statusInfo，避免无谓的数值格式化
+
+===============================================
+5. session-history.ts
+===============================================
+
+问题1:
+文件: session-history.ts | 行号: 112-150 | 优先级: P0 STAB | 维度: 并发
+描述: TOCTOU race condition 在 flushScheduled 标志和 setImmediate 之间
+      场景：
+        T1: flushScheduled = false
+        T2: addToHistory() 检查 !flushScheduled，为 true，setImmediate()，设 flushScheduled = true
+        T3: (同步)addToHistory() 再次检查 !flushScheduled，为 false，skip setImmediate
+        但这样两个 addToHistory 写入可能被卡在同一 tick 中，pendingEntries 实际有 2 条
+        然后 setImmediate 执行，flush 一次，后续的 addToHistory 调用又 setImmediate
+      风险：多个 flush 同时发生，或 history 条目丢失
+建议: 改为 Promise + 队列，确保每个 flush 完全完成后才接受新的 addToHistory
+
+问题2:
+文件: session-history.ts | 行号: 140-160 | 优先级: P3 STAB | 维度: 代码注释
+描述: removeLastFromHistory() 中 readFileSync + writeFileSync 是同步 I/O
+      虽然在 SIGINT handler 中是必要的，但注释应更明确指出这是故意的选择
+      并记录可能的风险（如 I/O 阻塞导致关闭延迟）
+建议: 添加详细注释解释为什么不能用异步 API
+
+===============================================
+6. fs-tools.ts
+===============================================
+
+问题1:
+文件: fs-tools.ts | 行号: 334-365 | 优先级: P2 SEC | 维度: 安全
+描述: SECRET_PATTERNS 中 Cloudflare token pattern
+      /(?:CF_API_TOKEN|...)[^\\n]*[=:\\s][\"']?[A-Za-z0-9_-]{37}[\"']?/i
+      「37字符」可能匹配无关内容（如随机字符串），导致误报
+      例：CF_API_TOKEN=helloworld_this_is_37_characters_long！
+建议: 使用更严格的模式（如 Cloudflare 官方格式），或依赖第三方库如 detect-secrets
+
+问题2:
+文件: fs-tools.ts | 行号: 379 | 优先级: P1 PERF | 维度: 性能
+描述: detectSecrets() 遍历 30 个 SECRET_PATTERNS，每个 pattern.test(content)
+      对大文件（几 MB）可能很慢，O(file_size * num_patterns)
+      每次 Write tool 调用都要扫描一遍
+建议: (1)用库如 detect-secrets 或 truffleHog，有优化的检测
+      (2)缓存常见文件的检测结果（.env, .config 等）
+      (3)按模式优先级排序，高置信度的先测
+
+问题3:
+文件: fs-tools.ts | 行号: 515-581 | 优先级: P2 PERF | 维度: 性能
+描述: ContextAwareReplacer 中 Levenshtein 距离计算 O(m*n) 时间 + O(m*n) 空间
+      虽然只在 3+ 行的块中触发，但大块代码替换时会卡顿
+建议: (1)用动态规划空间优化版本（只保留两行）
+      (2)缓存最常用的块替换结果
+      (3)设置最大块大小限制，超过则跳过此 replacer
+
+问题4:
+文件: fs-tools.ts | 行号: 83-105 | 优先级: P3 PERF | 维度: 性能
+描述: truncateOutput() 中 split('\n') + slice 会在每次调用时重新分割
+      对于大文件的多次 truncate，可能有重复计算
+建议: 缓存 allLines，传给 truncateOutput 而不是原始 text
+
+===============================================
+7. App.tsx
+===============================================
+
+问题1:
+文件: App.tsx | 行号: 125-130 | 优先级: P2 PERF | 维度: 性能
+描述: streamFlushTimer 在 unmount effect 中清理，但 flushStreamBuf callback
+      可能被多个 setTimeout(flushStreamBuf, STREAM_FLUSH_MS) 调用
+      如果用户快速输入多条消息，可能有多个 timer pending
+建议: 在 flushStreamBuf 内部加 guard：if (!streamFlushTimer.current) return;
+      并将 timer 置为 null
+
+问题2:
+文件: App.tsx | 行号: 180-210 | 优先级: P2 UX | 维度: 用户体验
+描述: 当 assistant 持续 streaming 和 tool call 快速轮转时，setMessages 更新可能
+      导致状态栏闪烁（tool call 消息插入导致 re-render，立即被替换等）
+建议: 在 ToolCallLine 组件中用 key={toolCall.id} 确保复用，减少 re-mount
+
+问题3:
+文件: App.tsx | 行号: 156-160 | 优先级: P1 STAB | 维度: 内存泄漏
+描述: sessionLogger 懒初始化：
+      if (!sessionLogger.current) {
+        sessionLogger.current = new SessionLogger(...);
+      }
+      如果 new SessionLogger(...) 抛错，sessionLogger.current 会是 undefined
+      后续访问 sessionLogger.current.logSlash() 会 crash
+建议: 改为 || 初始化确保有备用：
+      if (!sessionLogger.current) {
+        try {
+          sessionLogger.current = new SessionLogger(...);
+        } catch (e) {
+          sessionLogger.current = new MockSessionLogger();
+        }
+      }
+
+===============================================
+8. context-loader.ts
+===============================================
+
+问题1:
+文件: context-loader.ts | 行号: 206-209 | 优先级: P2 PERF | 维度: 性能
+描述: _rulesCache 采用 FIFO 淘汰，限制 20 keys
+      在多代理场景（并行创建多个子代理，各自一个 cwd），缓存命中率低
+      每个新 cwd 都会逐出旧的，导致频繁 I/O
+建议: 改为 LRU cache（如 lru-cache npm 包），按访问频率保留
+
+问题2:
+文件: context-loader.ts | 行号: 294-320 | 优先级: P2 PERF | 维度: 性能
+描述: loadRules() 中 loadFromDir(rulesDir) + loadFromDir(globalRulesDir) 串行调用
+      两次 readdirSync() 是同步阻塞
+      如果目录很大，可能卡顿
+建议: 改为 parallel（Promise.all）：
+      const [projFiles, globFiles] = await Promise.all([
+        fs.promises.readdir(rulesDir),
+        fs.promises.readdir(globalRulesDir)
+      ]);
+
+问题3:
+文件: context-loader.ts | 行号: 123-140 | 优先级: P1 SEC | 维度: 代码健壮性
+描述: parseFrontmatter() 对 YAML paths: 列表使用简单正则
+      若路径包含 \n（shell 转义），可能误解析
+      例：paths: ["path\\nwith\\nnewline"] 会分成多行
+建议: 用完整 YAML 解析库（如 js-yaml），而不是正则
+
+===============================================
+9. permission-manager.ts
+===============================================
+
+问题1:
+文件: permission-manager.ts | 行号: 455-480 | 优先级: P1 STAB | 维度: 资源泄漏
+描述: watchSettingsFile() 为每个 PermissionManager 实例注册一个 watchFile
+      在多代理场景（每个子代理创建独立 PM 实例），会创建大量冗余 watcher
+      每个 watcher 占用 fd 和内存，30+ 个代理 × 3 个文件 = 90+ 个 watcher
+建议: 改为全局注册 watcher（单例模式），所有 PM 实例共享
+      或在 PermissionManager 销毁时 unwatchFile()
+
+问题2:
+文件: permission-manager.ts | 行号: 230-235 | 优先级: P2 STAB | 维度: 代码质量
+描述: globalRulesDir 中处理 HOME 时，若 process.env.HOME 未设置
+      homedir() 作为备用，但早期的 join(process.env.HOME ?? '~', ...) 注释说
+      「#29: process.env.HOME || '~' is wrong」——这里修复了但其他地方可能还有
+建议: 全局统一用 homedir() 替代 process.env.HOME || '~'，避免多次修复
+
+问题3:
+文件: permission-manager.ts | 行号: 567-610 | 优先级: P2 STAB | 维度: 依赖信任
+描述: normalizeCommandForPermissionCheck() 导入自 bash-security 模块
+      若该函数有 bug（如某个 prefix 漏掉），此处无法感知
+      权限决策对这个函数的正确性有强依赖
+建议: (1)在权限决策后验证规范化结果是否合理
+      (2)添加测试覆盖所有 normalizeCommand 场景
+      (3)文档化假设条件
+
+===============================================
+10. graceful-shutdown.ts
+===============================================
+
+问题1:
+文件: graceful-shutdown.ts | 行号: 47-52 | 优先级: P1 STAB | 维度: 完整性
+描述: 关闭流程缺少 event loop draining
+      若有 setImmediate()、pending timers 或微任务，failsafe timeout 后直接 process.exit()
+      可能导致：
+        - 未完成的 I/O 操作（如日志未刷盘）
+        - 数据库连接未正式关闭
+        - hook 回调未执行完
+建议: 在 failsafe timeout 前添加 event loop drain（如用 drainEventLoop 库）
+      或明确文档化「某些 cleanup 可能在 timeout 后被中断」
+
+问题2:
+文件: graceful-shutdown.ts | 行号: 34-52 | 优先级: P1 STAB | 维度: 信号处理
+描述: 多个信号同时触发时的行为
+      _shuttingDown 是全局 flag，第一个信号设为 true，第二个 signal return
+      但如果是 signal chaining（Ctrl+C 后自动发送 SIGTERM），第二个信号会被吞掉
+      可能导致：
+        - cleanup 函数未完全执行
+        - 日志未刷新
+建议: 改为计数：
+      let _shutdownSignals = 0;
+      每个 signal 都记录，若 _shutdownSignals > 1 则强行 force exit
+
+问题3:
+文件: graceful-shutdown.ts | 行号: 25 | 优先级: P3 QC | 维度: 代码质量
+描述: 注释「unref() prevents the timer from keeping process alive」
+      但实际上在我们的场景中，cleanup 完成后已经 process.exit()
+      所以 unref() 的意义不大（process 无论如何都会退出）
+建议: 或者改为 timer.unref() 可选，如果 cleanup 异常长可以取消 unref() 使其强制退出
+
+===============================================
+汇总表格
+===============================================
+
+P0 (Critical - 4个):
+  1. agent-loop:1450 - Promise.all batch 缺 timeout
+  2. session-history:112-150 - flushScheduled 竞态
+  3. graceful-shutdown:34-52 - 信号处理吞掉第二个信号
+  4. context-loader:123-140 - YAML 解析不安全
+
+P1 (High - 6个):
+  1. agent-loop - _pendingToolUseSummaryPromise 未清理
+  2. model-fallback:82-95 - 529 circuit breaker 全局变量污染
+  3. fs-tools:379 - 30 regex 逐个扫描
+  4. permission-manager:455-480 - 冗余 watcher 多实例创建
+  5. App.tsx:156-160 - sessionLogger 懒初始化错误处理
+  6. graceful-shutdown:47-52 - 缺少 event loop draining
+
+P2 (Medium - 8个):
+  1. agent-loop:437-461 - Object.entries 可缓存
+  2. agent-loop:748 - editContextIfNeeded 频繁扫描
+  3. domain-router:82-87 - hot-reload 重复扫描
+  4. fs-tools:334-365 - Cloudflare token regex 可能误报
+  5. fs-tools:515-581 - Levenshtein 无缓存
+  6. App.tsx:180-210 - 状态栏闪烁
+  7. context-loader:206-209 - FIFO 缓存低效
+  8. context-loader:294-320 - loadRules 串行 I/O
+  9. permission-manager:230-235 - 多处 HOME 处理不统一
+
+P3 (Low - 4个):
+  1. agent-loop:525 - 同步 I/O 在 SIGINT handler 文档
+  2. StatusBar.tsx:51 - 无缓存的重复计算
+  3. fs-tools:83-105 - truncateOutput 重复分割
+  4. graceful-shutdown:25 - unref() 注释不准确
+
+
+===============================================
+快速查询指南
+===============================================
+
+按优先级修复顺序（建议从 P0 开始）：
+
+【P0 Critical - 立即修复】
+  agent-loop.ts:1450          | Promise.all batch 超时控制
+  session-history.ts:112-150  | flushScheduled 竞态条件
+  graceful-shutdown.ts:34-52  | 信号处理改进
+  context-loader.ts:123-140   | YAML 安全解析
+
+【P1 High - 高优先级修复】
+  agent-loop.ts               | _pendingToolUseSummaryPromise 清理
+  model-fallback.ts:82-95     | 实例级别的 circuit breaker
+  fs-tools.ts:379             | 优化 secret scanning
+  permission-manager.ts:455   | 全局 watcher 管理
+  App.tsx:156-160             | sessionLogger 初始化
+  graceful-shutdown.ts:47-52  | event loop draining
+
+【P2 Medium - 性能优化】
+  agent-loop.ts:437-461       | Object.entries 缓存
+  domain-router.ts:82-87      | hot-reload 优化
+  fs-tools.ts:334-365,515-581 | secret detection 和 Levenshtein 优化
+  App.tsx:125-130,180-210     | stream buffer 和 re-render 优化
+  context-loader.ts:206-209,294-320 | 缓存和并行加载优化
+
+【P3 Low - 文档/代码质量改进】
+  StatusBar.tsx:51            | useMemo 缓存
+  fs-tools.ts:83-105          | truncateOutput 优化
+  graceful-shutdown.ts:25     | 注释改进
+
+===============================================
+修复建议总结
+===============================================
+
+P0级别必须修复（影响功能正确性）：
+1. agent-loop Promise.all batch - 加 timeout 防止工具 hang 导致整体卡顿
+2. session-history flushScheduled - 改为 Promise 队列确保原子性
+3. graceful-shutdown 信号处理 - 改为计数器防止信号吞掉
+4. context-loader YAML 解析 - 用正确的 YAML 库替代正则
+
+P1级别重要修复（影响稳定性/性能）：
+1. model-fallback 全局变量 - 改为实例字段
+2. fs-tools secret scanning - 缓存 + 并行化
+3. permission-manager watcher - 全局单例管理
+4. App.tsx sessionLogger - try-catch 确保初始化
+5. graceful-shutdown event loop - 添加 drain 逻辑
+
+P2级别优化（小幅性能提升）：
+1. Object.entries 缓存（1-2% 迭代加速）
+2. hot-reload O(n) → single loop（插件加载加速）
+3. FIFO → LRU 缓存（多代理场景改进）
+4. 串行 → 并行 loadRules（I/O 并行化）
+

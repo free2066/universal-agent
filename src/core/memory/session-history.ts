@@ -112,6 +112,7 @@ function releaseLock(): void {
 
 const pendingEntries: HistoryEntry[] = [];
 let flushScheduled = false;
+let flushInProgress = false; // 防止并发 flush
 
 /**
  * Async flush: drains pendingEntries to disk with lock protection.
@@ -119,8 +120,10 @@ let flushScheduled = false;
  */
 async function scheduledFlush(): Promise<void> {
   flushScheduled = false;
+  if (flushInProgress) return; // 已有 flush 在进行，本次跳过（pending 会被下一次 flush 处理）
   if (pendingEntries.length === 0) return;
 
+  flushInProgress = true;
   const toFlush = pendingEntries.splice(0);
   try {
     ensureDir();
@@ -133,6 +136,13 @@ async function scheduledFlush(): Promise<void> {
     }
   } catch {
     // History write failure is non-fatal; silently discard
+  } finally {
+    flushInProgress = false;
+    // 如果在 flush 期间有新的 pending 条目但没有调度新的 flush，补调度一次
+    if (pendingEntries.length > 0 && !flushScheduled) {
+      flushScheduled = true;
+      setImmediate(() => { void scheduledFlush(); });
+    }
   }
 }
 

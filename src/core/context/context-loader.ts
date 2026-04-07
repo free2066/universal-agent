@@ -332,15 +332,20 @@ export function loadProjectContext(startDir?: string, currentFilePath?: string):
 // Note: in normal agent usage the parent agent already builds the system prompt once
 // and shares it via setSystemPrompt(), so this cache mostly benefits edge cases where
 // loadRules() is called directly multiple times (e.g. unit tests, debug-check).
+// LRU cache：命中时移到末尾，淘汰时删 Map 中第一个（最久未访问）
 const _rulesCache = new Map<string, { result: { content: string; sources: string[] }; ts: number }>();
+const RULES_CACHE_MAX = 20;
 const _RULES_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 export function loadRules(startDir?: string): { content: string; sources: string[] } {
   const cwd = startDir || process.cwd();
 
   // Fast path: return cached result if still fresh (5-minute TTL)
+  // LRU：命中时删除再重新插入，确保最近访问的在末尾
   const cached = _rulesCache.get(cwd);
   if (cached && Date.now() - cached.ts < _RULES_CACHE_TTL_MS) {
+    _rulesCache.delete(cwd);
+    _rulesCache.set(cwd, cached); // 移到末尾（LRU 命中）
     return cached.result;
   }
 
@@ -399,9 +404,9 @@ export function loadRules(startDir?: string): { content: string; sources: string
   loadFile(cfAgentsMd);
 
   const result = { content: parts.join('\n\n'), sources };
-  // Write back to cache; evict oldest entry if Map grows beyond 20 keys
+  // Write back to cache; evict LRU (first) entry if Map grows beyond limit
   _rulesCache.set(cwd, { result, ts: Date.now() });
-  if (_rulesCache.size > 20) {
+  if (_rulesCache.size > RULES_CACHE_MAX) {
     const oldest = _rulesCache.keys().next().value;
     if (oldest) _rulesCache.delete(oldest);
   }

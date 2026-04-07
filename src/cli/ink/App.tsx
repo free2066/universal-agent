@@ -228,11 +228,16 @@ export function App({
   // 用函数惰性初始化，避免每次 render 都执行 new SessionLogger()（会创建大量空日志文件）
   const sessionLogger = useRef<SessionLogger>(null as unknown as SessionLogger);
   if (!sessionLogger.current) {
-    sessionLogger.current = new SessionLogger({
-      sessionId,
-      model: modelDisplayName || modelManager.getCurrentModel('main'),
-      domain: initialDomain,
-    });
+    try {
+      sessionLogger.current = new SessionLogger({
+        sessionId,
+        model: modelDisplayName || modelManager.getCurrentModel('main'),
+        domain: initialDomain,
+      });
+    } catch {
+      // SessionLogger 初始化失败时使用 no-op 实现，防止后续所有 sessionLogger.current.xxx 调用 crash
+      sessionLogger.current = new SessionLogger({ sessionId, model: 'unknown', domain: 'auto', noWrite: true });
+    }
   }
 
   // ── Helper: append message ──────────────────────────────────────────────

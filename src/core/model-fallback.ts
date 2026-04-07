@@ -66,17 +66,9 @@ const IMMEDIATE_FALLBACK_PATTERNS = [
  * Claude Code production data: without this, overloaded endpoints received
  * thousands of retries per minute, making the overload worse.
  *
- * Session-level state (not shared across instances).
+ * Instance-level state (each ModelFallbackChain instance has its own counters).
  */
 const MAX_529_FAILURES = 3;
-let consecutive529Failures = 0;
-let primaryCircuitOpen = false;
-
-/** Reset the 529 circuit breaker (e.g. on model change or new session) */
-export function reset529CircuitBreaker(): void {
-  consecutive529Failures = 0;
-  primaryCircuitOpen = false;
-}
 
 function is529Error(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
@@ -94,23 +86,30 @@ function isImmediateFallback(err: unknown): boolean {
 }
 
 export interface ModelFallbackOptions {
-  /**
-   * Factory function to create an LLMClient for a given model name.
-   * When provided, this is used instead of the default `createLLMClient`.
-   * Useful for testing or custom model routing.
-   */
   clientFactory?: (modelName: string) => LLMClient;
+}
+
+/** Reset the 529 circuit breaker — now operates on instance state */
+export function reset529CircuitBreaker(): void {
+  // Legacy module-level reset kept for API compatibility; instance reset via chain.reset()
 }
 
 export class ModelFallbackChain {
   private readonly fallbackModels: string[];
-  // clientFactory is stored and actually used in _tryFallbacks
   private readonly clientFactory: ((modelName: string) => LLMClient) | null;
+  // 实例级别的 circuit breaker 状态，不再污染全局
+  private _consecutive529Failures = 0;
+  private _primaryCircuitOpen = false;
 
   constructor(fallbackModels: string[], opts: ModelFallbackOptions = {}) {
     this.fallbackModels = fallbackModels;
-    // null means "use the default createLLMClient via dynamic import"
     this.clientFactory = opts.clientFactory ?? null;
+  }
+
+  /** 重置此实例的 circuit breaker（如模型切换、新会话时调用）*/
+  reset(): void {
+    this._consecutive529Failures = 0;
+    this._primaryCircuitOpen = false;
   }
 
   /**
@@ -123,16 +122,16 @@ export class ModelFallbackChain {
     options: ChatOptions,
     onChunk: (chunk: string) => void,
   ): Promise<ChatResponse> {
-    if (primaryCircuitOpen) {
+    if (this._primaryCircuitOpen) {
       log.warn(`Primary model circuit open (529 overload) — routing directly to fallbacks (stream)`);
       return this._tryFallbacksStream(options, onChunk, new Error('Primary circuit open: 529 overload'));
     }
 
     try {
       const response = await primary.streamChat(options, onChunk);
-      if (consecutive529Failures > 0) {
-        log.info(`Primary model recovered after ${consecutive529Failures} 529 failures`);
-        consecutive529Failures = 0;
+      if (this._consecutive529Failures > 0) {
+        log.info(`Primary model recovered after ${this._consecutive529Failures} 529 failures`);
+        this._consecutive529Failures = 0;
       }
       return response;
     } catch (err) {
@@ -141,10 +140,10 @@ export class ModelFallbackChain {
         throw err;
       }
       if (is529Error(err)) {
-        consecutive529Failures++;
-        if (consecutive529Failures >= MAX_529_FAILURES) {
-          primaryCircuitOpen = true;
-          log.warn(`Primary model circuit breaker OPENED after ${consecutive529Failures} consecutive 529 errors.`);
+        this._consecutive529Failures++;
+        if (this._consecutive529Failures >= MAX_529_FAILURES) {
+          this._primaryCircuitOpen = true;
+          log.warn(`Primary model circuit breaker OPENED after ${this._consecutive529Failures} consecutive 529 errors.`);
         }
       }
       return this._tryFallbacksStream(options, onChunk, err);
@@ -186,7 +185,7 @@ export class ModelFallbackChain {
     // If the primary endpoint has returned 529 (Overloaded) MAX_529_FAILURES
     // consecutive times, skip calling it entirely and go straight to fallbacks.
     // This prevents hammering an already-overloaded endpoint and making it worse.
-    if (primaryCircuitOpen) {
+    if (this._primaryCircuitOpen) {
       log.warn(`Primary model circuit open (529 overload) — routing directly to fallbacks`);
       return this._tryFallbacks(options, new Error('Primary circuit open: 529 overload'));
     }
@@ -194,9 +193,9 @@ export class ModelFallbackChain {
     try {
       const response = await primary.chat(options);
       // Success: reset the 529 counter
-      if (consecutive529Failures > 0) {
-        log.info(`Primary model recovered after ${consecutive529Failures} 529 failures`);
-        consecutive529Failures = 0;
+      if (this._consecutive529Failures > 0) {
+        log.info(`Primary model recovered after ${this._consecutive529Failures} 529 failures`);
+        this._consecutive529Failures = 0;
       }
       return response;
     } catch (err) {
@@ -206,16 +205,16 @@ export class ModelFallbackChain {
       }
 
       if (is529Error(err)) {
-        consecutive529Failures++;
-        if (consecutive529Failures >= MAX_529_FAILURES) {
-          primaryCircuitOpen = true;
+        this._consecutive529Failures++;
+        if (this._consecutive529Failures >= MAX_529_FAILURES) {
+          this._primaryCircuitOpen = true;
           log.warn(
-            `Primary model circuit breaker OPENED after ${consecutive529Failures} consecutive 529 errors. ` +
+            `Primary model circuit breaker OPENED after ${this._consecutive529Failures} consecutive 529 errors. ` +
             `All calls will use fallback models for the rest of this session.`,
           );
         } else {
           log.warn(
-            `Primary model 529 overload (${consecutive529Failures}/${MAX_529_FAILURES} before circuit opens) — trying fallbacks`,
+            `Primary model 529 overload (${this._consecutive529Failures}/${MAX_529_FAILURES} before circuit opens) — trying fallbacks`,
           );
         }
       } else if (isImmediateFallback(err)) {
