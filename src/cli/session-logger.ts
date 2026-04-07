@@ -127,9 +127,12 @@ export class SessionLogger {
   }
 
   /** 工具调用结束 */
-  logToolEnd(name: string, success: boolean, durationMs: number): void {
+  logToolEnd(name: string, success: boolean, durationMs: number, errorMsg?: string): void {
     const status = success ? '✓' : '✗';
     this._write(`[${now()}] TOOL_END    ${name.padEnd(20)} ${status} ${durationMs}ms`);
+    if (!success && errorMsg) {
+      this._write(`             ERROR: ${truncate(errorMsg, 500)}`);
+    }
   }
 
   /** 接收一个 LLM 文本 chunk（内部缓冲，避免每个 chunk 都写磁盘） */

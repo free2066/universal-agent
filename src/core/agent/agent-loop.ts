@@ -1403,9 +1403,9 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
             return { role: 'tool' as const, toolCallId: call.id, content: persistedResultStr };
           } catch (err) {
             const durationMs = Date.now() - toolStartMs;
-            await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: err instanceof Error ? err.message : String(err), success: false }));
-            events?.onToolEnd?.(call.name, false, durationMs);
             const toolErrMsg = err instanceof Error ? err.message : String(err);
+            await triggerHook(createHookEvent('tool', 'error', { callId, toolName: call.name, error: toolErrMsg, success: false }));
+            events?.onToolEnd?.(call.name, false, durationMs, toolErrMsg);
             // Round 8: fire tool_use_failure (PostToolUseFailure parity)
             try {
               const { getHookRunner: _failRunner } = await import('../hooks.js');

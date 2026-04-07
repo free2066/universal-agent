@@ -52,7 +52,7 @@ export interface AgentEvents {
   /** 工具调用开始时触发 */
   onToolStart?: (name: string, args: Record<string, unknown>) => void;
   /** 工具调用完成时触发（success=false 表示抛异常）*/
-  onToolEnd?: (name: string, success: boolean, durationMs: number) => void;
+  onToolEnd?: (name: string, success: boolean, durationMs: number, errorMsg?: string) => void;
   /** LLM 开始输出文本（首个 text chunk 到来）时触发 */
   onResponseStart?: () => void;
   /**

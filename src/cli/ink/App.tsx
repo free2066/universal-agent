@@ -2278,6 +2278,15 @@ Begin with a scope summary then list findings. If none found, say so.`;
       // Resolve @file references before sending
       const resolvedInput = await resolveAtRefs(trimmed);
 
+      // Flush any leftover streaming buffer from previous turn before starting new one
+      if (streamFlushTimer.current) {
+        clearTimeout(streamFlushTimer.current);
+        streamFlushTimer.current = null;
+      }
+      if (streamBufRef.current) {
+        flushStreamBuf();
+      }
+
       setMessages((prev) => [
         ...prev,
         { role: 'user', content: trimmed, timestamp: new Date().toISOString() },
@@ -2380,10 +2389,10 @@ Begin with a scope summary then list findings. If none found, say so.`;
               ]);
               setStatusInfo((s) => ({ ...s, isThinking: 'medium' }));
             },
-            onToolEnd: (name, success, durationMs) => {
+            onToolEnd: (name, success, durationMs, errorMsg) => {
               const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
               if (seqKey) toolStartRef.current.delete(seqKey);
-              sessionLogger.current.logToolEnd(name, success, durationMs ?? 0);
+              sessionLogger.current.logToolEnd(name, success, durationMs ?? 0, errorMsg);
               setToolCalls((prev) =>
                 prev.map((tc) =>
                   tc.id === seqKey
@@ -2391,13 +2400,12 @@ Begin with a scope summary then list findings. If none found, say so.`;
                     : tc
                 )
               );
-              // Append tool result as permanent system message (readline parity, with trailing period)
               const dur = durationMs !== undefined
                 ? durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
                 : '';
               const resultLine = success
                 ? `↳ ${name} done${dur ? ` (${dur})` : ''}.`
-                : `[failed] ↳ ${name} failed${dur ? ` (${dur})` : ''}.`;
+                : `[failed] ↳ ${name} failed${dur ? ` (${dur})` : ''}${errorMsg ? `: ${errorMsg.slice(0, 120)}` : ''}.`;
               appendSystem(resultLine);
             },
           },
