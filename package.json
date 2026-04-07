@@ -8,9 +8,9 @@
     "claude": "./dist/entrypoints/cli.js"
   },
   "scripts": {
-    "build": "bun build src/entrypoints/cli.ts --outdir dist --target bun --sourcemap=external && chmod +x dist/entrypoints/cli.js",
-    "dev": "bun --watch src/entrypoints/cli.ts",
-    "start": "bun src/entrypoints/cli.ts",
+    "build": "bun build src/entrypoints/cli.tsx --outdir dist-bun --target bun --root . && mkdir -p dist/entrypoints && cp dist-bun/src/entrypoints/cli.js dist/entrypoints/cli.js && echo '#!/usr/bin/env bun' | cat - dist/entrypoints/cli.js > /tmp/cli_tmp.js && mv /tmp/cli_tmp.js dist/entrypoints/cli.js && chmod +x dist/entrypoints/cli.js",
+    "dev": "bun --watch src/entrypoints/cli.tsx",
+    "start": "bun src/entrypoints/cli.tsx",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts,.tsx",
     "test": "bun test",
