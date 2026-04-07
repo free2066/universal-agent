@@ -25,6 +25,7 @@ const MAX_SLEEP_SECONDS = 3600;
 const MIN_SLEEP_SECONDS = 0.1;
 
 export const sleepTool: ToolRegistration = {
+  searchHint: 'wait pause delay seconds background process',
   definition: {
     name: 'Sleep',
     description: [

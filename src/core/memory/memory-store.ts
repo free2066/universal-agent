@@ -227,11 +227,21 @@ export class MemoryStore {
    * Update a memory item's content and tags.
    */
   update(id: string, patch: Partial<Pick<MemoryItem, 'content' | 'tags' | 'ttl'>>): boolean {
+    // A28: redact secrets in update() — mirrors add() A27 protection (symmetric coverage)
+    let safeContent = patch.content;
+    if (safeContent !== undefined) {
+      try {
+        const { redactSecrets } = require('../../utils/secret-scanner.js') as typeof import('../../utils/secret-scanner.js');
+        safeContent = redactSecrets(safeContent);
+      } catch { /* non-fatal */ }
+    }
+    const safePatch = safeContent !== undefined ? { ...patch, content: safeContent } : patch;
+
     for (const type of (['pinned', 'insight', 'fact', 'iteration'] as MemoryType[])) {
       const items = this.load(type);
       const item = items.find((m) => m.id === id);
       if (item) {
-        Object.assign(item, patch, { updatedAt: Date.now() });
+        Object.assign(item, safePatch, { updatedAt: Date.now() });
         this.save(type);
         return true;
       }

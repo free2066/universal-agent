@@ -15,8 +15,11 @@
 
 import type { ToolRegistration } from '../../../models/types.js';
 
-/** D22: 允许 LLM 通过 config_set 修改的安全 key 集合 */
+/** D22/B28: 允许 LLM 通过 config_set 修改的安全 key 集合
+ * B28: 扩充至 19 个实用 key，对标 claude-code supportedSettings.ts
+ */
 const SAFE_CONFIG_KEYS = new Set([
+  // ── core ──────────────────────────────────────────
   'model',
   'approvalMode',
   'theme',
@@ -25,6 +28,18 @@ const SAFE_CONFIG_KEYS = new Set([
   'thinkingLevel',
   'language',
   'preferredEditor',
+  // ── B28: claude-code supportedSettings 对齐 key ──
+  'autoCompactEnabled',          // 自动压缩 context 开关
+  'autoMemoryEnabled',           // 自动记忆提取开关
+  'autoDreamEnabled',            // AutoDream 后台任务开关
+  'showTurnDuration',            // 显示每轮耗时
+  'terminalProgressBarEnabled',  // 终端进度条开关
+  'todoFeatureEnabled',          // TODO 功能开关
+  'fileCheckpointingEnabled',    // 文件检查点 (/undo 支持)
+  'alwaysThinkingEnabled',       // 持续 thinking 模式
+  'permissions.defaultMode',     // 默认权限模式 (approve/auto-edit/plan)
+  'teammateMode',                // Teammate 模式 (disabled/enabled/auto)
+  'taskCompleteNotifEnabled',    // 任务完成通知
 ]);
 
 /** D22: 敏感 key，读取时遮蔽显示 */

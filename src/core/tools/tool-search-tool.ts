@@ -150,6 +150,8 @@ export const toolSearchToolRegistration: ToolRegistration & {
       const parsedTerms = parseToolName(t.name); // B24: tokenized name
       const parsedStr = parsedTerms.join(' ');
       const desc = (t.description ?? '').toLowerCase();
+      // D28: searchHint scoring — mirrors claude-code ToolSearchTool.ts L243-285 hintNormalized
+      const hint = ((t as unknown as Record<string, unknown>)['searchHint'] as string ?? '').toLowerCase();
 
       // Exact tool name match (highest priority)
       if (rawName === query.toLowerCase()) {
@@ -175,6 +177,15 @@ export const toolSearchToolRegistration: ToolRegistration & {
       for (const { term, test } of termPatterns) {
         if (test(desc)) {
           score += term.length > 3 ? 2 : 1; // Longer terms = higher confidence
+        }
+      }
+
+      // D28: searchHint scoring (weight +4 for ALL terms, +2 for SOME — between name +5-10 and desc +2)
+      if (hint) {
+        if (queryTerms.length > 0 && queryTerms.every((qt) => hint.includes(qt))) {
+          score += 4;
+        } else if (queryTerms.some((qt) => hint.includes(qt))) {
+          score += 2;
         }
       }
 

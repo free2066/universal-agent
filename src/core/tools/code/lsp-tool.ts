@@ -214,6 +214,7 @@ function formatLspResult(operation: LspOperation, result: unknown): string {
 // ── Tool registration ─────────────────────────────────────────────────────────
 
 export const lspTool: ToolRegistration = {
+  searchHint: 'code intelligence diagnostics hover completions language server',
   definition: {
     name: 'LSP',
     description: [

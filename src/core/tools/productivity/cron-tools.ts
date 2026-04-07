@@ -10,6 +10,8 @@
  *
  * cron 表达式采用 5字段格式：分 时 日 月 周（与 claude-code 对齐）
  * feature 门控：AGENT_TRIGGERS 环境变量（兼容 claude-code）
+ *
+ * F28: 新增 cronToHuman() 人类可读描述 + DEFAULT_MAX_AGE_DAYS=30 自动过期
  */
 
 import type { ToolRegistration } from '../../../models/types.js';
@@ -35,9 +37,90 @@ function isAgentTriggersEnabled(): boolean {
   return true; // 默认开启（claude-code 对标）
 }
 
+// ── F28: cronToHuman — 人类可读 cron 描述 ─────────────────────────────────────
+// Mirrors claude-code src/utils/cron.ts L218-308
+// 手写 7 种 pattern，无外部依赖
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * F28: Convert a 5-field cron expression to a human-readable description.
+ * Mirrors claude-code cron.ts cronToHuman() — covers 7 common patterns.
+ */
+export function cronToHuman(cron: string): string {
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return cron; // fallback: return raw
+
+  const [min, hour, day, month, weekday] = parts as [string, string, string, string, string];
+
+  // Every minute
+  if (min === '*' && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+    return 'Every minute';
+  }
+
+  // Every N minutes: */N * * * *
+  const everyNMinMatch = /^\*\/(\d+)$/.exec(min);
+  if (everyNMinMatch && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+    const n = parseInt(everyNMinMatch[1]!, 10);
+    return `Every ${n} minute${n !== 1 ? 's' : ''}`;
+  }
+
+  // Every N hours: 0 */N * * * or M */N * * *
+  const everyNHourMatch = /^\*\/(\d+)$/.exec(hour);
+  if (everyNHourMatch && day === '*' && month === '*' && weekday === '*') {
+    const n = parseInt(everyNHourMatch[1]!, 10);
+    const minNum = parseInt(min, 10);
+    if (!isNaN(minNum) && minNum === 0) {
+      return `Every ${n} hour${n !== 1 ? 's' : ''}`;
+    }
+    return `Every ${n} hour${n !== 1 ? 's' : ''} at :${min.padStart(2, '0')}`;
+  }
+
+  // Every hour at :MM: M * * * *
+  const minNum = parseInt(min, 10);
+  if (!isNaN(minNum) && /^\d+$/.test(min) && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+    return `Every hour at :${min.padStart(2, '0')}`;
+  }
+
+  // Build time string for daily/weekly patterns
+  const hNum = parseInt(hour, 10);
+  const mNum = parseInt(min, 10);
+  const hasFixedTime = !isNaN(hNum) && !isNaN(mNum) && /^\d+$/.test(hour) && /^\d+$/.test(min);
+  const timeStr = hasFixedTime
+    ? `${String(hNum).padStart(2, '0')}:${String(mNum).padStart(2, '0')}`
+    : `${hour}:${min}`;
+
+  // Every specific weekday: M H * * W
+  if (day === '*' && month === '*' && /^\d$/.test(weekday)) {
+    const wdNum = parseInt(weekday, 10);
+    const dayName = DAY_NAMES[wdNum] ?? `weekday ${wdNum}`;
+    return `Every ${dayName} at ${timeStr}`;
+  }
+
+  // Weekdays (Mon-Fri): M H * * 1-5
+  if (day === '*' && month === '*' && weekday === '1-5') {
+    return `Every weekday (Mon-Fri) at ${timeStr}`;
+  }
+
+  // Daily: M H * * *
+  if (day === '*' && month === '*' && weekday === '*' && hasFixedTime) {
+    return `Every day at ${timeStr}`;
+  }
+
+  // Fallback: return raw cron expression
+  return cron;
+}
+
+// ── F28: DEFAULT_MAX_AGE_DAYS — 自动过期 ──────────────────────────────────────
+
+/** F28: Default max age for scheduled tasks — 30 days (mirrors claude-code prompt.ts DEFAULT_MAX_AGE_DAYS) */
+const DEFAULT_MAX_AGE_DAYS = 30;
+const DEFAULT_MAX_AGE_MS = DEFAULT_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+
 // ── cron_create ───────────────────────────────────────────────────────────────
 
 export const cronCreateTool: ToolRegistration = {
+  searchHint: 'schedule recurring one-shot task timer prompt automation',
   definition: {
     name: 'cron_create',
     description:
@@ -113,9 +196,14 @@ export const cronCreateTool: ToolRegistration = {
         ? nextFire.toISOString()
         : 'unable to determine next fire time';
 
+      // F28: humanSchedule + expiresAt (DEFAULT_MAX_AGE_DAYS=30)
+      const humanSchedule = cronToHuman(cron);
+      const expiresAt = Date.now() + DEFAULT_MAX_AGE_MS;
+
       return JSON.stringify({
         taskId: task.id,
         cron: task.cron,
+        humanSchedule,
         prompt: task.prompt.slice(0, 100),
         recurring: task.recurring,
         durable: task.durable,
@@ -123,6 +211,8 @@ export const cronCreateTool: ToolRegistration = {
         agentId: task.agentId ?? null,
         createdAt: new Date(task.createdAt).toISOString(),
         nextFireTime: nextFireStr,
+        expiresAt: new Date(expiresAt).toISOString(),
+        note: `Auto-expires after ${DEFAULT_MAX_AGE_DAYS} days`,
         status: 'created',
       });
     } catch (err) {
@@ -169,6 +259,7 @@ export const cronDeleteTool: ToolRegistration = {
 // ── cron_list ─────────────────────────────────────────────────────────────────
 
 export const cronListTool: ToolRegistration = {
+  searchHint: 'list scheduled jobs cron tasks next fire time',
   definition: {
     name: 'cron_list',
     description:
@@ -190,17 +281,30 @@ export const cronListTool: ToolRegistration = {
       return '[CronList] Scheduled tasks are disabled.';
     }
 
-    const tasks = listCronTasks();
+    const allTasks = listCronTasks();
+
+    // F28: lazy expiry cleanup — remove tasks older than DEFAULT_MAX_AGE_DAYS
+    const now = Date.now();
+    const tasks = allTasks.filter((t) => {
+      const age = now - t.createdAt;
+      if (age > DEFAULT_MAX_AGE_MS) {
+        removeCronTask(t.id);
+        return false;
+      }
+      return true;
+    });
+
     if (tasks.length === 0) {
       return JSON.stringify({ tasks: [], count: 0, maxJobs: MAX_CRON_JOBS });
     }
 
-    const now = new Date();
+    const nowDate = new Date();
     const formatted = tasks.map((t) => {
-      const nextFire = getNextFireTime(t.cron, now);
+      const nextFire = getNextFireTime(t.cron, nowDate);
       return {
         taskId: t.id,
         cron: t.cron,
+        humanSchedule: cronToHuman(t.cron),  // F28: human-readable schedule
         prompt: t.prompt.length > 80 ? t.prompt.slice(0, 80) + '...' : t.prompt,
         recurring: t.recurring,
         durable: t.durable,
@@ -209,6 +313,7 @@ export const cronListTool: ToolRegistration = {
         createdAt: new Date(t.createdAt).toISOString(),
         lastFiredAt: t.lastFiredAt ? new Date(t.lastFiredAt).toISOString() : null,
         nextFireTime: nextFire ? nextFire.toISOString() : null,
+        expiresAt: new Date(t.createdAt + DEFAULT_MAX_AGE_MS).toISOString(),
       };
     });
 

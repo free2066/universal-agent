@@ -3,8 +3,32 @@
  *
  * 对标 claude-code ListMcpResourcesTool + ReadMcpResourceTool。
  * 允许 LLM 通过工具调用访问 MCP 服务器暴露的资源（Resources）。
+ *
+ * G28: 改为单例 MCPManager + TTL 缓存（5分钟），对标
+ *      claude-code ListMcpResourcesTool.ts L79-94 fetchResourcesForClient LRU 缓存 +
+ *      ensureConnectedClient 重连逻辑。单个 server 失败不影响其他 server 返回。
  */
 import type { ToolRegistration } from '../../../models/types.js';
+
+// ── G28: 模块级单例 MCPManager + TTL 缓存 ─────────────────────────────────────
+// Mirrors claude-code ListMcpResourcesTool.ts L79-94:
+//   fetchResourcesForClient = memoize(...)  — LRU + server-level isolation
+
+let _mcpManager: import('../../mcp-manager.js').MCPManager | null = null;
+let _mcpManagerCwd = '';
+const _resourcesCache = new Map<string, { data: string; expiresAt: number }>();
+const CACHE_TTL_MS = 300_000; // 5 minutes
+
+async function getMcpManager(cwd: string): Promise<import('../../mcp-manager.js').MCPManager> {
+  const { MCPManager } = await import('../../mcp-manager.js');
+  // Re-create if cwd changed (project switch)
+  if (!_mcpManager || _mcpManagerCwd !== cwd) {
+    _mcpManager = new MCPManager(cwd);
+    _mcpManagerCwd = cwd;
+    _resourcesCache.clear(); // G28: invalidate cache on project change
+  }
+  return _mcpManager;
+}
 
 export const ListMcpResourcesRegistration: ToolRegistration = {
   definition: {
@@ -25,8 +49,9 @@ export const ListMcpResourcesRegistration: ToolRegistration = {
   },
   handler: async (args: Record<string, unknown>): Promise<string> => {
     const serverName = typeof args['server_name'] === 'string' ? args['server_name'] : undefined;
-    const { MCPManager } = await import('../../mcp-manager.js');
-    const mgr = new MCPManager(process.cwd());
+
+    // G28: use singleton manager
+    const mgr = await getMcpManager(process.cwd());
     const servers = mgr.listServers().filter(
       (s) => s.enabled && s.type === 'stdio' && (!serverName || s.name === serverName),
     );
@@ -39,6 +64,14 @@ export const ListMcpResourcesRegistration: ToolRegistration = {
 
     const lines: string[] = [];
     for (const s of servers) {
+      // G28: per-server TTL cache — single server failure does NOT sink others
+      const cacheKey = s.name;
+      const cached = _resourcesCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        lines.push(cached.data);
+        continue;
+      }
+
       const client = mgr.getStdioClient(s.name);
       if (!client) {
         lines.push(`\n## ${s.name}  (not connected)`);
@@ -46,17 +79,23 @@ export const ListMcpResourcesRegistration: ToolRegistration = {
       }
       try {
         const resources = await client.listResources();
-        lines.push(`\n## ${s.name}  (${resources.length} resource${resources.length !== 1 ? 's' : ''})`);
+        const serverLines: string[] = [];
+        serverLines.push(`\n## ${s.name}  (${resources.length} resource${resources.length !== 1 ? 's' : ''})`);
         if (!resources.length) {
-          lines.push('  (no resources exposed)');
-          continue;
+          serverLines.push('  (no resources exposed)');
+        } else {
+          for (const r of resources) {
+            const mime = r.mimeType ? `  [${r.mimeType}]` : '';
+            const name = r.name ? `  ${r.name}` : '';
+            serverLines.push(`  ${r.uri}${mime}${name}`);
+          }
         }
-        for (const r of resources) {
-          const mime = r.mimeType ? `  [${r.mimeType}]` : '';
-          const name = r.name ? `  ${r.name}` : '';
-          lines.push(`  ${r.uri}${mime}${name}`);
-        }
+        const serverOutput = serverLines.join('\n');
+        // G28: write to cache
+        _resourcesCache.set(cacheKey, { data: serverOutput, expiresAt: Date.now() + CACHE_TTL_MS });
+        lines.push(serverOutput);
       } catch (e) {
+        // G28: per-server error isolation — continue with other servers
         lines.push(`\n## ${s.name}`);
         lines.push(`  Error: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -92,8 +131,8 @@ export const ReadMcpResourceRegistration: ToolRegistration = {
     const serverName = typeof args['server_name'] === 'string' ? args['server_name'] : undefined;
     if (!uri) return 'Error: uri is required';
 
-    const { MCPManager } = await import('../../mcp-manager.js');
-    const mgr = new MCPManager(process.cwd());
+    // G28: use singleton manager
+    const mgr = await getMcpManager(process.cwd());
     const servers = mgr.listServers().filter(
       (s) => s.enabled && s.type === 'stdio' && (!serverName || s.name === serverName),
     );

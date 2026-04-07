@@ -84,6 +84,7 @@ function splitSource(source: string): string[] {
 // ── Tool registration ─────────────────────────────────────────────────────────
 
 export const notebookEditTool: ToolRegistration = {
+  searchHint: 'jupyter notebook ipynb cell edit insert delete',
   definition: {
     name: 'NotebookEdit',
     description: [

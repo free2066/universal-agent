@@ -38,6 +38,8 @@ export interface AskUserInput {
   questions: AskUserQuestion[];  // 1-4 questions
   /** Pre-filled answers (used when re-submitting with answers) */
   answers?: Record<string, string>;
+  /** C28: optional metadata (e.g. source of the question invocation) */
+  metadata?: { source?: string };
 }
 
 // ── Sentinel prefix injected into output (parsed by REPL) ─────────────────────
@@ -103,6 +105,13 @@ export const askUserQuestionTool: ToolRegistration = {
           type: 'object',
           description: 'Pre-filled answers (key=question text, value=selected label)',
         },
+        metadata: {
+          type: 'object',
+          description: 'Optional metadata (e.g. source: the command or feature that triggered this question)',
+          properties: {
+            source: { type: 'string', description: 'Origin of the question (e.g. "/remember", "plan-mode")' },
+          },
+        },
       },
       required: ['questions'],
     },
@@ -124,6 +133,20 @@ export const askUserQuestionTool: ToolRegistration = {
       }
       if (q.options.length > 4) {
         return `[AskUserQuestion] Error: question "${q.question}" may have at most 4 options`;
+      }
+    }
+
+    // C28: uniqueness validation (mirrors AskUserQuestionTool.tsx L32-54)
+    const questionTexts = input.questions.map((q) => q.question);
+    const dupQ = questionTexts.find((t, i) => questionTexts.indexOf(t) !== i);
+    if (dupQ) {
+      return `[AskUserQuestion] Error: duplicate question text: "${dupQ}"`;
+    }
+    for (const q of input.questions) {
+      const labels = q.options.map((o) => o.label);
+      const dupL = labels.find((l, i) => labels.indexOf(l) !== i);
+      if (dupL) {
+        return `[AskUserQuestion] Error: duplicate option label "${dupL}" in question "${q.question}"`;
       }
     }
 
@@ -190,6 +213,21 @@ export const askUserQuestionTool: ToolRegistration = {
       const ans = answers[q.question] ?? '(no answer)';
       resultLines.push(`  Q: ${q.question}`);
       resultLines.push(`  A: ${ans}`);
+    }
+
+    // C28: include annotations and metadata.source in output if provided
+    const annotations: Record<string, { preview?: string; notes?: string }> = {};
+    for (const q of input.questions) {
+      for (const opt of q.options) {
+        if (opt.preview) annotations[opt.label] = { preview: opt.preview };
+      }
+    }
+    const annotationsKeys = Object.keys(annotations);
+    if (annotationsKeys.length > 0) {
+      resultLines.push('  annotations: ' + JSON.stringify(annotations));
+    }
+    if (input.metadata?.source) {
+      resultLines.push(`  source: ${input.metadata.source}`);
     }
 
     // Suppress the sentinel line from stdout (it's internal)

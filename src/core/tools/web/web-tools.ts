@@ -227,6 +227,7 @@ export const webFetchTool: ToolRegistration = {
 //   3. Set env vars: GOOGLE_API_KEY=<key>  GOOGLE_CSE_ID=<engine-id>
 //
 export const webSearchTool: ToolRegistration = {
+  searchHint: 'search internet web Google information lookup',
   definition: {
     name: 'WebSearch',
     description: [

@@ -337,6 +337,13 @@ export interface ToolRegistration {
   /** Whether to always load this tool regardless of defer threshold */
   alwaysLoad?: boolean;
   /**
+   * D28: searchHint — extra keywords for ToolSearch scoring (weight +4).
+   * Mirrors claude-code Tool.ts L378: ToolDef.searchHint.
+   * Used when tool name and description don't fully capture the use case.
+   * Example: 'schedule recurring task timer'
+   */
+  searchHint?: string;
+  /**
    * A18 (claude-code contextModifier parity): Optional modifier applied after tool execution.
    * Allows tools (EnterPlanMode, WorktreeEnter, etc.) to update agent session state
    * (cwd, approvalMode, etc.) without tight coupling to the agent loop.
