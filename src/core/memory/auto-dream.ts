@@ -19,10 +19,9 @@
 
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync,
-  openSync, closeSync, unlinkSync, readdirSync, statSync,
+  unlinkSync, readdirSync, statSync, utimesSync,
 } from 'fs';
 import { resolve, join } from 'path';
-import { randomBytes } from 'crypto';
 
 // ── 常量 ──────────────────────────────────────────────────────────────────────
 

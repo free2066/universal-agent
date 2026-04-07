@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, createReadStream } from 'fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, createReadStream, mkdtempSync } from 'fs';
 import { resolve, relative, join, dirname } from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn as spawnProc } from 'child_process';
+import { tmpdir } from 'os';
 import { createInterface } from 'readline';
 import type { ToolRegistration } from '../../../models/types.js';
 import { mmrRerankGrepResults } from '../../memory/mmr.js';
@@ -730,7 +731,6 @@ export const bashTool: ToolRegistration = {
     if (autoBackgroundEnabled) {
       // G26: Async spawn path — allows 15s auto-backgrounding
       return await new Promise<string>((resolve: (value: string) => void) => {
-        const { spawn: spawnProc } = require('child_process') as typeof import('child_process');
         const proc = spawnProc(shell ?? 'sh', ['-c', command], {
           cwd,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -749,9 +749,8 @@ export const bashTool: ToolRegistration = {
           if (settled || proc.exitCode !== null) return;
           settled = true;
 
-          try {
-            const { backgroundManager: bgMgr } = require('../../background-manager.js') as typeof import('../../background-manager.js');
-            const partialOutput = (stdout + stderr).slice(0, 2000);
+          const partialOutput = (stdout + stderr).slice(0, 2000);
+          import('../../background-manager.js').then(({ backgroundManager: bgMgr }) => {
             const bgId = bgMgr.registerExistingProcess(proc, command, partialOutput);
             resolve(
               `[Command auto-backgrounded after ${BASH_BLOCKING_BUDGET_MS / 1000}s]\n` +
@@ -760,10 +759,9 @@ export const bashTool: ToolRegistration = {
               `Results will also appear automatically before the next LLM call.\n\n` +
               `Partial output so far (first 2000 chars):\n${partialOutput || '(no output yet)'}`,
             );
-          } catch (bgErr) {
-            // BackgroundManager import failed — fall through to wait for proc naturally
-            resolve(`[Command still running after 15s — will complete eventually]\nPartial output:\n${(stdout + stderr).slice(0, 1000)}`);
-          }
+          }).catch(() => {
+            resolve(`[Command still running after 15s — will complete eventually]\nPartial output:\n${partialOutput.slice(0, 1000)}`);
+          });
         }, BASH_BLOCKING_BUDGET_MS);
 
         const hardTimeoutTimer = setTimeout(() => {
@@ -788,12 +786,9 @@ export const bashTool: ToolRegistration = {
           const OUTPUT_FILE_THRESHOLD = 100 * 1024;
           if (Buffer.byteLength(raw, 'utf-8') > OUTPUT_FILE_THRESHOLD) {
             try {
-              const { mkdtempSync, writeFileSync: wfs } = require('fs') as typeof import('fs');
-              const { join: pjoin } = require('path') as typeof import('path');
-              const { tmpdir } = require('os') as typeof import('os');
-              const tmpDir = mkdtempSync(pjoin(tmpdir(), 'uagent-bash-'));
-              const outFile = pjoin(tmpDir, 'output.txt');
-              wfs(outFile, raw, 'utf-8');
+              const tmpDir = mkdtempSync(join(tmpdir(), 'uagent-bash-'));
+              const outFile = join(tmpDir, 'output.txt');
+              writeFileSync(outFile, raw, 'utf-8');
               const lines = raw.split('\n').length;
               const bytes = Buffer.byteLength(raw, 'utf-8');
               const timingNote = elapsed > 5000 ? ` (${(elapsed / 1000).toFixed(1)}s)` : '';
@@ -846,12 +841,9 @@ export const bashTool: ToolRegistration = {
       const OUTPUT_FILE_THRESHOLD = 100 * 1024;
       if (Buffer.byteLength(raw, 'utf-8') > OUTPUT_FILE_THRESHOLD) {
         try {
-          const { mkdtempSync, writeFileSync: wfs } = require('fs') as typeof import('fs');
-          const { join: pjoin } = require('path') as typeof import('path');
-          const { tmpdir } = require('os') as typeof import('os');
-          const tmpDir = mkdtempSync(pjoin(tmpdir(), 'uagent-bash-'));
-          const outFile = pjoin(tmpDir, 'output.txt');
-          wfs(outFile, raw, 'utf-8');
+          const tmpDir = mkdtempSync(join(tmpdir(), 'uagent-bash-'));
+          const outFile = join(tmpDir, 'output.txt');
+          writeFileSync(outFile, raw, 'utf-8');
           const lines = raw.split('\n').length;
           const bytes = Buffer.byteLength(raw, 'utf-8');
           const timingNote = elapsed > 5000 ? ` (${(elapsed / 1000).toFixed(1)}s)` : '';
