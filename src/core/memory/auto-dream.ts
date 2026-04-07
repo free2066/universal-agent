@@ -66,31 +66,86 @@ function writeDreamState(state: AutoDreamState): void {
   } catch { /* non-fatal */ }
 }
 
-// ── 进程锁 ────────────────────────────────────────────────────────────────────
+// ── A31: mtime-based consolidation lock ──────────────────────────────────────
+//
+// Mirrors claude-code src/services/autoDream/consolidationLock.ts
+//
+// Key differences from previous PID-only lockfile:
+//   1. Lock file mtime IS the lastConsolidatedAt timestamp (no separate state file needed)
+//   2. tryAcquireDreamLock() returns priorMtime for rollback
+//   3. rollbackDreamLock(priorMtime) restores mtime via utimesSync (no lock file deleted)
+//   4. double-check after write prevents race condition between processes
 
-function tryAcquireDreamLock(): boolean {
+/**
+ * A31: Read lastConsolidatedAt from lock file mtime.
+ * Mirrors claude-code consolidationLock.ts L29-36 readLastConsolidatedAt().
+ */
+function readLastConsolidatedAt(): number {
   try {
-    mkdirSync(UAGENT_DIR, { recursive: true });
-    const fd = openSync(DREAM_LOCK_FILE, 'wx');
-    writeFileSync(DREAM_LOCK_FILE, String(process.pid));
-    closeSync(fd);
-    return true;
+    const st = statSync(DREAM_LOCK_FILE);
+    return st.mtimeMs;
   } catch {
-    // 检查锁是否过期（持有者进程不存在）
-    try {
-      const pid = parseInt(readFileSync(DREAM_LOCK_FILE, 'utf-8'), 10);
-      if (pid && !isProcessAlive(pid)) {
-        // 进程已死 → 强制释放旧锁
-        unlinkSync(DREAM_LOCK_FILE);
-        return tryAcquireDreamLock(); // 递归一次
-      }
-    } catch { /* ignore */ }
-    return false;
+    return 0; // lock file doesn't exist → never consolidated
   }
 }
 
+/**
+ * A31: Acquire consolidation lock; return priorMtime (for rollback) or null if busy.
+ * Mirrors claude-code consolidationLock.ts tryAcquireConsolidationLock().
+ *
+ * Unlike the previous 'wx' exclusive-create approach, we always write the lock file
+ * (updating its mtime), then double-check by reading back the PID to detect races.
+ */
+function tryAcquireDreamLock(): number | null {
+  try {
+    mkdirSync(UAGENT_DIR, { recursive: true });
+
+    // Read prior mtime before we overwrite (needed for rollback)
+    const priorMtime = readLastConsolidatedAt();
+
+    // Check if another process currently holds the lock (pid still alive)
+    try {
+      const existingPid = parseInt(readFileSync(DREAM_LOCK_FILE, 'utf-8').trim(), 10);
+      if (existingPid && existingPid !== process.pid && isProcessAlive(existingPid)) {
+        return null; // live process holds the lock
+      }
+    } catch { /* lock file doesn't exist or is unreadable — proceed */ }
+
+    // Write our PID to the lock file (mtime = now)
+    writeFileSync(DREAM_LOCK_FILE, String(process.pid), { encoding: 'utf-8', flag: 'w' });
+
+    // A31: double-check — confirm we are the lock holder (prevents race)
+    try {
+      const written = readFileSync(DREAM_LOCK_FILE, 'utf-8').trim();
+      if (written !== String(process.pid)) return null; // lost the race
+    } catch {
+      return null;
+    }
+
+    return priorMtime;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A31: Release lock by unlinking the lock file.
+ */
 function releaseDreamLock(): void {
   try { unlinkSync(DREAM_LOCK_FILE); } catch { /* non-fatal */ }
+}
+
+/**
+ * A31: Rollback the lock file's mtime to priorMtime (on fork failure).
+ * Mirrors claude-code consolidationLock.ts L91-108 rollbackConsolidationLock().
+ * Uses utimesSync() so the lock file's mtime is restored to the pre-attempt value,
+ * effectively "undoing" the acquisition without leaving stale state.
+ */
+function rollbackDreamLock(priorMtime: number): void {
+  try {
+    const ts = new Date(priorMtime || Date.now());
+    utimesSync(DREAM_LOCK_FILE, ts, ts);
+  } catch { /* non-fatal */ }
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -227,11 +282,13 @@ export function executeAutoDream(
 }
 
 async function _doAutoDream(domain: string, config: AutoDreamConfig): Promise<void> {
-  const state = readDreamState();
+  // A31: use lock file mtime as lastConsolidatedAt (mirrors claude-code consolidationLock.ts)
+  const lastConsolidatedAt = readLastConsolidatedAt();
+  const state = readDreamState(); // still needed for sessionScanAt / lastSessionCount
   const now = Date.now();
 
   // ── 门控 1: 时间门 ─────────────────────────────────────────────────────────
-  const hoursSinceLast = (now - state.lastConsolidatedAt) / 3_600_000;
+  const hoursSinceLast = (now - lastConsolidatedAt) / 3_600_000;
   if (hoursSinceLast < config.minHours) {
     return; // 距上次整合不足 minHours
   }
@@ -239,7 +296,7 @@ async function _doAutoDream(domain: string, config: AutoDreamConfig): Promise<vo
   // ── 门控 2: 会话门（节流：最多每 10min 扫描一次）──────────────────────────
   let newSessionCount = 0;
   if (now - _lastSessionScanAt > SESSION_SCAN_INTERVAL_MS) {
-    newSessionCount = countNewSessionsSince(state.lastConsolidatedAt);
+    newSessionCount = countNewSessionsSince(lastConsolidatedAt);
     _lastSessionScanAt = now;
     _lastSessionCount = newSessionCount;
   } else {
@@ -249,24 +306,25 @@ async function _doAutoDream(domain: string, config: AutoDreamConfig): Promise<vo
     return; // 新 session 数不足 minSessions
   }
 
-  // ── 门控 3: 进程锁 ─────────────────────────────────────────────────────────
-  const acquired = tryAcquireDreamLock();
-  if (!acquired) {
+  // ── 门控 3: 进程锁（A31: 返回 priorMtime 用于 rollback）───────────────────
+  const priorMtime = tryAcquireDreamLock();
+  if (priorMtime === null) {
     return; // 另一进程正在整合
   }
 
   try {
-    // 双重检查：再次读取 state（另一进程可能已完成整合）
-    const freshState = readDreamState();
-    const freshHours = (now - freshState.lastConsolidatedAt) / 3_600_000;
+    // A31: double-check — 再次读 mtime，确认仍需整合（防止竞态）
+    const freshLastAt = readLastConsolidatedAt();
+    const freshHours = (now - freshLastAt) / 3_600_000;
     if (freshHours < config.minHours) {
+      rollbackDreamLock(priorMtime); // A31: 恢复 mtime，不留脏状态
       return; // 已被其他进程整合
     }
 
     process.stderr.write(`[AutoDream] Starting memory consolidation (${newSessionCount} sessions)...\n`);
 
     // 收集摘要
-    const summaries = collectSessionSummaries(freshState.lastConsolidatedAt);
+    const summaries = collectSessionSummaries(freshLastAt);
     if (summaries.length === 0) {
       return;
     }
@@ -274,12 +332,16 @@ async function _doAutoDream(domain: string, config: AutoDreamConfig): Promise<vo
     // LLM 整合
     await consolidateMemories(summaries, domain);
 
-    // 更新 state
+    // 更新 state（session scan 相关字段）— mtime 由 releaseDreamLock 的写入时间自然更新
     writeDreamState({
-      ...freshState,
-      lastConsolidatedAt: now,
+      ...state,
+      lastConsolidatedAt: now, // 保持兼容：状态文件仍更新
     });
     _lastSessionCount = 0; // 重置计数
+  } catch (err) {
+    // A31: on failure, rollback the lock file mtime so next attempt can retry
+    rollbackDreamLock(priorMtime);
+    throw err;
   } finally {
     releaseDreamLock();
   }

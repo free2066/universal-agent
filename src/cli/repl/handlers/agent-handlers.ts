@@ -149,7 +149,9 @@ export async function handleContext(ctx: SlashContext): Promise<true> {
   const countResult = await countTokens(history);
 
   const tokenCount = countResult.inputTokens;
-  const pct = ((tokenCount / decision.contextLength) * 100).toFixed(1);
+  const contextLength = decision.contextLength;
+  const pctNum = (tokenCount / contextLength) * 100;
+  const pct = pctNum.toFixed(1);
   const methodNote =
     countResult.method === 'api' ? chalk.green(' (API exact)') :
     countResult.method === 'usage+estimate' ? chalk.cyan(' (usage+estimate)') :
@@ -157,10 +159,66 @@ export async function handleContext(ctx: SlashContext): Promise<true> {
 
   console.log(chalk.yellow('\n📊 Context Window Stats:'));
   console.log(`  Input tokens     : ${chalk.white(tokenCount.toLocaleString())}${methodNote}`);
-  console.log(`  Context limit    : ${chalk.white(decision.contextLength.toLocaleString())}`);
+  console.log(`  Context limit    : ${chalk.white(contextLength.toLocaleString())}`);
   console.log(`  Usage            : ${chalk.white(pct + '%')}`);
   console.log(`  Messages in ctx  : ${chalk.white(String(history.length))}`);
   console.log(`  Compact needed   : ${decision.shouldCompact ? chalk.red('Yes') : chalk.green('No')}`);
+
+  // E31: +5 维度 — Mirrors claude-code analyzeContext.ts ContextData 14 dimensions
+  // 维度 6: messageBreakdown (tool calls / tool results / user msgs 分解)
+  const toolCallMsgs = history.filter((m) =>
+    m.role === 'assistant' &&
+    Array.isArray((m as { toolCalls?: unknown[] }).toolCalls) &&
+    (m as { toolCalls?: unknown[] }).toolCalls!.length > 0,
+  ).length;
+  const toolResultMsgs = history.filter((m) => m.role === 'tool').length;
+  const userMsgs = history.filter((m) => m.role === 'user').length;
+  if (toolCallMsgs > 0 || toolResultMsgs > 0) {
+    console.log(`  Tool calls       : ${chalk.white(String(toolCallMsgs))}`);
+    console.log(`  Tool results     : ${chalk.white(String(toolResultMsgs))}`);
+    console.log(`  User messages    : ${chalk.white(String(userMsgs))}`);
+  }
+
+  // 维度 7: memory files 计数 (Mirrors analyzeContext.ts memoryFiles dimension)
+  try {
+    const { existsSync, readdirSync } = await import('fs');
+    const { join } = await import('path');
+    const memDir = join(process.env['HOME'] ?? '~', '.uagent', 'memory');
+    const memFileCount = existsSync(memDir) ? readdirSync(memDir).filter((f) => f.endsWith('.md')).length : 0;
+    if (memFileCount > 0) {
+      console.log(`  Memory files     : ${chalk.white(String(memFileCount))} (.md)`);
+    }
+  } catch { /* E31: non-fatal */ }
+
+  // 维度 8: autoCompact threshold (Mirrors analyzeContext.ts autoCompactThreshold)
+  const COMPACT_THRESHOLD_PCT = 75;
+  console.log(`  Compact trigger  : ${chalk.gray(`>${COMPACT_THRESHOLD_PCT}% of context window`)}`);
+
+  // 维度 9: cache tokens (Mirrors analyzeContext.ts apiUsage 三路 cache token)
+  type UsageFields = {
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+  const lastMsgWithUsage = [...history].reverse()
+    .find((m) => !!(m as { usage?: UsageFields }).usage);
+  const usage = (lastMsgWithUsage as { usage?: UsageFields } | undefined)?.usage;
+  if (usage && ((usage.cache_creation_input_tokens ?? 0) > 0 || (usage.cache_read_input_tokens ?? 0) > 0)) {
+    const created = usage.cache_creation_input_tokens ?? 0;
+    const read = usage.cache_read_input_tokens ?? 0;
+    console.log(`  Cache created    : ${chalk.gray(created.toLocaleString())} tokens`);
+    console.log(`  Cache read       : ${chalk.gray(read.toLocaleString())} tokens`);
+  }
+
+  // 维度 10: 进度条可视化 (Mirrors analyzeContext.ts gridRows visualization)
+  const barWidth = 30;
+  const filled = Math.min(barWidth, Math.round((tokenCount / contextLength) * barWidth));
+  const bar = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
+  const barColor = pctNum > 75 ? chalk.red : pctNum > 50 ? chalk.yellow : chalk.green;
+  console.log(`  ${ barColor('[' + bar + ']')} ${pctNum.toFixed(1)}%`);
+  if (pctNum > 75) {
+    console.log(chalk.yellow(`  ⚠  Context usage high — consider /compact`));
+  }
+
   console.log(chalk.gray('\n  Tip: /compact — compress context; /clear — start fresh\n'));
   return done(rl);
 }

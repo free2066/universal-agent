@@ -308,6 +308,16 @@ export class AnthropicClient implements LLMClient {
         streamUsage = _extractUsage(finalMsg.usage) as Record<string, number>;
       } catch { /* non-fatal: finalMessage() may not always be available */ }
 
+      // B31: parse Anthropic rate-limit response headers for early quota warning
+      // Mirrors claude-code claudeAiLimits.ts extractQuotaStatusFromHeaders()
+      try {
+        const httpResponse = (stream as unknown as { response?: { headers?: Record<string, string> } }).response;
+        if (httpResponse?.headers) {
+          const { parseAiLimitHeaders } = await import('../../core/services/ai-limits.js');
+          parseAiLimitHeaders(httpResponse.headers);
+        }
+      } catch { /* B31: non-fatal */ }
+
       if (toolUseBlocks.length > 0) {
         return {
           type: 'tool_calls',

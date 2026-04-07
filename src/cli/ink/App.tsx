@@ -107,7 +107,6 @@ export function App({
       }
       return [...prev, { role: 'assistant' as const, content: buf, timestamp: new Date().toISOString() }];
     });
-    setMsgScrollOffset(0);
   }, []);
   // Scroll offset for virtualized message list (0=latest, higher=older)
   const [msgScrollOffset, setMsgScrollOffset] = useState(0);
@@ -254,7 +253,6 @@ export function App({
       }
       return [...prev, { role, content: text, timestamp: new Date().toISOString() }];
     });
-    setMsgScrollOffset(0);
   }, [flushStreamBuf]);
 
   const appendAssistant = useCallback((text: string) => appendMessage('assistant', text), [appendMessage]);

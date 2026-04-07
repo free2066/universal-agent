@@ -70,6 +70,12 @@ export interface AgentEvents {
    * B13: 循环终止时触发，携带结构化终止原因
    */
   onTerminal?: (result: StreamLoopResult) => void;
+  /**
+   * C31: tool batch 完成后触发，携带 ≤30 字 commit-style 摘要标题
+   * 仅当 ENABLE_TOOL_SUMMARY=true 时才会触发
+   * Mirrors claude-code toolUseSummaryGenerator.ts batch-level summary
+   */
+  onToolBatchSummary?: (summary: string) => void;
 }
 
 export interface AgentOptions {

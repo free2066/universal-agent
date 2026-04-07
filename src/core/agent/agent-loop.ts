@@ -1524,6 +1524,28 @@ export async function runStreamLoop(opts: RunStreamOptions): Promise<StreamLoopR
 
         history.push(...toolResults);
 
+        // C31: ToolUseSummary D29 集成 — tool batch 完成后生成 commit-style 摘要标题
+        // D29 的 generateToolUseSummary 模块已创建但未被调用。
+        // 在这里集成：每批 tool 全部执行完后，若开启 ENABLE_TOOL_SUMMARY，
+        // 异步生成 ≤30 字标题并通过 onToolBatchSummary 事件广播（非阻塞）。
+        // Mirrors claude-code toolUseSummaryGenerator.ts batch-level summary.
+        if (events?.onToolBatchSummary && toolResults.length > 0) {
+          try {
+            const { generateToolUseSummary } = await import('../tools/tool-use-summary.js');
+            // 提取 tool 结果（最多 5 条，避免 prompt 过长）
+            const batchParams = toolResults.slice(0, 5).map((r) => ({
+              toolName: (r as { toolCallId?: string; content?: string }).toolCallId ?? '',
+              result: (r as { content?: string }).content?.slice(0, 500) ?? '',
+            }));
+            const lastText = typeof response === 'object' && 'content' in response
+              ? String((response as { content?: unknown }).content ?? '').slice(0, 200)
+              : '';
+            generateToolUseSummary({ toolResults: batchParams, lastAssistantText: lastText })
+              .then((summary) => { if (summary) events.onToolBatchSummary?.(summary); })
+              .catch(() => { /* C31: non-fatal */ });
+          } catch { /* C31: non-fatal */ }
+        }
+
         // B21: hook_stopped_continuation — 工具结果收集完毕后检查 PostToolUse 终止标志
         // Mirrors claude-code toolHooks.ts L121-130 + query.ts hook_stopped_continuation handling.
         // PostToolUse hook 请求停止时，结果已注入 history（让 LLM 知道工具执行了），但主循环终止。

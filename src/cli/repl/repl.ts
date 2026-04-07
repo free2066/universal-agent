@@ -176,6 +176,10 @@ export async function runREPL(
   // F4: Esc abort
   let _currentAbort: AbortController | null = null;
 
+  // D31: agent 是否正在运行（用于 mid-turn 输入队列）
+  // 当 _isAgentRunning=true 时，新输入入队而非丢弃
+  let _isAgentRunning = false;
+
   // F6: Ctrl+L debug mode
   let _lastCtrlL = 0;
 
@@ -569,6 +573,15 @@ export async function runREPL(
       touchLastActivity(); // B30: reset idle timer on each user input
     } catch { /* B30: non-fatal */ }
 
+    // D31: mid-turn input queue — if agent is already running, enqueue instead of processing
+    // Mirrors claude-code messageQueueManager.ts commandQueue enqueueing during active turn
+    if (_isAgentRunning) {
+      const { inputQueue } = await import('../../core/utils/input-queue.js');
+      inputQueue.enqueue(input);
+      process.stdout.write(chalk.dim(`  ↳ queued (${inputQueue.length} pending, finish current response first)\n`));
+      return;
+    }
+
     // ── F2: !bash prefix — run shell command directly, inject output into context ──
     if (input.startsWith('!')) {
       const cmd = input.slice(1).trim();
@@ -603,6 +616,7 @@ export async function runREPL(
     }
 
     // ── LLM path ─────────────────────────────────────────────────────────────
+    _isAgentRunning = true; // D31: mark agent as running — subsequent inputs go to queue
     rl.pause();
     process.stdout.write('\n');
     try {
@@ -775,8 +789,23 @@ export async function runREPL(
         sessionLogger.logError(err);
       }
     }
+    _isAgentRunning = false; // D31: agent finished, allow new input
     rl.resume();
     rl.prompt(); printStatusBar();
+
+    // D31: consume queued input after agent completes
+    // Mirrors claude-code processQueuedCommands() after turn completion
+    try {
+      const { inputQueue } = await import('../../core/utils/input-queue.js');
+      const nextInput = inputQueue.dequeue();
+      if (nextInput) {
+        const remaining = inputQueue.length;
+        const hint = remaining > 0 ? ` (${remaining} more queued)` : '';
+        process.stdout.write(chalk.dim(`\n  ↳ Auto-processing queued: "${nextInput.slice(0, 50)}"${hint}\n`));
+        // Emit as new line event after a short delay for UI stability
+        setTimeout(() => rl.emit('line', nextInput), 80);
+      }
+    } catch { /* D31: non-fatal */ }
   });
 
   rl.on('close', () => {
