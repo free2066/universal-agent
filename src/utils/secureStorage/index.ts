@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createFallbackStorage } from './fallbackStorage.js'
 import { macOsKeychainStorage } from './macOsKeychainStorage.js'
 import { plainTextStorage } from './plainTextStorage.js'

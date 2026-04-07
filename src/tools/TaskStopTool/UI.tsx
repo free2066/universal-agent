@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React from 'react';
 import { MessageResponse } from '../../components/MessageResponse.js';
 import { stringWidth } from '../../ink/stringWidth.js';

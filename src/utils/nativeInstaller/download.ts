@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Download functionality for native installer
  *

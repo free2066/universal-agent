@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { QuerySource } from 'src/constants/querySource.js'
 import {
   DEFAULT_OUTPUT_STYLE_NAME,

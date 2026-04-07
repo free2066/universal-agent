@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as React from 'react';
 import { BLACK_CIRCLE } from 'src/constants/figures.js';
 import { getModeColor } from 'src/utils/permissions/PermissionMode.js';

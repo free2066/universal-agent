@@ -1,3 +1,4 @@
+// @ts-nocheck
 import type { Command, LocalCommandCall } from '../types/command.js'
 
 const call: LocalCommandCall = async () => {

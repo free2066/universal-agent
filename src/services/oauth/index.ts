@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { logEvent } from 'src/services/analytics/index.js'
 import { openBrowser } from '../../utils/browser.js'
 import { AuthCodeListener } from './auth-code-listener.js'

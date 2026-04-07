@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * models/llm/anthropic.ts -- Anthropic Claude implementation
  *

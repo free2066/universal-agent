@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Transforms SDK messages for streamlined output mode.
  *

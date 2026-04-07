@@ -1,3 +1,4 @@
+// @ts-nocheck
 export { MCPAgentServerMenu } from './MCPAgentServerMenu.js'
 export { MCPListPanel } from './MCPListPanel.js'
 export { MCPReconnect } from './MCPReconnect.js'

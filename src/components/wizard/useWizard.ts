@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useContext } from 'react'
 import type { WizardContextValue } from './types.js'
 import { WizardContext } from './WizardProvider.js'

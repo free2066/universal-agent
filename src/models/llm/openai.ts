@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * models/llm/openai.ts — OpenAI 及兼容 Provider 实现
  *

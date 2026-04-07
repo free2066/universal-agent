@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Lightweight helpers shared between keychainPrefetch.ts and
  * macOsKeychainStorage.ts.

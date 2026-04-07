@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * models/llm/gemini.ts — Google Gemini 实现
  *

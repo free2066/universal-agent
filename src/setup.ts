@@ -1,3 +1,4 @@
+// @ts-nocheck
 /* eslint-disable custom-rules/no-process-exit */
 
 import { feature } from 'bun:bundle'

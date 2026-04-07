@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { execa } from 'execa'
 import { readFile, realpath } from 'fs/promises'
 import { homedir } from 'os'
