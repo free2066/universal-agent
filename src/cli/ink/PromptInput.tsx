@@ -211,6 +211,16 @@ export function PromptInput({
       return;
     }
 
+    // Ctrl+C: abort streaming, or exit if idle (readline parity: SIGINT behavior)
+    if (key.ctrl && input === 'c') {
+      if (isStreaming) {
+        onAbort?.();
+      } else {
+        onEOF?.();
+      }
+      return;
+    }
+
     // Up / Ctrl+P: navigate history back (readline parity: both Up and Ctrl+P go back)
     if (key.upArrow || (key.ctrl && input === 'p')) {
       if (historyItems.length === 0) return;

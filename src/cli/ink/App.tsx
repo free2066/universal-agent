@@ -148,6 +148,8 @@ export function App({
 
   // ── Esc×2 rollback timer ─────────────────────────────────────────────────
   const lastEscRef = useRef(0);
+  // ── Exit guard — prevent /exit from firing twice ─────────────────────────
+  const isExitingRef = useRef(false);
 
   // ── Current prompt value ref (for Ctrl+G editor pre-population) ──────────
   // Updated by PromptInput's onChange; allows Ctrl+G to pre-fill editor with
@@ -277,6 +279,8 @@ export function App({
 
     // ── /exit /quit ─────────────────────────────────────────────────────────
     if (cmd === '/exit' || cmd === '/quit') {
+      if (isExitingRef.current) return;
+      isExitingRef.current = true;
       await hookRunner.current.run({ event: 'on_session_end', cwd: process.cwd() }).catch(() => {});
       const h = agent.getHistory();
       if (h.length >= 2) {
@@ -285,16 +289,11 @@ export function App({
           saveSnapshot(sessionId, h);
         } catch { /* non-fatal */ }
       }
-      // Dream Mode: ingest session insights on clean /exit (readline parity:
-      // rl.on('close') calls getMemoryStore().ingest() when history.length >= 4)
+      // Dream Mode: fire-and-forget (don't await — avoid blocking exit)
       if (h.length >= 4) {
-        try {
-          const { getMemoryStore } = await import('../../core/memory/memory-store.js');
-          const result = await getMemoryStore(process.cwd()).ingest(h);
-          if (result && (result.added ?? 0) > 0) {
-            appendSystem(`Dream Mode: +${result.added ?? 0} insights saved to memory.`);
-          }
-        } catch { /* non-fatal */ }
+        import('../../core/memory/memory-store.js').then(({ getMemoryStore }) => {
+          getMemoryStore(process.cwd()).ingest(h).catch(() => {});
+        }).catch(() => {});
       }
       sessionLogger.current.close();
       onExit?.();
