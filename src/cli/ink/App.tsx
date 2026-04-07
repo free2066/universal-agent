@@ -137,6 +137,7 @@ export function App({
   const toolSeqRef = useRef(0);
   const toolStartRef = useRef<Map<string, number>>(new Map());
   const toolArgsRef = useRef<Map<string, string>>(new Map()); // seqKey → argsStr summary
+  const toolResultMetaRef = useRef<Map<string, string>>(new Map()); // seqKey → result meta (e.g. diff "+3 -1")
   const isSubmittingRef = useRef(false); // debounce guard
 
   // ── Thinking level cycle (Ctrl+T) ────────────────────────────────────────
@@ -2425,15 +2426,31 @@ Begin with a scope summary then list findings. If none found, say so.`;
             },
             onToolResult: (name, result) => {
               sessionLogger.current.logToolResult(name, result);
+              if (name === 'Edit' || name === 'Write' || name === 'MultiEdit') {
+                const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
+                if (seqKey) {
+                  const addMatch = result.match(/\+(\d+)\s+line|\+(\d+)\s+lines?|added\s+(\d+)/i);
+                  const delMatch = result.match(/-(\d+)\s+line|-(\d+)\s+lines?|removed\s+(\d+)|deleted\s+(\d+)/i);
+                  const addCount = parseInt(addMatch?.[1] ?? addMatch?.[2] ?? addMatch?.[3] ?? '0', 10);
+                  const delCount = parseInt(delMatch?.[1] ?? delMatch?.[2] ?? delMatch?.[3] ?? delMatch?.[4] ?? '0', 10);
+                  if (addCount > 0 || delCount > 0) {
+                    const parts: string[] = [];
+                    if (addCount > 0) parts.push(`+${addCount}`);
+                    if (delCount > 0) parts.push(`-${delCount}`);
+                    toolResultMetaRef.current.set(seqKey, parts.join(' '));
+                  }
+                }
+              }
             },
             onToolEnd: (name, success, durationMs, errorMsg) => {
               const seqKey = [...toolStartRef.current.keys()].find((k) => k.startsWith(`${name}#`));
               if (seqKey) toolStartRef.current.delete(seqKey);
               const argsSummary = seqKey ? (toolArgsRef.current.get(seqKey) ?? '') : '';
               if (seqKey) toolArgsRef.current.delete(seqKey);
+              const resultMeta = seqKey ? (toolResultMetaRef.current.get(seqKey) ?? '') : '';
+              if (seqKey) toolResultMetaRef.current.delete(seqKey);
               sessionLogger.current.logToolEnd(name, success, durationMs ?? 0, errorMsg);
               setToolCalls((prev) => {
-                // 找第一个同名且 running 的工具调用标记完成（兼容预执行时序问题）
                 let updated = false;
                 return prev.map((tc) => {
                   if (!updated && tc.name === name && tc.status === 'running') {
@@ -2449,8 +2466,9 @@ Begin with a scope summary then list findings. If none found, say so.`;
               const cols = process.stdout.columns ?? 120;
               const maxSummary = Math.max(0, cols - name.length - 20);
               const summary = argsSummary.length > maxSummary ? argsSummary.slice(0, maxSummary) + '…' : argsSummary;
+              const diffPart = resultMeta ? ` ${resultMeta}` : '';
               const resultLine = success
-                ? `↳ ${name}${summary ? `(${summary})` : ''} done${dur ? ` (${dur})` : ''}.`
+                ? `↳ ${name}${summary ? `(${summary})` : ''}${diffPart} done${dur ? ` (${dur})` : ''}.`
                 : `[failed] ↳ ${name}${summary ? `(${summary})` : ''} failed${dur ? ` (${dur})` : ''}${errorMsg ? `: ${errorMsg.slice(0, 120)}` : ''}.`;
               appendSystem(resultLine);
             },

@@ -290,8 +290,10 @@ export class SessionLogger {
     const buf = this._outputBuffer.trim();
     if (!buf) return;
     this._outputBuffer = '';
+    const thisRoundChars = this.outputChars;
+    this.outputChars = 0;
     const lines = buf.split('\n');
-    this._write(`[${now()}] LLM_OUTPUT  (${this.outputChars} chars)`);
+    this._write(`[${now()}] LLM_OUTPUT  (${thisRoundChars} chars)`);
     for (const line of lines.slice(0, 60)) {
       this._write(`             ${truncate(line, 400)}`);
     }

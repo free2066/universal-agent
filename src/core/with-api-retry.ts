@@ -111,6 +111,7 @@ export async function withApiRetry<T>(
 ): Promise<T> {
   let attempt529 = 0;
   let attempt429 = 0;
+  const startMs = Date.now();
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -153,7 +154,7 @@ export async function withApiRetry<T>(
 
         onRetryMessage?.(
           `\n⏳ Rate-limited — waiting ${Math.round(retryAfterMs / 1000)}s… ` +
-          `(attempt ${attempt429}, elapsed ${Math.round(Date.now() / 1000)}s)\n`,
+          `(attempt ${attempt429}, elapsed ${Math.round((Date.now() - startMs) / 1000)}s)\n`,
         );
 
         await new Promise<void>((resolve) => {
