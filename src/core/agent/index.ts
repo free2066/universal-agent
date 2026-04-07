@@ -91,6 +91,23 @@ export class AgentCore {
         getPermissionManager(process.cwd()).importSessionGrants(_inheritedGrants);
       }).catch(() => { /* non-fatal */ });
     }
+
+    // B31/B33: Subscribe to AI Limits state changes — warn user when quota is near/exceeded
+    // Mirrors claude-code claudeAiLimits.ts emitStatusChange() subscription pattern
+    // Only subscribe in top-level (non-subagent) sessions to avoid duplicate warnings
+    if (!_inheritedGrants?.length) {
+      import('../services/ai-limits.js').then(({ onAiLimitsChange }) => {
+        onAiLimitsChange((state) => {
+          if (state.status === 'allowed_warning') {
+            const pct5h = state.utilization5h !== undefined ? ` (5h: ${(state.utilization5h * 100).toFixed(0)}%)` : '';
+            const pct7d = state.utilization7d !== undefined ? ` (7d: ${(state.utilization7d * 100).toFixed(0)}%)` : '';
+            process.stderr.write(`\n⚠️  [AI Limits] Quota usage high${pct5h}${pct7d} — approaching rate limit.\n`);
+          } else if (state.status === 'rejected') {
+            process.stderr.write(`\n🚫 [AI Limits] API quota exceeded. Requests may be rejected until quota resets.\n`);
+          }
+        });
+      }).catch(() => { /* non-fatal */ });
+    }
   }
 
   async initMCP(): Promise<void> {
@@ -106,6 +123,9 @@ export class AgentCore {
     if (failed.length > 0) {
       log.warn(`MCP: Failed to connect: ${failed.join(', ')}`);
     }
+    // A33: 注册 MCPManager 单例到 globalThis，供 tool-search-tool.ts 和 /context G32 维度11 访问
+    // Mirrors claude-code pattern where mcpManager is accessible from tool registry context
+    (globalThis as Record<string, unknown>)['__uagent_mcp_manager'] = this.mcpManager;
   }
 
   setDomain(domain: string) {

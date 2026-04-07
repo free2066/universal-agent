@@ -269,6 +269,8 @@ export function App({
       streamFlushTimer.current = null;
     }
     flushStreamBuf();
+    // 清除所有仍在 running 的工具调用（预执行工具可能因 React 批处理时序未正确关闭）
+    setToolCalls((prev) => prev.map((tc) => tc.status === 'running' ? { ...tc, status: 'done' } : tc));
     setIsStreaming(false);
   }, [flushStreamBuf]);
 
@@ -2417,13 +2419,17 @@ Begin with a scope summary then list findings. If none found, say so.`;
               const argsSummary = seqKey ? (toolArgsRef.current.get(seqKey) ?? '') : '';
               if (seqKey) toolArgsRef.current.delete(seqKey);
               sessionLogger.current.logToolEnd(name, success, durationMs ?? 0, errorMsg);
-              setToolCalls((prev) =>
-                prev.map((tc) =>
-                  tc.id === seqKey
-                    ? { ...tc, status: success ? 'done' : 'failed', durationMs }
-                    : tc
-                )
-              );
+              setToolCalls((prev) => {
+                // 找第一个同名且 running 的工具调用标记完成（兼容预执行时序问题）
+                let updated = false;
+                return prev.map((tc) => {
+                  if (!updated && tc.name === name && tc.status === 'running') {
+                    updated = true;
+                    return { ...tc, status: success ? 'done' as const : 'failed' as const, durationMs };
+                  }
+                  return tc;
+                });
+              });
               const dur = durationMs !== undefined
                 ? durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
                 : '';
@@ -3000,7 +3006,7 @@ Begin with a scope summary then list findings. If none found, say so.`;
       </Box>
 
       {/* Active tool calls */}
-      {toolCalls.length > 0 && (
+      {!isStreaming && toolCalls.length > 0 && (
         <Box flexDirection="column" paddingLeft={2} paddingTop={1}>
           {toolCalls.filter((tc) => tc.status === 'running').map((tc) => (
             <ToolCallLine key={tc.id} call={tc} />

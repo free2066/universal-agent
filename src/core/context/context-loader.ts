@@ -5,6 +5,7 @@ import { homedir } from 'os';
 import picomatch from 'picomatch';
 import { getSkillLoader } from '../skills/skill-loader.js';
 import { getUserSetting } from '../agent/permission-manager.js';
+import { loadTeamMemoryFiles as _loadTeamMemoryFiles } from '../team-memory/team-memory-sync.js';
 
 // ── @include directive parser (Round 4: claude-code claudemd.ts parity) ─────────────────
 //
@@ -483,6 +484,16 @@ export function buildSystemPromptWithContext(basePrompt: string, startDir?: stri
       sections.push(`---\n## Language\nYou MUST reply in: ${lang}\n---`);
     }
   } catch { /* non-fatal */ }
+
+  // I32/B33: Team Memory injection — 注入团队共享记忆（只读，来自 ~/.uagent/team-memory/）
+  // Mirrors claude-code teamMemorySync loadTeamMemoryContent() injected into system prompt
+  // loadTeamMemoryFiles() is synchronous — reads cached files from ~/.uagent/team-memory/
+  try {
+    const teamMem = _loadTeamMemoryFiles();
+    if (teamMem) {
+      sections.push(`---\n## Team Memory (shared, read-only)\n${teamMem}\n---`);
+    }
+  } catch { /* B33: non-fatal — team memory unavailable */ }
 
   return sections.join('\n\n');
 }
