@@ -398,10 +398,15 @@ export function renderModelName(model: ModelName): string {
   if (publicName) {
     return publicName
   }
-  // UA: 万擎 endpoint ID → 友好名（bootstrap 设置 UA_MODEL_DISPLAY_NAME）
-  if (process.env.UA_MODEL_DISPLAY_NAME && model === process.env.ANTHROPIC_MODEL) {
-    return process.env.UA_MODEL_DISPLAY_NAME
-  }
+  // UA: 从 UA_EXTRA_MODELS 里查找友好名（覆盖切换后的模型）
+  try {
+    const uaExtra = process.env.UA_EXTRA_MODELS
+    if (uaExtra) {
+      const profiles: Array<{ name: string; displayName: string }> = JSON.parse(uaExtra)
+      const match = profiles.find(p => p.name === model)
+      if (match) return match.displayName
+    }
+  } catch {}
   if (process.env.USER_TYPE === 'ant') {
     const resolved = parseUserSpecifiedModel(model)
     const antModel = resolveAntModel(model)
