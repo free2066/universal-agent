@@ -28,14 +28,19 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       const rejected: string[] = responses.rejected ?? []
       // 无论 onboarding 是否完成，始终确保 approved 列表正确
       // 这样选完主题（onboarding 完成）后就不会再弹 API key 确认框
-      const needsFix =
+      const needsApiKeyFix =
         !approved.includes(UA_KEY_NORMALIZED) ||
         rejected.includes(UA_KEY_NORMALIZED)
-      if (needsFix) {
+      // 清除 lastReleaseNotesSeen，让 LogoV2 始终显示完整的两栏布局
+      // （含 Tips for getting started 和 Recent activity 面板）
+      // CC 原逻辑：lastReleaseNotesSeen === VERSION → 精简模式；不等 → 完整模式
+      const needsFullLogoFix = claudeConfig.lastReleaseNotesSeen !== undefined
+      if (needsApiKeyFix || needsFullLogoFix) {
         claudeConfig.customApiKeyResponses = {
           approved: [...new Set([...approved, UA_KEY_NORMALIZED])],
           rejected: rejected.filter((k: string) => k !== UA_KEY_NORMALIZED),
         }
+        delete claudeConfig.lastReleaseNotesSeen
         writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2))
       }
     } catch (_) {}
