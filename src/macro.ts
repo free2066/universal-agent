@@ -17,7 +17,7 @@ declare global {
 // Read version dynamically from package.json to avoid stale hardcoded value
 ;(function initMACRO() {
   if ((globalThis as any).MACRO) return
-  let version = '1.2.23'
+  let version = '1.2.24'
   try {
     // In Bun runtime, __dirname is available
     const { readFileSync } = require('fs')
