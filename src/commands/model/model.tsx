@@ -14,6 +14,7 @@ import { clearFastModeCooldown, isFastModeAvailable, isFastModeEnabled, isFastMo
 import { MODEL_ALIASES } from '../../utils/model/aliases.js';
 import { checkOpus1mAccess, checkSonnet1mAccess } from '../../utils/model/check1mAccess.js';
 import { getDefaultMainLoopModelSetting, isOpus1mMergeEnabled, renderDefaultModelSetting } from '../../utils/model/model.js';
+import { updateSettingsForSource } from '../../utils/settings/settings.js';
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js';
 import { validateModel } from '../../utils/model/validateModel.js';
 function ModelPickerWrapper(t0) {
@@ -202,6 +203,10 @@ function SetModelAndClose({
         mainLoopModel: modelValue,
         mainLoopModelForSession: null
       }));
+      // UA: 持久化模型选择到 settings.json，下次启动 bootstrap 可读取
+      try {
+        updateSettingsForSource('userSettings', { model: modelValue ?? undefined })
+      } catch {}
       // UA: 记录模型切换日志，帮助排查切换后 credentials 不对的问题
       if (process.env.UA_DEBUG_LOG) {
         try {

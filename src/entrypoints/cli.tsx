@@ -68,9 +68,22 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     const mainModel = config?.pointers?.main
     if (!mainModel) return
 
-    // Set the model for CC engine (UAGENT_MODEL from .env takes priority)
+    // ── Step 2.1: Check ~/.claude/settings.json for persisted model (from /model command) ──
+    // 优先级：ANTHROPIC_MODEL 环境变量 > UAGENT_MODEL > settings.json 持久化 > models.json default
+    let persistedModel: string | undefined
+    try {
+      const settingsPath = resolve(process.env.HOME || '~', '.claude', 'settings.json')
+      if (existsSync(settingsPath)) {
+        const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
+        if (settings?.model && typeof settings.model === 'string') {
+          persistedModel = settings.model
+        }
+      }
+    } catch {}
+
+    // Set the model for CC engine
     if (!process.env.ANTHROPIC_MODEL) {
-      process.env.ANTHROPIC_MODEL = process.env.UAGENT_MODEL || mainModel
+      process.env.ANTHROPIC_MODEL = process.env.UAGENT_MODEL || persistedModel || mainModel
     }
 
     // ── Setup UA debug log ────────────────────────────────────────────────────
@@ -94,8 +107,9 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
     // ── Step 2 result
     uaLog(`[step2] models.json: ${existsSync(configFile) ? 'found' : 'NOT FOUND'}`)
-    uaLog(`[step2] pointers.main: ${mainModel}`)
-    uaLog(`[step2] ANTHROPIC_MODEL (after .env override): ${process.env.ANTHROPIC_MODEL}`)
+    uaLog(`[step2] pointers.main (default): ${mainModel}`)
+    uaLog(`[step2] settings.json persisted model: ${persistedModel ?? 'none'}`)
+    uaLog(`[step2] ANTHROPIC_MODEL (final): ${process.env.ANTHROPIC_MODEL} ${persistedModel && process.env.ANTHROPIC_MODEL === persistedModel ? '← from settings.json' : process.env.UAGENT_MODEL ? '← from UAGENT_MODEL' : '← from models.json default'}`)
     uaLog(`[step2] profiles count: ${(config.profiles || []).length}`)
 
     const isAnthropicModel =
