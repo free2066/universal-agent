@@ -96,7 +96,11 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       const activeModel = process.env.ANTHROPIC_MODEL!
       const profile = profiles.find((p: any) => p.name === activeModel || p.modelName === activeModel)
       if (profile) {
-        const { provider, apiKey, baseURL } = profile
+        const { provider, apiKey, baseURL, displayName } = profile
+        // 将友好名存到环境变量，供 LogoV2 的 billingType 显示
+        if (displayName && !process.env.UA_MODEL_DISPLAY_NAME) {
+          process.env.UA_MODEL_DISPLAY_NAME = displayName
+        }
         if (provider === 'gemini' || activeModel.startsWith('gemini')) {
           if (apiKey && !process.env.GEMINI_API_KEY) process.env.GEMINI_API_KEY = apiKey
         } else {

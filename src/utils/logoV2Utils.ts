@@ -256,7 +256,7 @@ export function getLogoDisplayData(): {
   // UA: 用实际模型名替代硬编码的 'API Usage Billing'
   const rawBilling = isClaudeAISubscriber()
     ? getSubscriptionName()
-    : (process.env.ANTHROPIC_MODEL ?? 'wanqin')
+    : (process.env.UA_MODEL_DISPLAY_NAME ?? process.env.ANTHROPIC_MODEL ?? 'wanqin')
   // 取模型名最后一段（去掉 provider 前缀如 "openai/"）
   const billingType = rawBilling.includes('/')
     ? rawBilling.split('/').pop()!
