@@ -89,23 +89,34 @@ const CATEGORY_PATTERNS: Array<{
     confidence: 0.8,
   },
   {
-    category: 'visual-engineering',
-    patterns: [
-      /\b(ui|ux|frontend|front-end|css|tailwind|styled.components?|scss|less)\b/i,
-      /\b(react|vue|svelte|angular|component|layout|responsive|mobile)\b/i,
-      /\b(design|animation|transition|hover|dark\s+mode|theme)\b/i,
-      /\b(figma|wireframe|mockup|prototype)\b/i,
-    ],
-    confidence: 0.8,
-  },
-  {
     category: 'debug',
     patterns: [
-      /\b(debug|trace|diagnose|investigate|root\s+cause|why\s+(is|does|did|are))\b/i,
-      /\b(error|exception|crash|bug|broken|not\s+working|failing)\b/i,
+      // Require debugging-intent verbs to avoid matching "add error handling" or "create custom exception"
+      /\b(debug|trace|diagnose|root\s+cause)\b/i,
+      /\b(why\s+(is|does|did|are|isn't|doesn't|didn't|aren't))\b/i,
+      /\b(fix|resolve|investigate)\s+(the\s+)?(error|exception|crash|bug|issue|problem)\b/i,
       /\b(stack\s+trace|segfault|memory\s+leak|race\s+condition|deadlock)\b/i,
+      // "not working" / "broken" as standalone assertions about the current state
+      /\b(isn't|not)\s+working\b/i,
+      /\bsomething\s+(is\s+)?(wrong|broken|failing)\b/i,
     ],
     confidence: 0.75,
+  },
+  {
+    category: 'visual-engineering',
+    patterns: [
+      // Require explicit UI/CSS/design tool context — avoid single generic words
+      /\b(css|tailwind|styled.components?|scss|less|sass)\b/i,
+      /\b(ui|ux|frontend|front-end)\s+(component|layout|design|page|screen|element)\b/i,
+      /\b(react|vue|svelte|angular)\s+(component|hook|page|layout|style)\b/i,
+      // Compound visual/layout phrases that imply frontend work
+      /\b(responsive\s+(design|layout)|mobile\s+(ui|layout|screen|view))\b/i,
+      /\b(dark\s+mode|light\s+mode|color\s+scheme|design\s+system|component\s+library)\b/i,
+      /\b(figma|wireframe|mockup|prototype)\b/i,
+      // Animation/transition only when clearly frontend context
+      /\b(css\s+animation|css\s+transition|hover\s+(state|effect|style))\b/i,
+    ],
+    confidence: 0.8,
   },
   {
     category: 'deep',

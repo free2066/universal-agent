@@ -20,7 +20,7 @@
  */
 
 import axios from 'axios'
-import { writeFile } from 'fs/promises'
+import { mkdir as fsMkdirRecursive, stat as fsStat, writeFile } from 'fs/promises'
 import isEqual from 'lodash-es/isEqual.js'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
@@ -1723,8 +1723,15 @@ async function loadAndCacheMarketplace(
         }
 
         if (pluginManifest && typeof pluginManifest.name === 'string') {
-          // Synthesize a minimal marketplace.json wrapping this plugin
-          const pluginName = pluginManifest.name as string
+          // Synthesize a minimal marketplace.json wrapping this plugin.
+          // The plugin source is "./" — a relative path meaning the plugin root
+          // is the same directory as the marketplace root (repoRoot). This is the
+          // only format PluginSourceSchema accepts for local plugins.
+          const pluginName = (pluginManifest.name as string)
+            // Sanitize to kebab-case so MarketplaceNameSchema accepts it
+            .toLowerCase()
+            .replace(/[^a-z0-9.-]+/g, '-')
+            .replace(/^[-.]|[-.]$/g, '')
           const pluginDesc = typeof pluginManifest.description === 'string'
             ? pluginManifest.description
             : `Plugin ${pluginName} (auto-detected single-plugin repo)`
@@ -1733,6 +1740,27 @@ async function loadAndCacheMarketplace(
             `Synthesizing marketplace for plugin "${pluginName}".`,
             { level: 'info' },
           )
+
+          // UA fix: if the manifest was found at the repo root (plugin.json) rather than
+          // .claude-plugin/plugin.json, shim it into .claude-plugin/plugin.json so that
+          // createPluginFromPath() can find it. Without this, the downstream loader only
+          // probes .claude-plugin/plugin.json and falls back to a minimal manifest,
+          // silently ignoring all commands/skills/agents declared in the root plugin.json.
+          const canonicalManifestPath = join(repoRoot, '.claude-plugin', 'plugin.json')
+          const isRootLevelManifest = foundPluginJson === join(repoRoot, 'plugin.json')
+          const canonicalManifestExists = await fsStat(canonicalManifestPath)
+            .then(() => true)
+            .catch(() => false)
+          if (isRootLevelManifest && !canonicalManifestExists) {
+            logForDebugging(
+              `[UA] Shimming root-level plugin.json into .claude-plugin/plugin.json ` +
+              `so the plugin loader can discover manifest metadata and components.`,
+              { level: 'info' },
+            )
+            await fsMkdirRecursive(join(repoRoot, '.claude-plugin'), { recursive: true })
+            await writeFile(canonicalManifestPath, JSON.stringify(pluginManifest, null, 2))
+          }
+
           // Write a synthetic marketplace.json so the rest of the pipeline works
           const syntheticMarketplace = {
             name: `${pluginName}-direct`,
@@ -1741,14 +1769,14 @@ async function loadAndCacheMarketplace(
               {
                 name: pluginName,
                 description: pluginDesc,
-                source: {
-                  type: 'directory',
-                  path: repoRoot,
-                },
+                // Use relative path "./" — this is the only local-plugin source
+                // format that PluginSourceSchema accepts. The path is relative to
+                // the marketplace root (repoRoot), so "./" resolves to repoRoot.
+                source: './',
               },
             ],
           }
-          await fs.mkdir(dirname(marketplacePath))
+          await fs.mkdir(dirname(marketplacePath), { recursive: true })
           await writeFile(marketplacePath, JSON.stringify(syntheticMarketplace, null, 2))
           // Re-parse the now-written synthetic marketplace
           try {
