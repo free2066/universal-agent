@@ -137,6 +137,7 @@ import agents from './commands/agents/index.js'
 import plugin from './commands/plugin/index.js'
 import reloadPlugins from './commands/reload-plugins/index.js'
 import rewind from './commands/rewind/index.js'
+import remember from './commands/remember/index.js'
 import heapDump from './commands/heapdump/index.js'
 import mockLimits from './commands/mock-limits/index.js'
 import bridgeKick from './commands/bridge-kick.js'
@@ -311,6 +312,7 @@ const COMMANDS = memoize((): Command[] => [
   review,
   ultrareview,
   rewind,
+  remember,
   securityReview,
   terminalSetup,
   upgrade,
