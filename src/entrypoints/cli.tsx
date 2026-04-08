@@ -31,19 +31,20 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       const needsApiKeyFix =
         !approved.includes(UA_KEY_NORMALIZED) ||
         rejected.includes(UA_KEY_NORMALIZED)
-      // 清除 lastReleaseNotesSeen，让 LogoV2 始终显示完整的两栏布局
-      // （含 Tips for getting started 和 Recent activity 面板）
-      // CC 原逻辑：lastReleaseNotesSeen === VERSION → 精简模式；不等 → 完整模式
-      const needsFullLogoFix = claudeConfig.lastReleaseNotesSeen !== undefined
-      if (needsApiKeyFix || needsFullLogoFix) {
+      if (needsApiKeyFix) {
         claudeConfig.customApiKeyResponses = {
           approved: [...new Set([...approved, UA_KEY_NORMALIZED])],
           rejected: rejected.filter((k: string) => k !== UA_KEY_NORMALIZED),
         }
-        delete claudeConfig.lastReleaseNotesSeen
         writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2))
       }
     } catch (_) {}
+
+    // ── Step 0.1: Force full logo layout (Tips + Recent activity panels) ───────
+    // CC 精简模式触发条件：lastReleaseNotesSeen === VERSION && !showProjectOnboarding
+    // 由于 changelog 从 GitHub 异步加载，启动时缓存为空 → hasReleaseNotes=false → 精简模式
+    // 用环境变量强制显示完整布局，无副作用
+    process.env.CLAUDE_CODE_FORCE_FULL_LOGO = '1'
 
     // ── Step 1: Load ~/.uagent/.env first (旧 UA 的 key 存储) ──────────────────
     const envFile = resolve(uagentDir, '.env')
