@@ -20,7 +20,7 @@
  */
 
 import axios from 'axios'
-import { mkdir as fsMkdirRecursive, stat as fsStat, writeFile } from 'fs/promises'
+import { mkdir as fsMkdirRecursive, stat as fsStat, symlink as symlinkNativeFs, writeFile } from 'fs/promises'
 import isEqual from 'lodash-es/isEqual.js'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
@@ -1759,24 +1759,64 @@ async function loadAndCacheMarketplace(
 
           // UA fix (P1): for `directory`/`file` sources, `temporaryCachePath` is the user's
           // real working tree — writing generated files there would dirty their repo.
-          // Only materialize shim/synthetic files when the source is a remote clone
-          // (cleanupNeeded === true, i.e. github/git/url sources that clone to cacheDir).
-          // For local sources, synthesize the marketplace in memory so no files are written
-          // into the user's working tree.
+          // Instead, materialize the synthetic marketplace in a dedicated subdirectory of
+          // cacheDir (e.g. cacheDir/__sp-<basename>/). A symlink points from that subdir
+          // to the user's actual plugin root so that `source: "./"` resolves correctly,
+          // and cache-only startup readers can find the marketplace.json on disk.
           if (!cleanupNeeded) {
-            // Local source (directory/file): parse synthetic object in-memory only.
-            // Also handle root-level plugin.json in memory — no disk writes.
+            // Local source (directory/file): write synthetic marketplace to cacheDir.
+            // Use a stable subdir name based on the plugin name and repoRoot hash.
+            // The plugin `source` in the marketplace is a relative path to a symlink
+            // that points back to the user's actual plugin root directory.
+            const spDirName = `__sp-${pluginName}`
+            const spCachePath = join(cacheDir, spDirName)
+            const spMarketplacePath = join(spCachePath, '.claude-plugin', 'marketplace.json')
+            const spPluginLinkName = pluginName
+            const spPluginLinkPath = join(spCachePath, spPluginLinkName)
+
             logForDebugging(
-              `[UA] Local marketplace source — synthesizing marketplace in memory (no disk writes to user repo).`,
+              `[UA] Local marketplace source — materializing synthetic marketplace in cache: ${spCachePath}`,
               { level: 'info' },
             )
-            const result = PluginMarketplaceSchema().safeParse(syntheticMarketplaceObj)
+
+            // Create the cache subdir structure
+            await fsMkdirRecursive(join(spCachePath, '.claude-plugin'), { recursive: true })
+
+            // Create a symlink inside the cache subdir pointing to the user's plugin root,
+            // so that `source: "./<pluginName>"` resolves to repoRoot at load time.
+            // Remove stale symlink first (idempotent).
+            try {
+              await fs.rm(spPluginLinkPath, { recursive: true, force: true })
+            } catch {
+              // ignore
+            }
+            await symlinkNativeFs(repoRoot, spPluginLinkPath)
+
+            // Write the synthetic marketplace.json to the cache subdir.
+            // Plugin source is `"./<pluginName>"` — resolves to the symlink → repoRoot.
+            const spSyntheticMarketplace = {
+              ...syntheticMarketplaceObj,
+              plugins: [
+                {
+                  ...syntheticMarketplaceObj.plugins[0],
+                  source: `./${spPluginLinkName}`,
+                },
+              ],
+            }
+            await writeFile(spMarketplacePath, JSON.stringify(spSyntheticMarketplace, null, 2))
+
+            // Re-parse to validate
+            const result = PluginMarketplaceSchema().safeParse(spSyntheticMarketplace)
             if (!result.success) {
               throw new Error(
                 `[UA] Synthesized marketplace for single-plugin repo is invalid: ${result.error.message}`,
               )
             }
             marketplace = result.data
+
+            // Update temporaryCachePath so the caller registers the correct installLocation
+            temporaryCachePath = spCachePath
+            marketplacePath = spMarketplacePath
           } else {
             // Remote clone source (github/git/url): safe to write into the temp clone in cacheDir.
 

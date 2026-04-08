@@ -1356,7 +1356,16 @@ export async function createPluginFromPath(
 
   // Step 1: Load or create the plugin manifest
   // This provides metadata about the plugin (name, version, etc.)
-  const manifestPath = join(pluginPath, '.claude-plugin', 'plugin.json')
+  // Primary location: .claude-plugin/plugin.json (canonical)
+  // Legacy fallback: plugin.json at the plugin root (single-plugin-repo pattern)
+  const canonicalManifestPath = join(pluginPath, '.claude-plugin', 'plugin.json')
+  const legacyRootManifestPath = join(pluginPath, 'plugin.json')
+  const manifestPath =
+    (await pathExists(canonicalManifestPath))
+      ? canonicalManifestPath
+      : (await pathExists(legacyRootManifestPath))
+        ? legacyRootManifestPath
+        : canonicalManifestPath // does not exist — loadPluginManifest will return a default
   const manifest = await loadPluginManifest(manifestPath, fallbackName, source)
 
   // Step 2: Create the base plugin object
@@ -2226,12 +2235,17 @@ async function loadPluginFromMarketplaceEntry(
 
     // Always copy local plugins to versioned cache
     try {
-      // Try to load manifest from plugin directory to check for version field first
-      const manifestPath = join(
+      // Try to load manifest from plugin directory to check for version field first.
+      // Honor root-level plugin.json as a legacy fallback (single-plugin-repo pattern).
+      const canonicalManifestPath = join(
         sourcePluginPath,
         '.claude-plugin',
         'plugin.json',
       )
+      const legacyRootManifestPath = join(sourcePluginPath, 'plugin.json')
+      const manifestPath = (await pathExists(canonicalManifestPath))
+        ? canonicalManifestPath
+        : legacyRootManifestPath
       let pluginManifest: PluginManifest | undefined
       try {
         pluginManifest = await loadPluginManifest(
@@ -2426,9 +2440,14 @@ async function finishLoadingPluginFromPath(
 ): Promise<LoadedPlugin | null> {
   const errors: PluginError[] = []
 
-  // Check if plugin.json exists to determine if we should use marketplace manifest
-  const manifestPath = join(pluginPath, '.claude-plugin', 'plugin.json')
-  const hasManifest = await pathExists(manifestPath)
+  // Check if plugin.json exists to determine if we should use marketplace manifest.
+  // Honor root-level plugin.json as a legacy fallback (single-plugin-repo pattern),
+  // consistent with createPluginFromPath's own manifest-discovery logic.
+  const canonicalManifestPath = join(pluginPath, '.claude-plugin', 'plugin.json')
+  const legacyRootManifestPath = join(pluginPath, 'plugin.json')
+  const hasManifest =
+    (await pathExists(canonicalManifestPath)) ||
+    (await pathExists(legacyRootManifestPath))
 
   const { plugin, errors: pluginErrors } = await createPluginFromPath(
     pluginPath,
