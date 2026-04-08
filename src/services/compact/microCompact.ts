@@ -50,6 +50,14 @@ const COMPACTABLE_TOOLS = new Set<string>([
   FILE_WRITE_TOOL_NAME,
 ])
 
+// UA P3: Prune dual-threshold protection (ported from opencode/packages/opencode/src/session/compaction.ts)
+// PRUNE_PROTECT: tokens from the tail of the conversation that are always kept intact.
+//   Even if those tool results are "old" by count, we protect the most recent 40k tokens.
+// PRUNE_MINIMUM: minimum tokens that must be freeable before we bother running a prune pass.
+//   Prevents repeated tiny prunes that don't meaningfully reduce context pressure.
+const PRUNE_PROTECT = 40_000
+const PRUNE_MINIMUM = 20_000
+
 // --- Cached microcompact state (ant-only, gated by feature('CACHED_MICROCOMPACT')) ---
 
 // Lazy-initialized cached MC module and state to avoid importing in external builds.
@@ -461,9 +469,60 @@ function maybeTimeBasedMicrocompact(
   // context. Neither degenerate is sensible — always keep at least the last.
   const keepRecent = Math.max(1, config.keepRecent)
   const keepSet = new Set(compactableIds.slice(-keepRecent))
+
+  // UA P3: Additional tail-token protection.
+  // Walk messages from the tail and accumulate tool-result token counts.
+  // Any tool whose result lands within the last PRUNE_PROTECT tokens is protected,
+  // even if it would otherwise fall outside the keepRecent count window.
+  let tailTokens = 0
+  const protectedByTokens = new Set<string>()
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (tailTokens >= PRUNE_PROTECT) break
+    if (message.type === 'user' && Array.isArray(message.message.content)) {
+      for (const block of message.message.content) {
+        if (block.type === 'tool_result') {
+          const tokensForBlock = calculateToolResultTokens(block)
+          tailTokens += tokensForBlock
+          if (tailTokens <= PRUNE_PROTECT) {
+            protectedByTokens.add(block.tool_use_id)
+          }
+        }
+        if (block.type === 'text') {
+          tailTokens += roughTokenCountEstimation(block.text ?? '')
+        }
+      }
+    } else if (message.type === 'assistant' && Array.isArray(message.message.content)) {
+      for (const block of message.message.content) {
+        if (block.type === 'text') {
+          tailTokens += roughTokenCountEstimation(block.text ?? '')
+        }
+      }
+    }
+  }
+
+  // Merge both protection sets
+  for (const id of protectedByTokens) keepSet.add(id)
+
   const clearSet = new Set(compactableIds.filter(id => !keepSet.has(id)))
 
   if (clearSet.size === 0) {
+    return null
+  }
+
+  // UA P3: Pre-check — only proceed if the freeable amount exceeds PRUNE_MINIMUM.
+  // Avoids churning through the message array for tiny gains.
+  let freeableTokens = 0
+  for (const message of messages) {
+    if (message.type !== 'user' || !Array.isArray(message.message.content)) continue
+    for (const block of message.message.content) {
+      if (block.type === 'tool_result' && clearSet.has(block.tool_use_id)) {
+        freeableTokens += calculateToolResultTokens(block)
+      }
+    }
+    if (freeableTokens >= PRUNE_MINIMUM) break
+  }
+  if (freeableTokens < PRUNE_MINIMUM) {
     return null
   }
 

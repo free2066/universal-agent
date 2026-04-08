@@ -184,6 +184,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
           name: p.name,
           displayName: p.displayName,
           contextLength: p.contextLength,
+          inputLimit: p.inputLimit,  // UA P2: explicit input limit for overflow calculation
         }))
       if (extraModels.length > 0) {
         process.env.UA_EXTRA_MODELS = JSON.stringify(extraModels)

@@ -175,14 +175,44 @@ export const getUserContext = memoize(
     // cycle through permissions/filesystem → permissions → yoloClassifier).
     setCachedClaudeMdContent(claudeMd || null)
 
+    // UA P4: Remote instructions via UA_REMOTE_INSTRUCTIONS env var.
+    // Supports HTTP(S) URLs pointing to shared team rule files.
+    // Multiple URLs can be separated by commas. Failures are silent.
+    // Inspired by opencode/packages/opencode/src/session/instruction.ts.
+    let remoteInstructions: string | null = null
+    const remoteUrls = process.env.UA_REMOTE_INSTRUCTIONS
+    if (remoteUrls) {
+      const urls = remoteUrls.split(',').map(u => u.trim()).filter(
+        u => u.startsWith('http://') || u.startsWith('https://')
+      )
+      if (urls.length > 0) {
+        const results = await Promise.all(
+          urls.map(async (url) => {
+            try {
+              const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+              if (res.ok) return await res.text()
+            } catch {
+              // Silent failure — network issues or invalid URLs don't block startup
+            }
+            return ''
+          })
+        )
+        const combined = results.filter(Boolean).join('\n\n')
+        if (combined) remoteInstructions = combined
+      }
+    }
+
     logForDiagnosticsNoPII('info', 'user_context_completed', {
       duration_ms: Date.now() - startTime,
       claudemd_length: claudeMd?.length ?? 0,
       claudemd_disabled: Boolean(shouldDisableClaudeMd),
     })
 
+    // Merge local claudeMd with remote instructions
+    const mergedClaudeMd = [claudeMd, remoteInstructions].filter(Boolean).join('\n\n') || null
+
     return {
-      ...(claudeMd && { claudeMd }),
+      ...(mergedClaudeMd && { claudeMd: mergedClaudeMd }),
       currentDate: `Today's date is ${getLocalISODate()}.`,
     }
   },

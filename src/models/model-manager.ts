@@ -14,6 +14,17 @@ export interface ModelProfile {
   baseURL?: string;
   maxTokens: number;
   contextLength: number;
+  /**
+   * Optional explicit input token limit (distinct from contextLength).
+   * Some providers expose a separate "max input tokens" that is smaller than
+   * the full context window (e.g. context=200k but input limit=160k because
+   * 40k is reserved for KV cache). When set, autoCompact uses this value
+   * instead of contextLength - maxTokens to determine overflow.
+   *
+   * Inspired by opencode/packages/opencode/src/session/overflow.ts:
+   *   usable = model.limit.input ? model.limit.input - reserved : context - maxOutput
+   */
+  inputLimit?: number;
   costPer1kInput: number;          // USD per 1k input tokens
   costPer1kOutput: number;         // USD per 1k output tokens
   costPer1mCacheWrite?: number;    // USD per 1M cache_creation tokens (≈1.25× input price)

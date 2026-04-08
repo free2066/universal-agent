@@ -112,6 +112,84 @@ export class GeminiClient implements LLMClient {
     });
   }
 
+  /**
+   * Sanitize a JSON Schema object for Gemini compatibility.
+   *
+   * Gemini's function-calling API is stricter than OpenAI's and rejects several
+   * common schema patterns. Based on opencode/packages/opencode/src/provider/transform.ts:
+   *
+   * 1. Integer enums → convert to string enum (Gemini only accepts string enums)
+   * 2. Array items missing type → add "type: string"
+   * 3. Properties of non-object/non-array types → strip (Gemini ignores them,
+   *    but some providers 400 on unexpected fields)
+   * 4. additionalProperties → strip (not supported by Gemini)
+   * 5. $schema → strip
+   */
+  private sanitizeGeminiSchema(schema: Record<string, unknown>): Record<string, unknown> {
+    if (!schema || typeof schema !== 'object') return schema;
+
+    const result: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(schema)) {
+      // Strip fields Gemini doesn't accept
+      if (key === '$schema' || key === 'additionalProperties') continue;
+
+      if (key === 'type' && value === 'integer') {
+        // Gemini doesn't support 'integer' type — use 'number' instead
+        result[key] = 'number';
+        continue;
+      }
+
+      if (key === 'enum' && Array.isArray(value)) {
+        // Convert all enum values to strings (Gemini only supports string enums)
+        result[key] = value.map((v) => String(v));
+        continue;
+      }
+
+      if (key === 'properties' && typeof value === 'object' && value !== null) {
+        // Recursively sanitize each property definition
+        const props: Record<string, unknown> = {};
+        for (const [propKey, propVal] of Object.entries(value as Record<string, unknown>)) {
+          props[propKey] = this.sanitizeGeminiSchema(propVal as Record<string, unknown>);
+        }
+        result[key] = props;
+        continue;
+      }
+
+      if (key === 'items' && typeof value === 'object' && value !== null) {
+        const items = value as Record<string, unknown>;
+        // Ensure items has a type field (Gemini requires it)
+        const sanitized = this.sanitizeGeminiSchema(items);
+        if (!sanitized.type) sanitized.type = 'string';
+        result[key] = sanitized;
+        continue;
+      }
+
+      if (key === 'anyOf' || key === 'oneOf' || key === 'allOf') {
+        // Flatten to the first non-null variant — Gemini doesn't support union types
+        const variants = value as unknown[];
+        const nonNull = variants.filter((v: any) => v?.type !== 'null');
+        if (nonNull.length === 1) {
+          // Merge the single variant into the parent
+          const merged = this.sanitizeGeminiSchema(nonNull[0] as Record<string, unknown>);
+          Object.assign(result, merged);
+          continue;
+        }
+        // Multiple variants — keep as-is and let Gemini error if unsupported
+        result[key] = variants.map((v) => this.sanitizeGeminiSchema(v as Record<string, unknown>));
+        continue;
+      }
+
+      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+        result[key] = this.sanitizeGeminiSchema(value as Record<string, unknown>);
+      } else {
+        result[key] = value;
+      }
+    }
+
+    return result;
+  }
+
   private buildRequest(options: ChatOptions) {
     const contents = options.messages.map((msg) => {
       const role = msg.role === 'assistant' ? 'model' : 'user';
@@ -141,7 +219,7 @@ export class GeminiClient implements LLMClient {
         functionDeclarations: options.tools.map((t) => ({
           name: t.name,
           description: t.description,
-          parameters: t.parameters,
+          parameters: this.sanitizeGeminiSchema(t.parameters as Record<string, unknown>),
         })),
       }];
     }

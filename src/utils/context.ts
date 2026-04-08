@@ -96,19 +96,23 @@ export function getContextWindowForModel(
     }
   }
 
-  // UA: 从 UA_EXTRA_MODELS 读取自定义模型的 contextLength
+  // UA: 从 UA_EXTRA_MODELS 读取自定义模型的 contextLength / inputLimit
   // UA_EXTRA_MODELS 是 bootstrap 阶段从 ~/.uagent/models.json 注入的
-  // 格式: [{ name, displayName, contextLength }]
+  // 格式: [{ name, displayName, contextLength, inputLimit? }]
   try {
     const uaExtra = process.env.UA_EXTRA_MODELS
     if (uaExtra) {
-      const extraProfiles: Array<{ name: string; displayName?: string; contextLength?: number }> =
+      const extraProfiles: Array<{ name: string; displayName?: string; contextLength?: number; inputLimit?: number }> =
         JSON.parse(uaExtra)
       const match = extraProfiles.find(
         p => p.name === model || p.name === model.split('/').pop(),
       )
-      if (match?.contextLength && match.contextLength > 0) {
-        return match.contextLength
+      if (match) {
+        // P2: prefer explicit inputLimit; fall back to contextLength
+        const limit = match.inputLimit ?? match.contextLength
+        if (limit && limit > 0) {
+          return limit
+        }
       }
     }
   } catch {

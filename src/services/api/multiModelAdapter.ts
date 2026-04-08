@@ -91,6 +91,27 @@ function convertTools(anthropicTools: any[]): any[] {
     }))
 }
 
+/**
+ * Repair a tool name that the model returned with wrong casing.
+ * Strategy (borrowed from opencode/packages/opencode/src/session/llm.ts):
+ *   1. Try toLowerCase() — most models just capitalize the first letter
+ *   2. If still unrecognized, leave as-is (CC will handle the unknown tool gracefully)
+ *
+ * We don't have access to the registered tool set here (that lives in CC's engine),
+ * so we only normalize casing. CC's tool lookup is already case-sensitive; this
+ * pre-normalizes before CC sees the name so mismatches don't cause "tool not found".
+ */
+function normalizeToolName(name: string): string {
+  if (!name) return name
+  const lower = name.toLowerCase()
+  // If model returned e.g. "Bash", "READ", "Write" — normalize to lowercase.
+  // This matches how CC registers all built-in tool names (all lowercase).
+  if (lower !== name) {
+    return lower
+  }
+  return name
+}
+
 /** Convert UA ChatResponse → Anthropic BetaMessage format */
 function convertResponseToAnthropicMessage(
   response: any,
@@ -108,7 +129,7 @@ function convertResponseToAnthropicMessage(
       content.push({
         type: 'tool_use',
         id: tc.id || `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
-        name: tc.name,
+        name: normalizeToolName(tc.name),
         input: tc.arguments || {},
       })
     }

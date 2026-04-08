@@ -624,6 +624,39 @@ export async function compactConversation(
       }),
     ]
 
+    // UA P6: Compaction Replay — append the last user request before compaction
+    // so the model retains context of what the user was doing.
+    // Inspired by opencode/packages/opencode/src/session/compaction.ts process().
+    // We find the last non-meta, non-compact-trigger user message and inject
+    // a lightweight "Last user request" note into the summary messages.
+    if (isAutoCompact) {
+      // Walk backward to find the last meaningful user message
+      const lastUserMsg = [...messages].reverse().find(m =>
+        m.type === 'user' &&
+        !m.isMeta &&
+        !m.isCompactSummary &&
+        typeof m.message?.content === 'string' &&
+        m.message.content.trim().length > 0,
+      )
+      if (lastUserMsg && lastUserMsg.type === 'user') {
+        const rawContent = typeof lastUserMsg.message.content === 'string'
+          ? lastUserMsg.message.content.trim()
+          : ''
+        if (rawContent) {
+          const truncated = rawContent.length > 500
+            ? rawContent.slice(0, 500) + '…'
+            : rawContent
+          summaryMessages.push(
+            createUserMessage({
+              content: `[Context: The user's last request before this auto-compaction was: "${truncated}". Please continue addressing it after reviewing the summary above.]`,
+              isMeta: true,
+              isCompactSummary: true,
+            }),
+          )
+        }
+      }
+    }
+
     // Previously "postCompactTokenCount" — renamed because this is the
     // compact API call's total usage (input_tokens ≈ preCompactTokenCount),
     // NOT the size of the resulting context. Kept for event-field continuity.
