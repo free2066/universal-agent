@@ -57,4 +57,8 @@ export class SandboxManager {
   // ── Event handlers ─────────────────────────────────────────────────────────
   static onViolation(_cb: (evt: SandboxViolationEvent) => void): void {}
   static offViolation(_cb: (evt: SandboxViolationEvent) => void): void {}
+  
+  static annotateStderrWithSandboxFailures(command: string, stderr: string): string {
+    return stderr;
+  }
 }

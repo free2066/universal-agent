@@ -3,6 +3,8 @@
  * 运行时 fallback 从 package.json 读取
  */
 
+export {}
+
 declare global {
   const MACRO: {
     VERSION: string
