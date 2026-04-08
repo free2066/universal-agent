@@ -398,6 +398,10 @@ export function renderModelName(model: ModelName): string {
   if (publicName) {
     return publicName
   }
+  // UA: 万擎 endpoint ID → 友好名（bootstrap 设置 UA_MODEL_DISPLAY_NAME）
+  if (process.env.UA_MODEL_DISPLAY_NAME && model === process.env.ANTHROPIC_MODEL) {
+    return process.env.UA_MODEL_DISPLAY_NAME
+  }
   if (process.env.USER_TYPE === 'ant') {
     const resolved = parseUserSpecifiedModel(model)
     const antModel = resolveAntModel(model)
