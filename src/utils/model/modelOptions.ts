@@ -484,6 +484,31 @@ export function getModelOptions(fastMode = false): ModelOption[] {
     }
   }
 
+  // UA: 把 models.json 里所有 active profiles 加到列表
+  try {
+    const uaExtra = process.env.UA_EXTRA_MODELS
+    if (uaExtra) {
+      const extraProfiles: Array<{ name: string; displayName: string; contextLength?: number }> =
+        JSON.parse(uaExtra)
+      for (const p of extraProfiles) {
+        if (!options.some(opt => opt.value === p.name)) {
+          const ctxNote = p.contextLength
+            ? p.contextLength >= 1_000_000
+              ? ' (1M context)'
+              : p.contextLength >= 200_000
+                ? ' (200K context)'
+                : ''
+            : ''
+          options.push({
+            value: p.name,
+            label: p.displayName,
+            description: `wanqing · ${p.displayName}${ctxNote}`,
+          })
+        }
+      }
+    }
+  } catch {}
+
   // Add custom model from either the current model value or the initial one
   // if it is not already in the options.
   let customModel: ModelSetting = null

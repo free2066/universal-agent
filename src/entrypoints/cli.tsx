@@ -110,6 +110,18 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
           if (baseURL && !process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = baseURL
         }
       }
+      // UA: 把万擎 ep- 模型存到 UA_EXTRA_MODELS，供 /model 列表展示
+      // 只收集有 displayName 的自定义 endpoint（ep- 前缀），避免与内置列表重复
+      const extraModels = profiles
+        .filter((p: any) => p.isActive !== false && p.name && p.displayName)
+        .map((p: any) => ({
+          name: p.name,
+          displayName: p.displayName,
+          contextLength: p.contextLength,
+        }))
+      if (extraModels.length > 0) {
+        process.env.UA_EXTRA_MODELS = JSON.stringify(extraModels)
+      }
     }
   } catch (_e) {
     // silently ignore config read errors
