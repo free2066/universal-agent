@@ -12,24 +12,14 @@
 import { randomUUID } from 'crypto'
 import { createLLMClient } from '../../models/llm/factory.js'
 
-/** Convert Anthropic BetaMessageStreamParams → UA ChatOptions messages array */
+/** Convert Anthropic BetaMessageStreamParams → UA ChatOptions messages array (NO system) */
 function convertAnthropicMessagesToUA(params: any): any[] {
   const messages: any[] = []
 
-  // System prompt
-  if (params.system) {
-    const systemText = Array.isArray(params.system)
-      ? params.system
-          .filter((b: any) => b.type === 'text')
-          .map((b: any) => b.text)
-          .join('\n')
-      : String(params.system)
-    if (systemText) {
-      messages.push({ role: 'system', content: systemText })
-    }
-  }
+  // NOTE: system prompt is handled separately in _callModel as chatOptions.systemPrompt
+  // Do NOT push system here to avoid duplication in OpenAIClient.convertMessages()
 
-  // Conversation messages
+  // Conversation messages (user + assistant + tool_result only)
   for (const msg of params.messages || []) {
     if (msg.role === 'user') {
       const toolResults = extractToolResults(msg.content)
@@ -258,28 +248,72 @@ export class MultiModelAnthropicAdapter {
   }
 
   private async _callModel(params: any, options?: any): Promise<any> {
+    // Extract system prompt and conversation messages separately
+    // (UA LLM clients expect { systemPrompt, messages } not a merged array)
+    let systemPrompt = ''
+    if (params.system) {
+      systemPrompt = Array.isArray(params.system)
+        ? params.system.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+        : String(params.system)
+    }
+
     const messages = convertAnthropicMessagesToUA(params)
     const tools = convertTools(params.tools || [])
 
+    // Build UA-format ChatOptions
+    const chatOptions: any = {
+      systemPrompt,
+      messages,
+      tools: tools.length > 0 ? tools : undefined,
+      maxTokens: params.max_tokens,
+      signal: options?.signal,
+    }
+
+    // Write to UA debug log
+    const logLine = `[UA:multiModel] model=${this.modelName} msgs=${messages.length} tools=${tools.length} stream=${!!params.stream} sys=${systemPrompt.length}chars\n`
+    if (process.env.UA_DEBUG_LOG) {
+      try { require('fs').appendFileSync(process.env.UA_DEBUG_LOG, logLine) } catch {}
+    }
+
     let chatResponse: any
-    if (this.llmClient.streamChat && params.stream) {
-      let accumulated = ''
-      chatResponse = await this.llmClient.streamChat(
-        {
-          messages,
-          tools: tools.length > 0 ? tools : undefined,
-          maxTokens: params.max_tokens,
-          signal: options?.signal,
-        },
-        (chunk: string) => { accumulated += chunk },
+    try {
+      if (this.llmClient.streamChat && params.stream) {
+        let accumulated = ''
+        chatResponse = await this.llmClient.streamChat(
+          chatOptions,
+          (chunk: string) => { accumulated += chunk },
+        )
+        // Log success after streamChat completes
+        if (process.env.UA_DEBUG_LOG) {
+          try {
+            const r = chatResponse
+            require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
+              `[UA:multiModel] streamChat OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0} content=${(r?.content || '').slice(0, 80)}\n`)
+          } catch {}
+        }
+      } else {
+        chatResponse = await this.llmClient.chat(chatOptions)
+        if (process.env.UA_DEBUG_LOG) {
+          try {
+            const r = chatResponse
+            require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
+              `[UA:multiModel] chat OK: type=${r?.type} content=${(r?.content || '').slice(0, 80)}\n`)
+          } catch {}
+        }
+      }
+    } catch (err: any) {
+      // Log error details
+      const errLine = `[UA:multiModel] ERROR calling ${this.modelName}: ${err?.message || err} (code=${err?.code} status=${err?.status})\n`
+      if (process.env.UA_DEBUG_LOG) {
+        try { require('fs').appendFileSync(process.env.UA_DEBUG_LOG, errLine) } catch {}
+      }
+      process.stderr.write(errLine)
+      const apiErr: any = new Error(
+        `[UA MultiModel] Failed to call model ${this.modelName}: ${err?.message || 'Connection error'}`,
       )
-    } else {
-      chatResponse = await this.llmClient.chat({
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-        maxTokens: params.max_tokens,
-        signal: options?.signal,
-      })
+      apiErr.status = err?.status || 503
+      apiErr.code = err?.code || 'ECONNREFUSED'
+      throw apiErr
     }
 
     const contentLen = typeof chatResponse?.content === 'string'

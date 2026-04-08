@@ -6,27 +6,52 @@ import '../macro.js';
 process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
 // ── UA Multi-Model Bootstrap ──────────────────────────────────────────────────
-// Read ~/.uagent/models.json and set ANTHROPIC_MODEL to the active main model
-// so CC's engine routes to the correct provider via MultiModelAnthropicAdapter.
-// Also loads per-profile apiKey and baseURL into the correct env vars.
+// Read ~/.uagent/.env (旧 UA 存储 key 的地方) and ~/.uagent/models.json
+// Set ANTHROPIC_MODEL + WQ_API_KEY + OPENAI_BASE_URL for MultiModelAnthropicAdapter
 ;(function bootstrapUAModel() {
   try {
-    const { readFileSync, existsSync } = require('fs')
-    const { resolve } = require('path')
-    const configFile = resolve(process.env.HOME || '~', '.uagent', 'models.json')
+    const { readFileSync, existsSync, mkdirSync, appendFileSync } = require('fs')
+    const { resolve, dirname } = require('path')
+    const uagentDir = resolve(process.env.HOME || '~', '.uagent')
+
+    // ── Step 1: Load ~/.uagent/.env first (旧 UA 的 key 存储) ──────────────────
+    const envFile = resolve(uagentDir, '.env')
+    if (existsSync(envFile)) {
+      for (const line of readFileSync(envFile, 'utf8').split('\n')) {
+        const eq = line.indexOf('=')
+        if (eq < 1) continue
+        const k = line.slice(0, eq).trim()
+        const v = line.slice(eq + 1).trim()
+        if (k && v && !process.env[k]) {
+          process.env[k] = v
+        }
+      }
+    }
+
+    // ── Step 2: Load ~/.uagent/models.json for model pointer ──────────────────
+    const configFile = resolve(uagentDir, 'models.json')
     if (!existsSync(configFile)) return
 
     const config = JSON.parse(readFileSync(configFile, 'utf8'))
     const mainModel = config?.pointers?.main
     if (!mainModel) return
 
-    // Set the model for CC engine
+    // Set the model for CC engine (UAGENT_MODEL from .env takes priority)
     if (!process.env.ANTHROPIC_MODEL) {
-      process.env.ANTHROPIC_MODEL = mainModel
+      process.env.ANTHROPIC_MODEL = process.env.UAGENT_MODEL || mainModel
     }
 
+    // Setup UA debug log
+    const uaLogFile = resolve(process.env.HOME || '~', '.claude', 'debug', 'ua-debug.log')
+    try {
+      mkdirSync(dirname(uaLogFile), { recursive: true })
+      appendFileSync(uaLogFile, `\n[${new Date().toISOString()}] UA bootstrap: model=${process.env.ANTHROPIC_MODEL} baseURL=${process.env.OPENAI_BASE_URL || 'none'}\n`)
+    } catch {}
+    process.env.UA_DEBUG_LOG = uaLogFile
+
     const isAnthropicModel =
-      mainModel.startsWith('claude-') || mainModel.includes('anthropic.claude')
+      process.env.ANTHROPIC_MODEL!.startsWith('claude-') ||
+      process.env.ANTHROPIC_MODEL!.includes('anthropic.claude')
 
     if (!isAnthropicModel) {
       // Suppress Anthropic auth requirement
@@ -34,43 +59,19 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
         process.env.ANTHROPIC_API_KEY = 'ua-multi-model-placeholder'
       }
 
-      // Load per-profile credentials if the profile has them
+      // Load per-profile credentials if the profile has them and .env didn't set them
       const profiles: any[] = config.profiles || []
-      const profile = profiles.find((p: any) => p.name === mainModel || p.modelName === mainModel)
+      const activeModel = process.env.ANTHROPIC_MODEL!
+      const profile = profiles.find((p: any) => p.name === activeModel || p.modelName === activeModel)
       if (profile) {
         const { provider, apiKey, baseURL } = profile
-
-        // Anthropic
-        if ((provider === 'anthropic' || mainModel.startsWith('claude'))) {
-          if (apiKey && !process.env.ANTHROPIC_API_KEY_REAL) {
-            process.env.ANTHROPIC_API_KEY = apiKey
-          }
-        }
-        // Gemini
-        else if (provider === 'gemini' || mainModel.startsWith('gemini')) {
+        if (provider === 'gemini' || activeModel.startsWith('gemini')) {
           if (apiKey && !process.env.GEMINI_API_KEY) process.env.GEMINI_API_KEY = apiKey
-        }
-        // OpenAI / Wanqing ep-* / DeepSeek / Moonshot / Qwen / Mistral / Groq / SiliconFlow / OpenRouter
-        else {
-          if (apiKey) {
-            if (!process.env.WQ_API_KEY) process.env.WQ_API_KEY = apiKey
-            if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = apiKey
-          }
+        } else {
+          // OpenAI-compat (ep-*, gpt-*, deepseek, etc.)
+          if (apiKey && !process.env.WQ_API_KEY) process.env.WQ_API_KEY = apiKey
+          if (apiKey && !process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = apiKey
           if (baseURL && !process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = baseURL
-        }
-      }
-
-      // Wanqing ep-* models: load global WQ config if no per-profile key
-      if ((mainModel.startsWith('ep-') || mainModel.startsWith('api-')) &&
-          !process.env.WQ_API_KEY && !process.env.OPENAI_API_KEY) {
-        const globalKey = config.wqApiKey || config.openaiApiKey
-        const globalBase = config.openaiBaseUrl || config.wqBaseUrl
-        if (globalKey) {
-          process.env.WQ_API_KEY = globalKey
-          process.env.OPENAI_API_KEY = globalKey
-        }
-        if (globalBase && !process.env.OPENAI_BASE_URL) {
-          process.env.OPENAI_BASE_URL = globalBase
         }
       }
     }

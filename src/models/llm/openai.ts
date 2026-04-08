@@ -29,6 +29,7 @@ export class OpenAIClient implements LLMClient {
     this.client = new OpenAI({
       apiKey: apiKey ?? process.env.WQ_API_KEY ?? process.env.OPENAI_API_KEY,
       baseURL: baseURL ?? process.env.OPENAI_BASE_URL ?? undefined,
+      timeout: parseInt(process.env.UAGENT_CONNECT_TIMEOUT_MS || '30000', 10), // 30s default
     });
   }
 
