@@ -673,7 +673,38 @@ export const getPluginCommands = memoize(async (): Promise<Command[]> => {
 
   const allCommands = perPluginCommands.flat()
   logForDebugging(`Total plugin commands loaded: ${allCommands.length}`)
-  return allCommands
+
+  // UA A2: Namespace bypass — for plugins with namespace:false in their manifest,
+  // register additional no-prefix aliases (e.g., "/autopilot" alongside "/oh-my-claudecode:autopilot").
+  // Only added when no same-named built-in or other-plugin command already exists.
+  // Inspired by oh-my-claudecode / oh-my-openagent direct-install UX.
+  const commandNameSet = new Set(allCommands.map(c => c.name))
+  const aliases: Command[] = []
+  for (const plugin of enabled) {
+    if (plugin.manifest?.namespace !== false) continue
+    for (const cmd of perPluginCommands[enabled.indexOf(plugin)] ?? []) {
+      // cmd.name is "pluginName:cmdName" — strip the plugin prefix to get bare name
+      const colonIdx = cmd.name.indexOf(':')
+      if (colonIdx < 0) continue
+      const bareName = cmd.name.slice(colonIdx + 1)
+      // Only register alias if no conflict with existing commands
+      if (commandNameSet.has(bareName)) {
+        logForDebugging(
+          `[UA A2] Skipping alias "/${bareName}" for "${cmd.name}" — conflicts with existing command`,
+        )
+        continue
+      }
+      commandNameSet.add(bareName)
+      aliases.push({ ...cmd, name: bareName })
+      logForDebugging(
+        `[UA A2] Registered no-prefix alias "/${bareName}" for plugin command "/${cmd.name}"`,
+      )
+    }
+  }
+
+  const result = [...allCommands, ...aliases]
+  logForDebugging(`Total plugin commands (including aliases): ${result.length}`)
+  return result
 })
 
 export function clearPluginCommandCache(): void {

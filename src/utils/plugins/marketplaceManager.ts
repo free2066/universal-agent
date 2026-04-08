@@ -1699,11 +1699,79 @@ async function loadAndCacheMarketplace(
       )
     } catch (e) {
       if (isENOENT(e)) {
-        throw new Error(`Marketplace file not found at ${marketplacePath}`)
+        // UA extension: if no marketplace.json exists, check whether the cloned
+        // repo is itself a single plugin (has plugin.json at root or root-level
+        // .claude-plugin/plugin.json). If so, synthesize a minimal marketplace
+        // so that `gh-url → single plugin` installs work transparently.
+        // Inspired by oh-my-claudecode / oh-my-openagent single-repo plugin pattern.
+        const repoRoot = dirname(dirname(marketplacePath)) // up from .claude-plugin/marketplace.json
+        const pluginJsonPaths = [
+          join(repoRoot, '.claude-plugin', 'plugin.json'),
+          join(repoRoot, 'plugin.json'),
+        ]
+        let pluginManifest: Record<string, unknown> | null = null
+        let foundPluginJson = ''
+        for (const pPath of pluginJsonPaths) {
+          try {
+            const raw = await fs.readFile(pPath, 'utf-8')
+            pluginManifest = JSON.parse(raw) as Record<string, unknown>
+            foundPluginJson = pPath
+            break
+          } catch {
+            // not found at this path, try next
+          }
+        }
+
+        if (pluginManifest && typeof pluginManifest.name === 'string') {
+          // Synthesize a minimal marketplace.json wrapping this plugin
+          const pluginName = pluginManifest.name as string
+          const pluginDesc = typeof pluginManifest.description === 'string'
+            ? pluginManifest.description
+            : `Plugin ${pluginName} (auto-detected single-plugin repo)`
+          logForDebugging(
+            `[UA] No marketplace.json found, detected single-plugin repo at ${foundPluginJson}. ` +
+            `Synthesizing marketplace for plugin "${pluginName}".`,
+            { level: 'info' },
+          )
+          // Write a synthetic marketplace.json so the rest of the pipeline works
+          const syntheticMarketplace = {
+            name: `${pluginName}-direct`,
+            owner: { name: 'community' },
+            plugins: [
+              {
+                name: pluginName,
+                description: pluginDesc,
+                source: {
+                  type: 'directory',
+                  path: repoRoot,
+                },
+              },
+            ],
+          }
+          await fs.mkdir(dirname(marketplacePath))
+          await writeFile(marketplacePath, JSON.stringify(syntheticMarketplace, null, 2))
+          // Re-parse the now-written synthetic marketplace
+          try {
+            marketplace = await parseFileWithSchema(
+              marketplacePath,
+              PluginMarketplaceSchema(),
+            )
+          } catch (parseErr) {
+            throw new Error(
+              `[UA] Synthesized marketplace for single-plugin repo but failed to parse it: ${errorMessage(parseErr)}`,
+            )
+          }
+        } else {
+          throw new Error(
+            `Marketplace file not found at ${marketplacePath}. ` +
+            `If this is a single-plugin repository, add a plugin.json at the repo root or in .claude-plugin/plugin.json.`,
+          )
+        }
+      } else {
+        throw new Error(
+          `Failed to parse marketplace file at ${marketplacePath}: ${errorMessage(e)}`,
+        )
       }
-      throw new Error(
-        `Failed to parse marketplace file at ${marketplacePath}: ${errorMessage(e)}`,
-      )
     }
 
     // Now rename the cache path to use the marketplace's actual name

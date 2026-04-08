@@ -316,6 +316,13 @@ const PluginManifestMetadataSchema = lazySchema(() =>
       .describe(
         'Plugins that must be enabled for this plugin to function. Bare names (no "@marketplace") are resolved against the declaring plugin\'s own marketplace.',
       ),
+    namespace: z
+      .boolean()
+      .optional()
+      .describe(
+        'When false, commands from this plugin are also registered without the plugin-name prefix as aliases (e.g., "/my-cmd" in addition to "/plugin-name:my-cmd"). ' +
+        'Only applies when the short name does not conflict with a built-in command. Useful for direct-install community plugins like oh-my-claudecode.',
+      ),
   }),
 )
 
