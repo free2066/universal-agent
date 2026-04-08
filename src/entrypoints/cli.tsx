@@ -314,6 +314,62 @@ async function main(): Promise<void> {
     process.argv = [process.argv[0]!, process.argv[1]!, 'update'];
   }
 
+  // ── UA: Fast-path for `uagent update` ────────────────────────────────────────
+  // 从 GitHub 拉取最新版本并重新构建安装
+  if (args[0] === 'update') {
+    const { spawnSync } = require('child_process') as typeof import('child_process')
+    const { resolve } = require('path') as typeof import('path')
+    const { existsSync } = require('fs') as typeof import('fs')
+
+    // 找到 uagent 安装目录（package.json 所在位置）
+    const scriptPath = process.argv[1]!
+    // dist/entrypoints/cli.js → 项目根目录
+    const pkgRoot = resolve(scriptPath, '../../..')
+    const pkgJson = resolve(pkgRoot, 'package.json')
+
+    if (!existsSync(pkgJson)) {
+      process.stderr.write(`[uagent update] Cannot find package.json at ${pkgJson}\n`)
+      process.stderr.write(`[uagent update] Please update manually: cd <uagent-dir> && git pull && bun run build && npm link --force\n`)
+      process.exit(1)
+    }
+
+    console.log(`[uagent update] Updating from ${pkgRoot} ...`)
+
+    // Step 1: git pull
+    console.log('\n[1/3] Pulling latest changes from GitHub...')
+    const pull = spawnSync('git', ['pull'], { cwd: pkgRoot, stdio: 'inherit', encoding: 'utf8' })
+    if (pull.status !== 0) {
+      process.stderr.write(`[uagent update] git pull failed (exit ${pull.status})\n`)
+      process.exit(pull.status ?? 1)
+    }
+
+    // Step 2: bun run build
+    console.log('\n[2/3] Building...')
+    const build = spawnSync('bun', ['run', 'build'], { cwd: pkgRoot, stdio: 'inherit', encoding: 'utf8' })
+    if (build.status !== 0) {
+      process.stderr.write(`[uagent update] build failed (exit ${build.status})\n`)
+      process.exit(build.status ?? 1)
+    }
+
+    // Step 3: npm link
+    console.log('\n[3/3] Linking...')
+    const link = spawnSync('npm', ['link', '--force'], { cwd: pkgRoot, stdio: 'inherit', encoding: 'utf8' })
+    if (link.status !== 0) {
+      process.stderr.write(`[uagent update] npm link failed (exit ${link.status})\n`)
+      process.exit(link.status ?? 1)
+    }
+
+    // 读取新版本号
+    try {
+      const newPkg = JSON.parse(require('fs').readFileSync(pkgJson, 'utf8'))
+      console.log(`\n✅ uagent updated to v${newPkg.version}`)
+    } catch {
+      console.log('\n✅ uagent update complete')
+    }
+    process.exit(0)
+  }
+  // ── /UA: uagent update ────────────────────────────────────────────────────────
+
   // --bare: set SIMPLE early
   if (args.includes('--bare')) {
     process.env.CLAUDE_CODE_SIMPLE = '1';
