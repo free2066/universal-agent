@@ -27,13 +27,14 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       const approved: string[] = responses.approved ?? []
       const rejected: string[] = responses.rejected ?? []
       const needsFix =
-        !claudeConfig.hasCompletedOnboarding ||
-        !claudeConfig.theme ||
-        !approved.includes(UA_KEY_NORMALIZED) ||
+        (claudeConfig.hasCompletedOnboarding && !approved.includes(UA_KEY_NORMALIZED)) ||
         rejected.includes(UA_KEY_NORMALIZED)
       if (needsFix) {
-        claudeConfig.hasCompletedOnboarding = true
-        if (!claudeConfig.theme) claudeConfig.theme = 'dark'
+        // 只修 customApiKeyResponses，不动 hasCompletedOnboarding 和 theme
+        // hasCompletedOnboarding 由 onboarding 流程（选完主题后）自动设置
+        // 这样保证：
+        //   - 首次启动：theme=null → 触发 onboarding → 用户选主题 → 写入 theme + hasCompletedOnboarding=true
+        //   - 后续启动：approved 列表补全，不再弹 API key 确认框
         claudeConfig.customApiKeyResponses = {
           approved: [...new Set([...approved, UA_KEY_NORMALIZED])],
           rejected: rejected.filter((k: string) => k !== UA_KEY_NORMALIZED),
