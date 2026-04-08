@@ -17,7 +17,6 @@
 
 import {
   type TaskCategory,
-  getClassifierModel,
   getFallbackModels,
   getModelForCategory,
   isTaskRoutingEnabled,
@@ -57,8 +56,11 @@ const CATEGORY_PATTERNS: Array<{
   {
     category: 'git',
     patterns: [
-      /\b(commit|git\s+commit|git\s+push|git\s+pull|git\s+merge|git\s+rebase)\b/i,
-      /\b(branch|stash|cherry.pick|git\s+log|git\s+diff|git\s+status)\b/i,
+      // Require explicit git command prefix for ambiguous single words
+      /\bgit\s+(commit|push|pull|merge|rebase|stash|log|diff|status|checkout|branch|cherry-pick)\b/i,
+      // Compound phrases that are unambiguously git-related
+      /\b(create|delete|switch|checkout)\s+(a\s+)?branch\b/i,
+      /\b(stash|pop|apply)\s+(changes|the\s+stash|stash)\b/i,
       /\b(pr|pull\s+request|merge\s+request)\s+(description|message|title)\b/i,
       /\bwrite\s+(a\s+)?commit\s+message\b/i,
     ],
@@ -67,9 +69,11 @@ const CATEGORY_PATTERNS: Array<{
   {
     category: 'writing',
     patterns: [
+      // Require explicit documentation-related nouns to avoid catching "explain algorithm" etc.
       /\b(write|update|improve|fix|generate)\s+(the\s+)?(readme|documentation|docs|changelog|release\s+notes|comments?|jsdoc|tsdoc)\b/i,
       /\badd\s+(documentation|comments?|docstrings?)\b/i,
-      /\b(summarize|explain|describe)\b/i,
+      // Only match summarize/explain/describe when paired with doc-related objects
+      /\b(summarize|explain|describe)\s+(the\s+)?(code|project|readme|documentation|docs|codebase|repo|module|library|api\s+docs)\b/i,
     ],
     confidence: 0.75,
   },

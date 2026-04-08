@@ -27,6 +27,7 @@ import { fileHistoryEnabled, fileHistoryMakeSnapshot } from './fileHistory.js'
 import { gracefulShutdownSync } from './gracefulShutdown.js'
 import { enqueue } from './messageQueueManager.js'
 import { resolveSkillModelOverride } from './model/model.js'
+import { classifyAndRoute, getTaskRouterSummary } from './taskRouter.js'
 import type { ProcessUserInputContext } from './processUserInput/processUserInput.js'
 import { processUserInput } from './processUserInput/processUserInput.js'
 import type { QueryGuard } from './QueryGuard.js'
@@ -558,6 +559,23 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
             ? primaryCmd.value
             : undefined
         const shouldCallBeforeQuery = primaryMode === 'prompt'
+
+        // UA Task Router: classify the user's prompt and route to the best model.
+        // Only activates when ~/.uagent/task-router.json exists with "enabled": true.
+        // Does NOT override if processUserInput already resolved a specific model
+        // (e.g., from a skill's "model:" frontmatter field).
+        let effectiveMainLoopModel = mainLoopModel
+        if (!model && primaryMode === 'prompt' && primaryInput) {
+          const routeResult = classifyAndRoute(primaryInput)
+          if (routeResult) {
+            logForDebugging(
+              `[TaskRouter] Routing "${primaryInput.slice(0, 60)}..." → category="${routeResult.category}", model="${routeResult.model}" (${routeResult.resolution}, confidence=${routeResult.confidence.toFixed(2)})`,
+              { level: 'info' },
+            )
+            effectiveMainLoopModel = routeResult.model
+          }
+        }
+
         await onQuery(
           newMessages,
           abortController,
@@ -565,7 +583,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
           allowedTools ?? [],
           model
             ? resolveSkillModelOverride(model, mainLoopModel)
-            : mainLoopModel,
+            : effectiveMainLoopModel,
           shouldCallBeforeQuery ? onBeforeQuery : undefined,
           primaryInput,
           effort,
