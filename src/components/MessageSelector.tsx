@@ -390,6 +390,19 @@ export function MessageSelector({
                     </Box>;
           })}
             </Box>
+            {/* UA: 翻页指示器 — 当消息数超过一页时显示页码和翻页提示 */}
+            {messageOptions.length > MAX_VISIBLE_MESSAGES && <Box flexDirection="row" gap={1} marginTop={0}>
+                <Text dimColor>
+                  {firstVisibleIndex > 0 ? figures.arrowUp : ' '}
+                  {' '}
+                  {Math.floor(selectedIndex / MAX_VISIBLE_MESSAGES) + 1}/{Math.ceil(messageOptions.length / MAX_VISIBLE_MESSAGES)}
+                  {' '}
+                  {firstVisibleIndex + MAX_VISIBLE_MESSAGES < messageOptions.length ? figures.arrowDown : ' '}
+                </Text>
+                <Text dimColor italic>
+                  ({selectedIndex + 1}/{messageOptions.length})
+                </Text>
+              </Box>}
           </>}
         {!messageToRestore && <Text dimColor italic>
             {exitState.pending ? <>Press {exitState.keyName} again to exit</> : <>
