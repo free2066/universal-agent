@@ -82,8 +82,9 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     } catch {}
 
     // Set the model for CC engine
+    // 优先级：ANTHROPIC_MODEL 环境变量 > settings.json 持久化（/model 命令写入）> UAGENT_MODEL > models.json default
     if (!process.env.ANTHROPIC_MODEL) {
-      process.env.ANTHROPIC_MODEL = process.env.UAGENT_MODEL || persistedModel || mainModel
+      process.env.ANTHROPIC_MODEL = persistedModel || process.env.UAGENT_MODEL || mainModel
     }
 
     // ── Setup UA debug log ────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     uaLog(`[step2] models.json: ${existsSync(configFile) ? 'found' : 'NOT FOUND'}`)
     uaLog(`[step2] pointers.main (default): ${mainModel}`)
     uaLog(`[step2] settings.json persisted model: ${persistedModel ?? 'none'}`)
-    uaLog(`[step2] ANTHROPIC_MODEL (final): ${process.env.ANTHROPIC_MODEL} ${persistedModel && process.env.ANTHROPIC_MODEL === persistedModel ? '← from settings.json' : process.env.UAGENT_MODEL ? '← from UAGENT_MODEL' : '← from models.json default'}`)
+    uaLog(`[step2] ANTHROPIC_MODEL (final): ${process.env.ANTHROPIC_MODEL} ${persistedModel && process.env.ANTHROPIC_MODEL === persistedModel ? '← from settings.json' : process.env.UAGENT_MODEL && process.env.ANTHROPIC_MODEL === process.env.UAGENT_MODEL ? '← from UAGENT_MODEL' : '← from models.json default'}`)
     uaLog(`[step2] profiles count: ${(config.profiles || []).length}`)
 
     const isAnthropicModel =
