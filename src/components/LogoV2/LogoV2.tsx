@@ -22,6 +22,7 @@ import { OffscreenFreeze } from '../OffscreenFreeze.js';
 import { checkForReleaseNotesSync } from '../../utils/releaseNotes.js';
 import { getDumpPromptsPath } from 'src/services/api/dumpPrompts.js';
 import { isEnvTruthy } from 'src/utils/envUtils.js';
+import { isFullLogoMode, onLogoModeChange } from '../../utils/logoState.js';
 import { getStartupPerfLogPath, isDetailedProfilingEnabled } from 'src/utils/startupProfiler.js';
 import { EmergencyTip } from './EmergencyTip.js';
 import { VoiceModeNotice } from './VoiceModeNotice.js';
@@ -114,14 +115,12 @@ export function LogoV2() {
     t3 = $[4];
   }
   useEffect(t2, t3);
-  let t4;
-  if ($[5] === Symbol.for("react.memo_cache_sentinel")) {
-    t4 = !hasReleaseNotes && !showOnboarding && !isEnvTruthy(process.env.CLAUDE_CODE_FORCE_FULL_LOGO);
-    $[5] = t4;
-  } else {
-    t4 = $[5];
-  }
-  const isCondensedMode = t4;
+  // UA: 用响应式 state 替换 React compiler 缓存，支持 /logo 命令实时切换
+  const [isFullLogo, setIsFullLogo] = useState(() => isFullLogoMode());
+  useEffect(() => {
+    return onLogoModeChange((full) => setIsFullLogo(full));
+  }, []);
+  const isCondensedMode = !hasReleaseNotes && !showOnboarding && !isFullLogo;
   let t5;
   let t6;
   if ($[6] !== showGuestPassesUpsell) {
@@ -177,7 +176,7 @@ export function LogoV2() {
     t10 = $[14];
   }
   const modelDisplayName = t10;
-  if (!hasReleaseNotes && !showOnboarding && !isEnvTruthy(process.env.CLAUDE_CODE_FORCE_FULL_LOGO)) {
+  if (isCondensedMode) {
     let t11;
     let t12;
     let t13;
