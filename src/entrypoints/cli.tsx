@@ -69,7 +69,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     if (!mainModel) return
 
     // ── Step 2.1: Check ~/.claude/settings.json for persisted model (from /model command) ──
-    // 优先级：ANTHROPIC_MODEL 环境变量 > UAGENT_MODEL > settings.json 持久化 > models.json default
+    // 优先级：ANTHROPIC_MODEL 环境变量 > settings.json 持久化（/model 命令写入）> UAGENT_MODEL > models.json default
     let persistedModel: string | undefined
     try {
       const settingsPath = resolve(process.env.HOME || '~', '.claude', 'settings.json')
@@ -85,6 +85,17 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     // 优先级：ANTHROPIC_MODEL 环境变量 > settings.json 持久化（/model 命令写入）> UAGENT_MODEL > models.json default
     if (!process.env.ANTHROPIC_MODEL) {
       process.env.ANTHROPIC_MODEL = persistedModel || process.env.UAGENT_MODEL || mainModel
+    }
+
+    // ── Step 2.2: Load router / fallback / taskTypes from models.json ──────────
+    // router: { taskType: modelName } — 多模型动态路由映射表（未来自动路由用）
+    // fallback: string[]             — 模型故障时的 fallback 链
+    // profile.taskTypes: string[]   — 每个模型适合的任务类型（可选，不强制填写）
+    if (config?.router && typeof config.router === 'object') {
+      process.env.UA_TASK_ROUTER = JSON.stringify(config.router)
+    }
+    if (Array.isArray(config?.fallback) && config.fallback.length > 0) {
+      process.env.UA_FALLBACK_CHAIN = JSON.stringify(config.fallback)
     }
 
     // ── Setup UA debug log ────────────────────────────────────────────────────
@@ -112,6 +123,8 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     uaLog(`[step2] settings.json persisted model: ${persistedModel ?? 'none'}`)
     uaLog(`[step2] ANTHROPIC_MODEL (final): ${process.env.ANTHROPIC_MODEL} ${persistedModel && process.env.ANTHROPIC_MODEL === persistedModel ? '← from settings.json' : process.env.UAGENT_MODEL && process.env.ANTHROPIC_MODEL === process.env.UAGENT_MODEL ? '← from UAGENT_MODEL' : '← from models.json default'}`)
     uaLog(`[step2] profiles count: ${(config.profiles || []).length}`)
+    uaLog(`[step2] router: ${process.env.UA_TASK_ROUTER ?? 'not configured'}`)
+    uaLog(`[step2] fallback chain: ${process.env.UA_FALLBACK_CHAIN ?? 'not configured'}`)
 
     const isAnthropicModel =
       process.env.ANTHROPIC_MODEL!.startsWith('claude-') ||
@@ -369,6 +382,153 @@ async function main(): Promise<void> {
     process.exit(0)
   }
   // ── /UA: uagent update ────────────────────────────────────────────────────────
+
+  // ── UA: Fast-path for `uagent init` ──────────────────────────────────────────
+  // 分析当前目录结构，生成 CLAUDE.md 项目记忆模板
+  if (args[0] === 'init') {
+    const { existsSync: _exists, readFileSync: _read, writeFileSync: _write } = require('fs') as typeof import('fs')
+    const { resolve: _resolve, basename: _basename } = require('path') as typeof import('path')
+    const cwd = process.cwd()
+    const claudeMdPath = _resolve(cwd, 'CLAUDE.md')
+
+    if (_exists(claudeMdPath)) {
+      process.stderr.write(`[uagent init] CLAUDE.md already exists at ${claudeMdPath}\n`)
+      process.stderr.write(`[uagent init] Delete it first if you want to regenerate.\n`)
+      process.exit(1)
+    }
+
+    console.log(`[uagent init] Analyzing ${cwd} ...`)
+
+    // 检测语言/框架/构建工具
+    const projectName = _basename(cwd)
+    let lang = 'Unknown'
+    let framework = ''
+    let buildTool = ''
+    let description = ''
+    let buildCmd = ''
+    let testCmd = ''
+    let startCmd = ''
+    let srcDirs: string[] = []
+
+    // Node.js / TypeScript
+    if (_exists(_resolve(cwd, 'package.json'))) {
+      try {
+        const pkg = JSON.parse(_read(_resolve(cwd, 'package.json'), 'utf8'))
+        lang = _exists(_resolve(cwd, 'tsconfig.json')) ? 'TypeScript' : 'JavaScript'
+        description = pkg.description || ''
+        buildTool = Object.keys(pkg.devDependencies || {}).includes('vite') ? 'Vite'
+          : Object.keys(pkg.devDependencies || {}).includes('webpack') ? 'Webpack'
+          : Object.keys(pkg.devDependencies || {}).includes('bun') ? 'Bun'
+          : 'npm'
+        if (pkg.dependencies?.['react'] || pkg.devDependencies?.['react']) framework = 'React'
+        else if (pkg.dependencies?.['vue'] || pkg.devDependencies?.['vue']) framework = 'Vue'
+        else if (pkg.dependencies?.['express']) framework = 'Express'
+        else if (pkg.dependencies?.['next']) framework = 'Next.js'
+        buildCmd = pkg.scripts?.build ? `npm run build` : ''
+        testCmd = pkg.scripts?.test ? `npm test` : ''
+        startCmd = pkg.scripts?.start ? `npm start` : pkg.scripts?.dev ? `npm run dev` : ''
+      } catch {}
+    }
+    // Java / Maven
+    else if (_exists(_resolve(cwd, 'pom.xml'))) {
+      lang = 'Java'
+      buildTool = 'Maven'
+      buildCmd = 'mvn compile'
+      testCmd = 'mvn test'
+      startCmd = 'mvn spring-boot:run'
+      try {
+        const pom = _read(_resolve(cwd, 'pom.xml'), 'utf8')
+        if (pom.includes('spring-boot')) framework = 'Spring Boot'
+        else if (pom.includes('quarkus')) framework = 'Quarkus'
+      } catch {}
+    }
+    // Java / Gradle
+    else if (_exists(_resolve(cwd, 'build.gradle')) || _exists(_resolve(cwd, 'build.gradle.kts'))) {
+      lang = _exists(_resolve(cwd, 'build.gradle.kts')) ? 'Kotlin' : 'Java'
+      buildTool = 'Gradle'
+      buildCmd = './gradlew build'
+      testCmd = './gradlew test'
+      startCmd = './gradlew bootRun'
+    }
+    // Python
+    else if (_exists(_resolve(cwd, 'requirements.txt')) || _exists(_resolve(cwd, 'pyproject.toml'))) {
+      lang = 'Python'
+      buildTool = _exists(_resolve(cwd, 'pyproject.toml')) ? 'Poetry/pip' : 'pip'
+      buildCmd = ''
+      testCmd = 'pytest'
+      startCmd = 'python main.py'
+    }
+    // Go
+    else if (_exists(_resolve(cwd, 'go.mod'))) {
+      lang = 'Go'
+      buildTool = 'Go Modules'
+      buildCmd = 'go build ./...'
+      testCmd = 'go test ./...'
+      startCmd = 'go run main.go'
+    }
+    // Rust
+    else if (_exists(_resolve(cwd, 'Cargo.toml'))) {
+      lang = 'Rust'
+      buildTool = 'Cargo'
+      buildCmd = 'cargo build'
+      testCmd = 'cargo test'
+      startCmd = 'cargo run'
+    }
+
+    // 检测常见目录
+    const dirs = ['src', 'lib', 'app', 'tests', 'test', 'docs', 'api', 'scripts', 'config', 'resources']
+    srcDirs = dirs.filter(d => _exists(_resolve(cwd, d)))
+
+    // 生成 CLAUDE.md
+    const techStack = [lang, framework, buildTool].filter(Boolean).join(' · ')
+    const cmdSection = [
+      buildCmd ? `# 构建\n${buildCmd}` : '',
+      testCmd ? `# 测试\n${testCmd}` : '',
+      startCmd ? `# 启动\n${startCmd}` : '',
+    ].filter(Boolean).join('\n\n')
+
+    const dirSection = srcDirs.length > 0
+      ? srcDirs.map(d => `- \`${d}/\` — `).join('\n')
+      : '- `src/` — 源代码'
+
+    const content = `# ${projectName}
+${description ? `\n> ${description}\n` : ''}
+## 项目概述
+
+[在这里描述项目的主要功能和业务背景]
+
+## 技术栈
+
+- 语言/框架：${techStack || 'Unknown'}
+- 构建工具：${buildTool || '未检测到'}
+
+## 常用命令
+
+\`\`\`bash
+${cmdSection || '# 请在此填写常用命令'}
+\`\`\`
+
+## 目录结构
+
+${dirSection}
+
+## 编码规范
+
+- [在这里填写项目的编码规范]
+
+## 注意事项
+
+- [在这里填写重要的项目约束、已知问题或特殊配置]
+`
+
+    _write(claudeMdPath, content, 'utf8')
+    console.log(`\n✅ CLAUDE.md created at ${claudeMdPath}`)
+    console.log(`\n📝 Next steps:`)
+    console.log(`  1. 编辑 CLAUDE.md，补充项目概述和注意事项`)
+    console.log(`  2. 运行 uagent 时会自动读取 CLAUDE.md 作为项目上下文`)
+    process.exit(0)
+  }
+  // ── /UA: uagent init ──────────────────────────────────────────────────────────
 
   // --bare: set SIMPLE early
   if (args.includes('--bare')) {

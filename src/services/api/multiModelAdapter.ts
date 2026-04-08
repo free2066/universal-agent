@@ -303,22 +303,38 @@ export class MultiModelAnthropicAdapter {
       }
     } catch (err: any) {
       // Log error details — 详细记录便于排查
-      const uaLog = process.env.UA_DEBUG_LOG
+      const uaLogFile = process.env.UA_DEBUG_LOG
+      const uaLog = uaLogFile
+        ? (msg: string) => { try { require('fs').appendFileSync(uaLogFile, `[${new Date().toISOString()}] ${msg}\n`) } catch {} }
+        : undefined
       if (uaLog) {
-        try {
-          const { appendFileSync } = require('fs')
-          const ts = new Date().toISOString()
-          appendFileSync(uaLog,
-            `[${ts}] [UA:multiModel] ❌ ERROR calling ${this.modelName}\n` +
-            `[UA:multiModel]   message: ${err?.message ?? err}\n` +
-            `[UA:multiModel]   code: ${err?.code ?? 'n/a'}  status: ${err?.status ?? 'n/a'}\n` +
-            `[UA:multiModel]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}\n` +
-            `[UA:multiModel]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ ***' + process.env.WQ_API_KEY.slice(-4) : '✗ NOT SET'}\n` +
-            `[UA:multiModel]   stack: ${(err?.stack ?? '').split('\n').slice(0, 3).join(' | ')}\n`
-          )
-        } catch {}
+        uaLog(`[UA:multiModel] ❌ ERROR calling ${this.modelName}`)
+        uaLog(`[UA:multiModel]   message: ${err?.message ?? err}`)
+        uaLog(`[UA:multiModel]   code: ${err?.code ?? 'n/a'}  status: ${err?.status ?? 'n/a'}`)
+        uaLog(`[UA:multiModel]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}`)
+        uaLog(`[UA:multiModel]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ ***' + process.env.WQ_API_KEY.slice(-4) : '✗ NOT SET'}`)
+        uaLog(`[UA:multiModel]   stack: ${(err?.stack ?? '').split('\n').slice(0, 3).join(' | ')}`)
       }
       process.stderr.write(`[UA:multiModel] ERROR: ${this.modelName}: ${err?.message || err}\n`)
+
+      // ── UA Fallback Chain ──────────────────────────────────────────────────
+      // 如果 models.json 配置了 fallback 数组，当前模型失败时自动切换到下一个
+      const fallbackChain: string[] = (() => {
+        try { return JSON.parse(process.env.UA_FALLBACK_CHAIN || '[]') } catch { return [] }
+      })()
+      const currentIdx = fallbackChain.indexOf(this.modelName)
+      const nextModel = currentIdx >= 0 && currentIdx < fallbackChain.length - 1
+        ? fallbackChain[currentIdx + 1]
+        : undefined
+
+      if (nextModel) {
+        uaLog?.(`[UA:fallback] ⚠️ ${this.modelName} failed → trying fallback: ${nextModel}`)
+        process.stderr.write(`[UA:fallback] Switching to fallback model: ${nextModel}\n`)
+        const fallbackAdapter = new MultiModelAnthropicAdapter(nextModel)
+        return fallbackAdapter._callModel(params, options)
+      }
+      // ── /UA Fallback Chain ─────────────────────────────────────────────────
+
       const apiErr: any = new Error(
         `[UA MultiModel] Failed to call model ${this.modelName}: ${err?.message || 'Connection error'}`,
       )
