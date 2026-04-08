@@ -1741,28 +1741,8 @@ async function loadAndCacheMarketplace(
             { level: 'info' },
           )
 
-          // UA fix: if the manifest was found at the repo root (plugin.json) rather than
-          // .claude-plugin/plugin.json, shim it into .claude-plugin/plugin.json so that
-          // createPluginFromPath() can find it. Without this, the downstream loader only
-          // probes .claude-plugin/plugin.json and falls back to a minimal manifest,
-          // silently ignoring all commands/skills/agents declared in the root plugin.json.
-          const canonicalManifestPath = join(repoRoot, '.claude-plugin', 'plugin.json')
-          const isRootLevelManifest = foundPluginJson === join(repoRoot, 'plugin.json')
-          const canonicalManifestExists = await fsStat(canonicalManifestPath)
-            .then(() => true)
-            .catch(() => false)
-          if (isRootLevelManifest && !canonicalManifestExists) {
-            logForDebugging(
-              `[UA] Shimming root-level plugin.json into .claude-plugin/plugin.json ` +
-              `so the plugin loader can discover manifest metadata and components.`,
-              { level: 'info' },
-            )
-            await fsMkdirRecursive(join(repoRoot, '.claude-plugin'), { recursive: true })
-            await writeFile(canonicalManifestPath, JSON.stringify(pluginManifest, null, 2))
-          }
-
-          // Write a synthetic marketplace.json so the rest of the pipeline works
-          const syntheticMarketplace = {
+          // Build synthetic marketplace object (used in both local and remote paths below)
+          const syntheticMarketplaceObj = {
             name: `${pluginName}-direct`,
             owner: { name: 'community' },
             plugins: [
@@ -1776,18 +1756,64 @@ async function loadAndCacheMarketplace(
               },
             ],
           }
-          await fs.mkdir(dirname(marketplacePath), { recursive: true })
-          await writeFile(marketplacePath, JSON.stringify(syntheticMarketplace, null, 2))
-          // Re-parse the now-written synthetic marketplace
-          try {
-            marketplace = await parseFileWithSchema(
-              marketplacePath,
-              PluginMarketplaceSchema(),
+
+          // UA fix (P1): for `directory`/`file` sources, `temporaryCachePath` is the user's
+          // real working tree — writing generated files there would dirty their repo.
+          // Only materialize shim/synthetic files when the source is a remote clone
+          // (cleanupNeeded === true, i.e. github/git/url sources that clone to cacheDir).
+          // For local sources, synthesize the marketplace in memory so no files are written
+          // into the user's working tree.
+          if (!cleanupNeeded) {
+            // Local source (directory/file): parse synthetic object in-memory only.
+            // Also handle root-level plugin.json in memory — no disk writes.
+            logForDebugging(
+              `[UA] Local marketplace source — synthesizing marketplace in memory (no disk writes to user repo).`,
+              { level: 'info' },
             )
-          } catch (parseErr) {
-            throw new Error(
-              `[UA] Synthesized marketplace for single-plugin repo but failed to parse it: ${errorMessage(parseErr)}`,
-            )
+            const result = PluginMarketplaceSchema().safeParse(syntheticMarketplaceObj)
+            if (!result.success) {
+              throw new Error(
+                `[UA] Synthesized marketplace for single-plugin repo is invalid: ${result.error.message}`,
+              )
+            }
+            marketplace = result.data
+          } else {
+            // Remote clone source (github/git/url): safe to write into the temp clone in cacheDir.
+
+            // If the manifest was found at the repo root (plugin.json) rather than
+            // .claude-plugin/plugin.json, shim it into .claude-plugin/plugin.json so that
+            // createPluginFromPath() can find it. Without this, the downstream loader only
+            // probes .claude-plugin/plugin.json and falls back to a minimal manifest,
+            // silently ignoring all commands/skills/agents declared in the root plugin.json.
+            const canonicalManifestPath = join(repoRoot, '.claude-plugin', 'plugin.json')
+            const isRootLevelManifest = foundPluginJson === join(repoRoot, 'plugin.json')
+            const canonicalManifestExists = await fsStat(canonicalManifestPath)
+              .then(() => true)
+              .catch(() => false)
+            if (isRootLevelManifest && !canonicalManifestExists) {
+              logForDebugging(
+                `[UA] Shimming root-level plugin.json into .claude-plugin/plugin.json ` +
+                `so the plugin loader can discover manifest metadata and components.`,
+                { level: 'info' },
+              )
+              await fsMkdirRecursive(join(repoRoot, '.claude-plugin'), { recursive: true })
+              await writeFile(canonicalManifestPath, JSON.stringify(pluginManifest, null, 2))
+            }
+
+            // Write a synthetic marketplace.json so the rest of the pipeline works
+            await fs.mkdir(dirname(marketplacePath), { recursive: true })
+            await writeFile(marketplacePath, JSON.stringify(syntheticMarketplaceObj, null, 2))
+            // Re-parse the now-written synthetic marketplace
+            try {
+              marketplace = await parseFileWithSchema(
+                marketplacePath,
+                PluginMarketplaceSchema(),
+              )
+            } catch (parseErr) {
+              throw new Error(
+                `[UA] Synthesized marketplace for single-plugin repo but failed to parse it: ${errorMessage(parseErr)}`,
+              )
+            }
           }
         } else {
           throw new Error(
