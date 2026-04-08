@@ -253,9 +253,14 @@ export function getLogoDisplayData(): {
   const cwd = serverUrl
     ? `${displayPath} in ${serverUrl.replace(/^https?:\/\//, '')}`
     : displayPath
-  const billingType = isClaudeAISubscriber()
+  // UA: 用实际模型名替代硬编码的 'API Usage Billing'
+  const rawBilling = isClaudeAISubscriber()
     ? getSubscriptionName()
-    : 'API Usage Billing'
+    : (process.env.ANTHROPIC_MODEL ?? 'wanqin')
+  // 取模型名最后一段（去掉 provider 前缀如 "openai/"）
+  const billingType = rawBilling.includes('/')
+    ? rawBilling.split('/').pop()!
+    : rawBilling
   const agentName = getInitialSettings().agent
 
   return {
