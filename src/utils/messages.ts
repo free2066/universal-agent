@@ -688,6 +688,8 @@ export function extractTag(html: string, tagName: string): string | null {
 }
 
 export function isNotEmptyMessage(message: Message): boolean {
+  // UA: guard against undefined/null messages that can appear after session restore
+  if (!message) return false
   if (
     message.type === 'progress' ||
     message.type === 'attachment' ||
@@ -748,6 +750,8 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
   // and remains true for all subsequent messages in the normalization process.
   let isNewChain = false
   return messages.flatMap(message => {
+    // UA: guard against undefined/null messages in the array
+    if (!message) return []
     switch (message.type) {
       case 'assistant': {
         isNewChain = isNewChain || message.message.content.length > 1

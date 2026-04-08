@@ -28,10 +28,12 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       const rejected: string[] = responses.rejected ?? []
       const needsFix =
         !claudeConfig.hasCompletedOnboarding ||
+        !claudeConfig.theme ||
         !approved.includes(UA_KEY_NORMALIZED) ||
         rejected.includes(UA_KEY_NORMALIZED)
       if (needsFix) {
         claudeConfig.hasCompletedOnboarding = true
+        if (!claudeConfig.theme) claudeConfig.theme = 'dark'
         claudeConfig.customApiKeyResponses = {
           approved: [...new Set([...approved, UA_KEY_NORMALIZED])],
           rejected: rejected.filter((k: string) => k !== UA_KEY_NORMALIZED),
