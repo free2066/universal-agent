@@ -95,6 +95,26 @@ export function getContextWindowForModel(
       return antModel.contextWindow
     }
   }
+
+  // UA: 从 UA_EXTRA_MODELS 读取自定义模型的 contextLength
+  // UA_EXTRA_MODELS 是 bootstrap 阶段从 ~/.uagent/models.json 注入的
+  // 格式: [{ name, displayName, contextLength }]
+  try {
+    const uaExtra = process.env.UA_EXTRA_MODELS
+    if (uaExtra) {
+      const extraProfiles: Array<{ name: string; displayName?: string; contextLength?: number }> =
+        JSON.parse(uaExtra)
+      const match = extraProfiles.find(
+        p => p.name === model || p.name === model.split('/').pop(),
+      )
+      if (match?.contextLength && match.contextLength > 0) {
+        return match.contextLength
+      }
+    }
+  } catch {
+    // 忽略解析错误，fallback 到默认值
+  }
+
   return MODEL_CONTEXT_WINDOW_DEFAULT
 }
 
