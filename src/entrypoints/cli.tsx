@@ -73,43 +73,81 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       process.env.ANTHROPIC_MODEL = process.env.UAGENT_MODEL || mainModel
     }
 
-    // Setup UA debug log
+    // ── Setup UA debug log ────────────────────────────────────────────────────
     const uaLogFile = resolve(process.env.HOME || '~', '.claude', 'debug', 'ua-debug.log')
-    try {
-      mkdirSync(dirname(uaLogFile), { recursive: true })
-      appendFileSync(uaLogFile, `\n[${new Date().toISOString()}] UA bootstrap: model=${process.env.ANTHROPIC_MODEL} baseURL=${process.env.OPENAI_BASE_URL || 'none'}\n`)
-    } catch {}
+    const uaLog = (msg: string) => {
+      try { appendFileSync(uaLogFile, `[${new Date().toISOString()}] ${msg}\n`) } catch {}
+    }
+    try { mkdirSync(dirname(uaLogFile), { recursive: true }) } catch {}
     process.env.UA_DEBUG_LOG = uaLogFile
+
+    uaLog(`━━━ UA bootstrap start (pid=${process.pid}) ━━━`)
+    uaLog(`version: ${process.env.npm_package_version ?? 'unknown'}`)
+    uaLog(`node: ${process.version}  bun: ${(process.versions as any).bun ?? 'n/a'}`)
+    uaLog(`cwd: ${process.cwd()}`)
+    uaLog(`HOME: ${process.env.HOME}`)
+
+    // ── Step 1 result
+    uaLog(`[step1] .env file: ${existsSync(resolve(uagentDir, '.env')) ? 'found' : 'NOT FOUND'}`)
+    uaLog(`[step1] WQ_API_KEY from .env: ${process.env.WQ_API_KEY ? '***' + process.env.WQ_API_KEY.slice(-4) : 'not set'}`)
+    uaLog(`[step1] OPENAI_BASE_URL from .env: ${process.env.OPENAI_BASE_URL ?? 'not set'}`)
+
+    // ── Step 2 result
+    uaLog(`[step2] models.json: ${existsSync(configFile) ? 'found' : 'NOT FOUND'}`)
+    uaLog(`[step2] pointers.main: ${mainModel}`)
+    uaLog(`[step2] ANTHROPIC_MODEL (after .env override): ${process.env.ANTHROPIC_MODEL}`)
+    uaLog(`[step2] profiles count: ${(config.profiles || []).length}`)
 
     const isAnthropicModel =
       process.env.ANTHROPIC_MODEL!.startsWith('claude-') ||
       process.env.ANTHROPIC_MODEL!.includes('anthropic.claude')
+
+    uaLog(`[step2] isAnthropicModel: ${isAnthropicModel}`)
 
     if (!isAnthropicModel) {
       // Suppress Anthropic auth requirement
       if (!process.env.ANTHROPIC_API_KEY) {
         process.env.ANTHROPIC_API_KEY = 'ua-multi-model-placeholder'
       }
+      uaLog(`[step3] ANTHROPIC_API_KEY: placeholder set`)
 
       // Load per-profile credentials if the profile has them and .env didn't set them
       const profiles: any[] = config.profiles || []
       const activeModel = process.env.ANTHROPIC_MODEL!
       const profile = profiles.find((p: any) => p.name === activeModel || p.modelName === activeModel)
+
       if (profile) {
         const { provider, apiKey, baseURL, displayName } = profile
+        uaLog(`[step3] profile found: name=${profile.name} provider=${provider} displayName=${displayName ?? 'n/a'}`)
         // 将友好名存到环境变量，供 LogoV2 的 billingType 显示
         if (displayName && !process.env.UA_MODEL_DISPLAY_NAME) {
           process.env.UA_MODEL_DISPLAY_NAME = displayName
+          uaLog(`[step3] UA_MODEL_DISPLAY_NAME set: ${displayName}`)
         }
         if (provider === 'gemini' || activeModel.startsWith('gemini')) {
-          if (apiKey && !process.env.GEMINI_API_KEY) process.env.GEMINI_API_KEY = apiKey
+          if (apiKey && !process.env.GEMINI_API_KEY) {
+            process.env.GEMINI_API_KEY = apiKey
+            uaLog(`[step3] GEMINI_API_KEY set from profile (***${apiKey.slice(-4)})`)
+          }
         } else {
           // OpenAI-compat (ep-*, gpt-*, deepseek, etc.)
-          if (apiKey && !process.env.WQ_API_KEY) process.env.WQ_API_KEY = apiKey
-          if (apiKey && !process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = apiKey
-          if (baseURL && !process.env.OPENAI_BASE_URL) process.env.OPENAI_BASE_URL = baseURL
+          if (apiKey && !process.env.WQ_API_KEY) {
+            process.env.WQ_API_KEY = apiKey
+            uaLog(`[step3] WQ_API_KEY set from profile (***${apiKey.slice(-4)})`)
+          }
+          if (apiKey && !process.env.OPENAI_API_KEY) {
+            process.env.OPENAI_API_KEY = apiKey
+          }
+          if (baseURL && !process.env.OPENAI_BASE_URL) {
+            process.env.OPENAI_BASE_URL = baseURL
+            uaLog(`[step3] OPENAI_BASE_URL set from profile: ${baseURL}`)
+          }
         }
+      } else {
+        uaLog(`[step3] WARN: no profile found for model "${activeModel}" in profiles list`)
+        uaLog(`[step3] available profile names: ${profiles.map((p: any) => p.name).join(', ')}`)
       }
+
       // UA: 把万擎 ep- 模型存到 UA_EXTRA_MODELS，供 /model 列表展示
       // 只收集有 displayName 的自定义 endpoint（ep- 前缀），避免与内置列表重复
       const extraModels = profiles
@@ -121,10 +159,24 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
         }))
       if (extraModels.length > 0) {
         process.env.UA_EXTRA_MODELS = JSON.stringify(extraModels)
+        uaLog(`[step3] UA_EXTRA_MODELS injected: ${extraModels.map((m: any) => m.displayName).join(', ')}`)
       }
     }
-  } catch (_e) {
-    // silently ignore config read errors
+
+    uaLog(`[summary] ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL}`)
+    uaLog(`[summary] OPENAI_BASE_URL=${process.env.OPENAI_BASE_URL ?? 'NOT SET ⚠️'}`)
+    uaLog(`[summary] WQ_API_KEY=${process.env.WQ_API_KEY ? '✓ set (***' + process.env.WQ_API_KEY.slice(-4) + ')' : 'NOT SET ⚠️'}`)
+    uaLog(`[summary] GEMINI_API_KEY=${process.env.GEMINI_API_KEY ? '✓ set' : 'not set'}`)
+    uaLog(`━━━ UA bootstrap done ━━━`)
+  } catch (_e: any) {
+    // 即使日志失败也不影响启动，但尝试记录错误
+    try {
+      const { appendFileSync, mkdirSync } = require('fs')
+      const { resolve, dirname } = require('path')
+      const f = resolve(process.env.HOME || '~', '.claude', 'debug', 'ua-debug.log')
+      mkdirSync(dirname(f), { recursive: true })
+      appendFileSync(f, `[${new Date().toISOString()}] BOOTSTRAP ERROR: ${_e?.message ?? _e}\n`)
+    } catch {}
   }
 })()
 // ── /UA Multi-Model Bootstrap ─────────────────────────────────────────────────

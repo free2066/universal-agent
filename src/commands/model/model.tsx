@@ -202,6 +202,28 @@ function SetModelAndClose({
         mainLoopModel: modelValue,
         mainLoopModelForSession: null
       }));
+      // UA: 记录模型切换日志，帮助排查切换后 credentials 不对的问题
+      if (process.env.UA_DEBUG_LOG) {
+        try {
+          const { appendFileSync } = require('fs')
+          const uaExtra = process.env.UA_EXTRA_MODELS
+          let displayName = modelValue ?? 'default'
+          if (uaExtra && modelValue) {
+            try {
+              const profiles = JSON.parse(uaExtra)
+              const match = profiles.find((p: any) => p.name === modelValue)
+              if (match) displayName = `${match.displayName} (${modelValue})`
+            } catch {}
+          }
+          appendFileSync(process.env.UA_DEBUG_LOG,
+            `[${new Date().toISOString()}] [model-switch] → ${displayName}\n` +
+            `[model-switch]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ ***' + process.env.WQ_API_KEY.slice(-4) : '✗ NOT SET'}\n` +
+            `[model-switch]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}\n` +
+            `[model-switch]   ANTHROPIC_MODEL (env): ${process.env.ANTHROPIC_MODEL ?? 'NOT SET'}\n` +
+            `[model-switch]   NOTE: credentials are set at bootstrap, switching model does NOT reload credentials\n`
+          )
+        } catch {}
+      }
       let message = `Set model to ${chalk.bold(renderModelLabel(modelValue))}`;
       let wasFastModeToggledOn = undefined;
       if (isFastModeEnabled()) {

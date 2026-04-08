@@ -302,12 +302,23 @@ export class MultiModelAnthropicAdapter {
         }
       }
     } catch (err: any) {
-      // Log error details
-      const errLine = `[UA:multiModel] ERROR calling ${this.modelName}: ${err?.message || err} (code=${err?.code} status=${err?.status})\n`
-      if (process.env.UA_DEBUG_LOG) {
-        try { require('fs').appendFileSync(process.env.UA_DEBUG_LOG, errLine) } catch {}
+      // Log error details — 详细记录便于排查
+      const uaLog = process.env.UA_DEBUG_LOG
+      if (uaLog) {
+        try {
+          const { appendFileSync } = require('fs')
+          const ts = new Date().toISOString()
+          appendFileSync(uaLog,
+            `[${ts}] [UA:multiModel] ❌ ERROR calling ${this.modelName}\n` +
+            `[UA:multiModel]   message: ${err?.message ?? err}\n` +
+            `[UA:multiModel]   code: ${err?.code ?? 'n/a'}  status: ${err?.status ?? 'n/a'}\n` +
+            `[UA:multiModel]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}\n` +
+            `[UA:multiModel]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ ***' + process.env.WQ_API_KEY.slice(-4) : '✗ NOT SET'}\n` +
+            `[UA:multiModel]   stack: ${(err?.stack ?? '').split('\n').slice(0, 3).join(' | ')}\n`
+          )
+        } catch {}
       }
-      process.stderr.write(errLine)
+      process.stderr.write(`[UA:multiModel] ERROR: ${this.modelName}: ${err?.message || err}\n`)
       const apiErr: any = new Error(
         `[UA MultiModel] Failed to call model ${this.modelName}: ${err?.message || 'Connection error'}`,
       )
