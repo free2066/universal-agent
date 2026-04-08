@@ -93,7 +93,8 @@ function ansiIdx(index: number): Color {
 // Sentinel: a=1 means "terminal default" (matches bat convention)
 const DEFAULT_BG: Color = { r: 0, g: 0, b: 0, a: 1 }
 
-function detectColorMode(theme: string): ColorMode {
+function detectColorMode(theme: string | null | undefined): ColorMode {
+  if (!theme) return 'color256'
   if (theme.includes('ansi')) return 'ansi'
   const ct = process.env.COLORTERM ?? ''
   return ct === 'truecolor' || ct === '24bit' ? 'truecolor' : 'color256'
@@ -280,10 +281,11 @@ const ANSI_SCOPES: Record<string, Color> = {
   meta: ansiIdx(8),
 }
 
-function buildTheme(themeName: string, mode: ColorMode): Theme {
-  const isDark = themeName.includes('dark')
-  const isAnsi = themeName.includes('ansi')
-  const isDaltonized = themeName.includes('daltonized')
+function buildTheme(themeName: string | null | undefined, mode: ColorMode): Theme {
+  const name = themeName ?? 'dark'
+  const isDark = name.includes('dark')
+  const isAnsi = name.includes('ansi')
+  const isDaltonized = name.includes('daltonized')
   const tc = mode === 'truecolor'
 
   if (isAnsi) {
@@ -858,7 +860,7 @@ export class ColorDiff {
     this.prefixContent = prefixContent ?? null
   }
 
-  render(themeName: string, width: number, dim: boolean): string[] | null {
+  render(themeName: string | null | undefined, width: number, dim: boolean): string[] | null {
     const mode = detectColorMode(themeName)
     const theme = buildTheme(themeName, mode)
     const lang = detectLanguage(this.filePath, this.firstLine)
@@ -942,7 +944,7 @@ export class ColorFile {
     this.filePath = filePath
   }
 
-  render(themeName: string, width: number, dim: boolean): string[] | null {
+  render(themeName: string | null | undefined, width: number, dim: boolean): string[] | null {
     const mode = detectColorMode(themeName)
     const theme = buildTheme(themeName, mode)
     const lines = this.code.split('\n')
