@@ -355,9 +355,23 @@ export function toolMatchesName(
 
 /**
  * Finds a tool by name or alias from a list of tools.
+ * First tries an exact (case-sensitive) match, then falls back to a
+ * case-insensitive match so that third-party models that normalise tool
+ * names to lowercase (e.g. MiMo-V2-Pro emitting "bash" instead of "Bash")
+ * can still resolve the correct tool.
  */
 export function findToolByName(tools: Tools, name: string): Tool | undefined {
-  return tools.find(t => toolMatchesName(t, name))
+  // 1. Exact match (primary name or alias)
+  const exact = tools.find(t => toolMatchesName(t, name))
+  if (exact) return exact
+
+  // 2. Case-insensitive fallback for third-party models that lowercase tool names
+  const lower = name.toLowerCase()
+  return tools.find(
+    t =>
+      t.name.toLowerCase() === lower ||
+      (t.aliases?.some(a => a.toLowerCase() === lower) ?? false),
+  )
 }
 
 export type Tool<
