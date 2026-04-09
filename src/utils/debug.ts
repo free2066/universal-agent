@@ -31,8 +31,8 @@ function getUASessionLogWriter(): BufferedWriter | null {
       writeFn: (content: string) => {
         try {
           if (!ensuredDir) {
-            // recursive: true ensures parent directories are created if missing
-            getFsImplementation().mkdirSync(dirname(sessionLogFile), { recursive: true })
+            // Use native mkdirSync for recursive support (getFsImplementation type lacks it)
+            require('fs').mkdirSync(dirname(sessionLogFile), { recursive: true })
             ensuredDir = true
           }
           getFsImplementation().appendFileSync(sessionLogFile, content)
