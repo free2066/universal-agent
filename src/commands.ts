@@ -462,7 +462,7 @@ const loadAllCommands = memoize(async (cwd: string): Promise<Command[]> => {
     getWorkflowCommands ? getWorkflowCommands(cwd) : Promise.resolve([]),
   ])
 
-  return [
+  const raw = [
     ...bundledSkills,
     ...builtinPluginSkills,
     ...skillDirCommands,
@@ -471,6 +471,21 @@ const loadAllCommands = memoize(async (cwd: string): Promise<Command[]> => {
     ...pluginSkills,
     ...COMMANDS(),
   ]
+
+  // Deduplicate by name — first-registered wins (priority order above).
+  // Prevents duplicate slash commands when multiple plugins/builtins
+  // declare the same command name (e.g. /debug, /ultrawork).
+  const seen = new Set<string>()
+  return raw.filter(cmd => {
+    if (seen.has(cmd.name)) {
+      logForDebugging(
+        `[commands] Deduplicating "/${cmd.name}" (source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
+      )
+      return false
+    }
+    seen.add(cmd.name)
+    return true
+  })
 })
 
 /**
