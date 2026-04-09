@@ -35,7 +35,19 @@ export type ModelName = string
 export type ModelSetting = ModelName | ModelAlias | null
 
 export function getSmallFastModel(): ModelName {
-  return process.env.ANTHROPIC_SMALL_FAST_MODEL || getDefaultHaikuModel()
+  if (process.env.ANTHROPIC_SMALL_FAST_MODEL) {
+    return process.env.ANTHROPIC_SMALL_FAST_MODEL
+  }
+  // When no explicit small-model override is set, fall back to the user's
+  // configured main-loop model (if any) so that third-party API users don't
+  // get routed to claude-haiku which they may not have access to.
+  // Only then fall back to the built-in haiku default for 1P users.
+  const userModel = getUserSpecifiedModelSetting()
+  if (userModel !== undefined && userModel !== null) {
+    // parseUserSpecifiedModel resolves aliases like 'sonnet' → full model ID
+    return parseUserSpecifiedModel(userModel)
+  }
+  return getDefaultHaikuModel()
 }
 
 export function isNonCustomOpusModel(model: ModelName): boolean {

@@ -224,30 +224,65 @@ function getUnsupportedToolReferencePatterns(): string[] {
 }
 
 /**
+ * Known model name prefixes / patterns that ARE confirmed to support tool_reference.
+ * Only Claude models from Anthropic (1P, Bedrock, Vertex) support this beta feature.
+ * Third-party models accessed via custom OPENAI_BASE_URL (e.g. GLM, MiMo, Qwen)
+ * do NOT understand tool_reference blocks and should receive all tools inline.
+ */
+const CLAUDE_MODEL_PREFIXES = [
+  'claude-',
+  // Bedrock cross-region inference profiles
+  'us.anthropic.claude-',
+  'eu.anthropic.claude-',
+  'ap.anthropic.claude-',
+  // Vertex AI
+  'anthropic.claude-',
+]
+
+/**
+ * Check if a model is a known Claude model (supports tool_reference).
+ * Returns false for third-party model IDs (endpoint IDs, custom names, etc.)
+ * so that all tools are loaded inline instead of being deferred.
+ */
+function isKnownClaudeModel(model: string): boolean {
+  const normalized = model.toLowerCase()
+  return CLAUDE_MODEL_PREFIXES.some(prefix => normalized.startsWith(prefix))
+}
+
+/**
  * Check if a model supports tool_reference blocks (required for tool search).
  *
- * This uses a negative test: models are assumed to support tool_reference
- * UNLESS they match a pattern in the unsupported list. This ensures new
- * models work by default without code changes.
+ * Rules (in order):
+ * 1. Non-Claude models (third-party endpoints, GLM, MiMo, etc.) → false,
+ *    so all tools are loaded inline and the model can use them normally.
+ * 2. Claude models matched against the unsupported patterns list (e.g. haiku) → false.
+ * 3. All other Claude models → true.
  *
- * Currently, Haiku models do NOT support tool_reference. This can be
- * updated via GrowthBook feature 'tengu_tool_search_unsupported_models'.
+ * The unsupported list can be updated via GrowthBook feature
+ * 'tengu_tool_search_unsupported_models' without a code release.
  *
  * @param model The model name to check
  * @returns true if the model supports tool_reference, false otherwise
  */
 export function modelSupportsToolReference(model: string): boolean {
+  // Third-party / non-Claude models don't support tool_reference.
+  // Disabling tool deferral for them means all tools are sent inline,
+  // which is compatible with any OpenAI-API-compatible endpoint.
+  if (!isKnownClaudeModel(model)) {
+    return false
+  }
+
   const normalizedModel = model.toLowerCase()
   const unsupportedPatterns = getUnsupportedToolReferencePatterns()
 
-  // Check if model matches any unsupported pattern
+  // Check if model matches any unsupported pattern (e.g. 'haiku')
   for (const pattern of unsupportedPatterns) {
     if (normalizedModel.includes(pattern.toLowerCase())) {
       return false
     }
   }
 
-  // New models are assumed to support tool_reference
+  // Known Claude model not in the unsupported list → supports tool_reference
   return true
 }
 
