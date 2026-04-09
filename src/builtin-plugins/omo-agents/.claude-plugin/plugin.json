@@ -12,7 +12,6 @@
     "intent-gate",
     "ultrawork"
   ],
-  "hooks": "./hooks/hooks.json",
   "mcpServers": {
     "hashline": {
       "command": "node",
