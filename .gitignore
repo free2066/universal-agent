@@ -11,3 +11,4 @@ node_modules/
 src/builtin-plugins/**/node_modules/
 dist-bun/
 dist/entrypoints/
+.omc/
