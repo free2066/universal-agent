@@ -462,38 +462,44 @@ const loadAllCommands = memoize(async (cwd: string): Promise<Command[]> => {
     getWorkflowCommands ? getWorkflowCommands(cwd) : Promise.resolve([]),
   ])
 
-  // Deduplicate plugin/builtin commands by name — first-registered wins.
+  // Deduplicate plugin/builtin commands by user-visible name — first-registered wins.
   // This prevents duplicate slash commands when multiple plugins or builtin
-  // sources declare the same command name (e.g. /debug, /ultrawork).
+  // sources declare the same user-facing command name (e.g. /debug, /ultrawork).
   //
-  // IMPORTANT: Only bundled/builtin/plugin sources are deduplicated here.
-  // Settings-backed sources (userSettings, projectSettings, policySettings,
-  // localSettings) intentionally allow same-named commands from different
-  // sources to coexist — the suggestion layer uses source to disambiguate
-  // them and lets users choose between project vs user implementations.
+  // IMPORTANT: We use getCommandName(cmd) (which calls userFacingName()) rather
+  // than cmd.name, because plugin skills set frontmatter `name: ultrawork` which
+  // makes userFacingName() return the bare "ultrawork" even though cmd.name is
+  // the prefixed "oh-my-claudecode:ultrawork". The command palette always uses
+  // getCommandName() for display and matching, so we must deduplicate on the same key.
+  //
+  // Only bundled/builtin/plugin sources are deduplicated here. Settings-backed
+  // sources (userSettings, projectSettings, policySettings, localSettings)
+  // intentionally allow same-named commands from different sources to coexist.
   //
   // Priority: bundledSkills > builtinPluginSkills > pluginCommands > pluginSkills
   const seenPluginBuiltin = new Set<string>(
-    [...bundledSkills, ...builtinPluginSkills].map(cmd => cmd.name),
+    [...bundledSkills, ...builtinPluginSkills].map(cmd => getCommandName(cmd)),
   )
   const deduplicatedPluginCommands = pluginCommands.filter(cmd => {
-    if (seenPluginBuiltin.has(cmd.name)) {
+    const displayName = getCommandName(cmd)
+    if (seenPluginBuiltin.has(displayName)) {
       logForDebugging(
-        `[commands] Deduplicating plugin command "/${cmd.name}" (source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
+        `[commands] Deduplicating plugin command "/${displayName}" (cmd.name=${cmd.name}, source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
       )
       return false
     }
-    seenPluginBuiltin.add(cmd.name)
+    seenPluginBuiltin.add(displayName)
     return true
   })
   const deduplicatedPluginSkills = pluginSkills.filter(cmd => {
-    if (seenPluginBuiltin.has(cmd.name)) {
+    const displayName = getCommandName(cmd)
+    if (seenPluginBuiltin.has(displayName)) {
       logForDebugging(
-        `[commands] Deduplicating plugin skill "/${cmd.name}" (source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
+        `[commands] Deduplicating plugin skill "/${displayName}" (cmd.name=${cmd.name}, source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
       )
       return false
     }
-    seenPluginBuiltin.add(cmd.name)
+    seenPluginBuiltin.add(displayName)
     return true
   })
 
