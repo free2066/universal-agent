@@ -10,7 +10,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 // Set ANTHROPIC_MODEL + WQ_API_KEY + OPENAI_BASE_URL for MultiModelAnthropicAdapter
 ;(function bootstrapUAModel() {
   try {
-    const { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } = require('fs')
+    const { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, unlinkSync } = require('fs')
     const { resolve, dirname } = require('path')
     const uagentDir = resolve(process.env.HOME || '~', '.uagent')
 
@@ -203,6 +203,43 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
         uaLog(`[summary] ${getTaskRouterSummary()}`)
       }
     } catch {}
+    // ── Setup session debug log (writes to fixed path, rotates daily) ────────
+    // 利用 CC 引擎的 --debug-file 机制：不开 --debug 模式（UI 不受影响），
+    // 但 CC 引擎会把 DEBUG 级别日志写入指定文件，方便日常排查问题。
+    // 日志路径：~/.uagent/logs/session-YYYY-MM-DD.log
+    const sessionLogDir = resolve(process.env.HOME || '~', '.uagent', 'logs')
+    const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+    const sessionLogFile = resolve(sessionLogDir, `session-${today}.log`)
+    try { mkdirSync(sessionLogDir, { recursive: true }) } catch {}
+
+    // 只有用户没有手动指定 --debug-file / --debug 时才自动注入
+    const hasManualDebug = process.argv.some(
+      (a: string) => a.startsWith('--debug-file') || a === '--debug' || a === '-d'
+    )
+    if (!hasManualDebug) {
+      process.argv.push(`--debug-file=${sessionLogFile}`)
+      uaLog(`[session-log] CC debug log → ${sessionLogFile}`)
+    } else {
+      uaLog(`[session-log] skipped (manual --debug* flag detected)`)
+    }
+
+    // 清理超过 7 天的旧 session 日志，防止磁盘累积
+    try {
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
+      const files: string[] = readdirSync(sessionLogDir)
+      for (const f of files) {
+        if (!f.startsWith('session-') || !f.endsWith('.log')) continue
+        const fp = resolve(sessionLogDir, f)
+        try {
+          const st = statSync(fp)
+          if (st.mtimeMs < cutoff) {
+            unlinkSync(fp)
+            uaLog(`[session-log] cleaned up old log: ${f}`)
+          }
+        } catch {}
+      }
+    } catch {}
+
     uaLog(`━━━ UA bootstrap done ━━━`)
   } catch (_e: any) {
     // 即使日志失败也不影响启动，但尝试记录错误
