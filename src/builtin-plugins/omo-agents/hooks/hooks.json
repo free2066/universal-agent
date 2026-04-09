@@ -23,6 +23,16 @@
         ]
       },
       {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const usage=h.usage||h.tool_response&&h.tool_response.usage;if(usage&&usage.input_tokens&&usage.context_window){const ratio=usage.input_tokens/usage.context_window;if(ratio>=0.75){process.stdout.write('[omo-agents] ⚠️ CONTEXT WINDOW: '+Math.round(ratio*100)+'% used ('+usage.input_tokens+'/'+usage.context_window+' tokens). You still have context remaining — continue working, do NOT skip tasks or summarize prematurely.\\n');}}}catch(e){}})\"",
+            "timeout": 2
+          }
+        ]
+      },
+      {
         "matcher": "Task",
         "hooks": [
           {
