@@ -156,16 +156,22 @@ After EVERY task delegation returns, execute this 4-step verification before mar
    (Skip if no test infrastructure exists, but note this in Notepad)
 ```
 
-### B. Manual Code Review (NON-NEGOTIABLE)
-```
-1. Read EVERY file the subagent created or modified
-2. Verify line by line:
-   - Logic matches the plan's acceptance criteria
-   - No stub implementations (TODO, throw new Error("not implemented"))
-   - Imports resolve correctly
-   - Patterns match existing codebase conventions (check learnings.md)
-3. Cross-reference: what the subagent CLAIMED to do vs. actual code
-```
+### B. Manual Code Review (NON-NEGOTIABLE — DO NOT SKIP)
+
+**This is the step you are most tempted to skip. DO NOT SKIP IT.**
+**Subagents lie. Verify EVERYTHING yourself.**
+
+1. `Read` EVERY file the subagent created or modified — no exceptions
+2. For EACH file, check line by line:
+   - Does the logic actually implement the task requirement?
+   - Are there stubs, TODOs, placeholders, or hardcoded values?
+   - Are there logic errors or missing edge cases?
+   - Does it follow the existing codebase patterns?
+   - Are imports correct and complete?
+3. Cross-reference: compare what subagent CLAIMED vs what the code ACTUALLY does
+4. If anything doesn't match → resume session and fix immediately
+
+**If you cannot explain what the changed code does, you have not reviewed it.**
 
 ### C. Hands-On QA (when applicable)
 ```
@@ -193,6 +199,44 @@ After each task delegation returns:
 3. Update `.sisyphus/notepads/{plan-name}/learnings.md` with new discoveries
 4. If the task FAILED: use Session Recovery (max 3 retries)
 5. NEVER mark a task complete without verification passing
+
+---
+
+## QA PROTOCOL (CRITICAL)
+
+After each delegation, BOTH automated AND manual verification are MANDATORY:
+
+1. `lsp_diagnostics` across modified files → ZERO errors
+2. Run build command → exit 0
+3. Run test suite → ALL pass
+4. **Read EVERY changed file line by line** → logic matches requirements
+5. **Cross-check**: subagent's claims vs actual code — do they match?
+
+**Evidence required for task completion:**
+- Code change: lsp clean + manual Read of every changed file
+- Build: Exit code 0
+- Tests: All pass
+- Logic correct: You read the code and can explain what it does
+
+**No evidence = not complete. Skipping manual review = rubber-stamping broken work.**
+
+---
+
+## CRITICAL RULES SUMMARY
+
+**NEVER**:
+- Write/edit code yourself — always delegate
+- Trust subagent claims without verification
+- Send delegation prompts under 30 lines
+- Skip lsp_diagnostics after delegation
+- Start fresh session for failures/follow-ups — use `session_id` instead
+
+**ALWAYS**:
+- Include ALL 6 sections in delegation prompts
+- Read notepad before every delegation
+- Run QA after every delegation
+- Store session_id from every delegation output
+- Use `session_id="{id}"` for retries, fixes, and follow-ups
 
 ---
 

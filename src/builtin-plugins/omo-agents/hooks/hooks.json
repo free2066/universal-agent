@@ -1,5 +1,5 @@
 {
-  "description": "omo-agents lifecycle hooks: todo-continuation enforcement, dangerous command interception, post-edit LSP reminder, write-existing-file-guard, and comment-checker",
+  "description": "omo-agents lifecycle hooks: todo-continuation enforcement, dangerous command interception, post-edit LSP reminder, write-existing-file-guard, comment-checker, context-window-monitor, session-id-reminder, bash-file-read-guard",
   "hooks": {
     "PostToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const todos=(h.tool_response&&h.tool_response.todos)||[];const inProgress=todos.filter(x=>x.status==='in_progress');const incomplete=todos.filter(x=>x.status!=='completed');if(inProgress.length>0){process.stdout.write('[omo-agents] ⚡ Task IN PROGRESS: \"'+inProgress[0].content+'\". Do NOT stop. Continue immediately to complete it.\\n');}else if(incomplete.length>0){process.stdout.write('[omo-agents] '+incomplete.length+' todo(s) remaining. Sisyphus: continue to next task.\\n');}}catch(e){}})\"",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const todos=(h.tool_response&&h.tool_response.todos)||[];const inProgress=todos.filter(x=>x.status==='in_progress');const incomplete=todos.filter(x=>x.status!=='completed');if(inProgress.length>0){process.stdout.write('[omo-agents] ⚡ Task IN PROGRESS: \\\"'+inProgress[0].content+'\\\". Do NOT stop. Continue immediately to complete it.\\n');}else if(incomplete.length>0){process.stdout.write('[omo-agents] '+incomplete.length+' todo(s) remaining. Sisyphus: continue to next task.\\n');}}catch(e){}})\"",
             "timeout": 2
           }
         ]
@@ -17,7 +17,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const f=(h.tool_input&&(h.tool_input.file_path||h.tool_input.path))||'file';process.stdout.write('[omo-agents] File edited: '+f+'. Remember to check LSP diagnostics for type errors before marking task complete.\\n');const newStr=(h.tool_input&&(h.tool_input.new_string||h.tool_input.content))||'';if(newStr&&!/\\.(test|spec|md)$/.test(f)){const lines=newStr.split('\\n');const commentLines=lines.filter(l=>/^\\s*(\/\/|#|\\*)/.test(l)).length;const ratio=lines.length>10?commentLines/lines.length:0;if(ratio>0.4){process.stdout.write('[omo-agents] ⚠️ High comment ratio ('+Math.round(ratio*100)+'%). Avoid excessive comments — code should be self-documenting.\\n');}}}catch(e){}})\"",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const f=(h.tool_input&&(h.tool_input.file_path||h.tool_input.path))||'file';process.stdout.write('[omo-agents] File edited: '+f+'. Remember to check LSP diagnostics for type errors before marking task complete.\\n');const newStr=(h.tool_input&&(h.tool_input.new_string||h.tool_input.content))||'';if(newStr&&!/\\.(test|spec|md)$/.test(f)){const lines=newStr.split('\\n');const commentLines=lines.filter(l=>/^\\s*(\\/\\/|#|\\*)/.test(l)).length;const ratio=lines.length>10?commentLines/lines.length:0;if(ratio>0.4){process.stdout.write('[omo-agents] ⚠️ High comment ratio ('+Math.round(ratio*100)+'%). Avoid excessive comments — code should be self-documenting.\\n');}}}catch(e){}})\"",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const out=(h.tool_response&&(typeof h.tool_response==='string'?h.tool_response:h.tool_response.output||JSON.stringify(h.tool_response)))||'';const m=out.match(/session[_-]id[:\\s=\\\"']+([a-zA-Z0-9_-]+)/i);if(m&&m[1]){process.stdout.write('[omo-agents] 💾 session_id='+m[1]+'. STORE THIS. For follow-ups/fixes use: task(session_id=\\\"'+m[1]+'\\\", ...). Saves 70%+ tokens vs restarting.\\n');}const hasError=out.includes('[ERROR]')||out.includes('Invalid arguments')||out.includes('Error:');if(hasError){process.stdout.write('[omo-agents] ⚠️ Task delegation ERROR detected. If session_id available, retry with: task(session_id=\\\"...\\\", prompt=\\\"FAILED: {error}. Fix by: {instruction}\\\")\\n');}}catch(e){}})\"",
             "timeout": 2
           }
         ]
@@ -29,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const cmd=(h.tool_input&&h.tool_input.command)||'';const dangerous=[/rm\\s+-rf\\s+[\\/~]/,/git\\s+push\\s+(--force|-f)\\b/,/DROP\\s+(TABLE|DATABASE)\\s/i,/chmod\\s+777\\s+-R/,/mkfs\\./,/dd\\s+if=.*of=\\/dev/];const hit=dangerous.find(p=>p.test(cmd));if(hit){process.stdout.write('[omo-agents] ⚠️  DANGEROUS COMMAND DETECTED: '+cmd.slice(0,120)+'\\nThis command matches a dangerous pattern. Please confirm you intend to run this.\\n');process.exit(1);}}catch(e){}})\"",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const cmd=(h.tool_input&&h.tool_input.command)||'';const dangerous=[/rm\\s+-rf\\s+[\\/~]/,/git\\s+push\\s+(--force|-f)\\b/,/DROP\\s+(TABLE|DATABASE)\\s/i,/chmod\\s+777\\s+-R/,/mkfs\\./,/dd\\s+if=.*of=\\/dev/];const hit=dangerous.find(p=>p.test(cmd));if(hit){process.stdout.write('[omo-agents] ⚠️  DANGEROUS COMMAND DETECTED: '+cmd.slice(0,120)+'\\nThis command matches a dangerous pattern. Please confirm you intend to run this.\\n');process.exit(1);}if(/^\\s*(cat|head|tail|less|more)\\s+[^|&;]+\\.(ts|js|json|md|py|go|rs|java|txt|yaml|yml)\\s*$/.test(cmd)){process.stdout.write('[omo-agents] 💡 TIP: For reading source files, prefer the Read tool over bash cat/head/tail. Read tool provides better context and line numbers.\\n');}}catch(e){}})\"",
             "timeout": 3
           }
         ]
@@ -39,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const fp=h.tool_input&&(h.tool_input.file_path||h.tool_input.path);if(fp&&fs.existsSync(fp)){process.stdout.write('[omo-agents] ⚠️  WRITE-GUARD: \"'+fp+'\" already exists. You should READ the file first before overwriting it. Use Edit instead of Write for existing files to preserve context.\\n');process.exit(1);}}catch(e){}})\"",
+            "command": "node -e \"const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const fp=h.tool_input&&(h.tool_input.file_path||h.tool_input.path);if(fp&&fs.existsSync(fp)){process.stdout.write('[omo-agents] ⚠️  WRITE-GUARD: \\\"'+fp+'\\\" already exists. You should READ the file first before overwriting it. Use Edit instead of Write for existing files to preserve context.\\n');process.exit(1);}}catch(e){}})\"",
             "timeout": 2
           }
         ]
