@@ -462,30 +462,50 @@ const loadAllCommands = memoize(async (cwd: string): Promise<Command[]> => {
     getWorkflowCommands ? getWorkflowCommands(cwd) : Promise.resolve([]),
   ])
 
-  const raw = [
+  // Deduplicate plugin/builtin commands by name — first-registered wins.
+  // This prevents duplicate slash commands when multiple plugins or builtin
+  // sources declare the same command name (e.g. /debug, /ultrawork).
+  //
+  // IMPORTANT: Only bundled/builtin/plugin sources are deduplicated here.
+  // Settings-backed sources (userSettings, projectSettings, policySettings,
+  // localSettings) intentionally allow same-named commands from different
+  // sources to coexist — the suggestion layer uses source to disambiguate
+  // them and lets users choose between project vs user implementations.
+  //
+  // Priority: bundledSkills > builtinPluginSkills > pluginCommands > pluginSkills
+  const seenPluginBuiltin = new Set<string>(
+    [...bundledSkills, ...builtinPluginSkills].map(cmd => cmd.name),
+  )
+  const deduplicatedPluginCommands = pluginCommands.filter(cmd => {
+    if (seenPluginBuiltin.has(cmd.name)) {
+      logForDebugging(
+        `[commands] Deduplicating plugin command "/${cmd.name}" (source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
+      )
+      return false
+    }
+    seenPluginBuiltin.add(cmd.name)
+    return true
+  })
+  const deduplicatedPluginSkills = pluginSkills.filter(cmd => {
+    if (seenPluginBuiltin.has(cmd.name)) {
+      logForDebugging(
+        `[commands] Deduplicating plugin skill "/${cmd.name}" (source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
+      )
+      return false
+    }
+    seenPluginBuiltin.add(cmd.name)
+    return true
+  })
+
+  return [
     ...bundledSkills,
     ...builtinPluginSkills,
     ...skillDirCommands,
     ...workflowCommands,
-    ...pluginCommands,
-    ...pluginSkills,
+    ...deduplicatedPluginCommands,
+    ...deduplicatedPluginSkills,
     ...COMMANDS(),
   ]
-
-  // Deduplicate by name — first-registered wins (priority order above).
-  // Prevents duplicate slash commands when multiple plugins/builtins
-  // declare the same command name (e.g. /debug, /ultrawork).
-  const seen = new Set<string>()
-  return raw.filter(cmd => {
-    if (seen.has(cmd.name)) {
-      logForDebugging(
-        `[commands] Deduplicating "/${cmd.name}" (source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
-      )
-      return false
-    }
-    seen.add(cmd.name)
-    return true
-  })
 })
 
 /**
