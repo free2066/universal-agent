@@ -204,23 +204,21 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       }
     } catch {}
     // ── Setup session debug log (writes to fixed path, rotates daily) ────────
-    // 利用 CC 引擎的 --debug-file 机制：不开 --debug 模式（UI 不受影响），
-    // 但 CC 引擎会把 DEBUG 级别日志写入指定文件，方便日常排查问题。
+    // 使用 UA_SESSION_LOG_FILE 环境变量传递路径给 debug.ts 的 tee 写入器。
+    // 不使用 --debug-file，避免触发 isDebugMode()=true（会显示 debug banner
+    // 且将所有写入改为同步 appendFileSync，影响 UI 交互性能）。
     // 日志路径：~/.uagent/logs/session-YYYY-MM-DD.log
     const sessionLogDir = resolve(process.env.HOME || '~', '.uagent', 'logs')
     const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
     const sessionLogFile = resolve(sessionLogDir, `session-${today}.log`)
     try { mkdirSync(sessionLogDir, { recursive: true }) } catch {}
 
-    // 只有用户没有手动指定 --debug-file / --debug 时才自动注入
-    const hasManualDebug = process.argv.some(
-      (a: string) => a.startsWith('--debug-file') || a === '--debug' || a === '-d'
-    )
-    if (!hasManualDebug) {
-      process.argv.push(`--debug-file=${sessionLogFile}`)
-      uaLog(`[session-log] CC debug log → ${sessionLogFile}`)
+    // 只有用户没有手动指定 UA_SESSION_LOG_FILE 时才自动设置
+    if (!process.env.UA_SESSION_LOG_FILE) {
+      process.env.UA_SESSION_LOG_FILE = sessionLogFile
+      uaLog(`[session-log] tee → ${sessionLogFile}`)
     } else {
-      uaLog(`[session-log] skipped (manual --debug* flag detected)`)
+      uaLog(`[session-log] using existing UA_SESSION_LOG_FILE=${process.env.UA_SESSION_LOG_FILE}`)
     }
 
     // 清理超过 7 天的旧 session 日志，防止磁盘累积

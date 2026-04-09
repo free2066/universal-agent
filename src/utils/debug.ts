@@ -15,6 +15,41 @@ import { getFsImplementation } from './fsOperations.js'
 import { writeToStderr } from './process.js'
 import { jsonStringify } from './slowOperations.js'
 
+// ── UA Session Log (non-debug, always-on tee) ────────────────────────────────
+// When UA_SESSION_LOG_FILE is set (by cli.tsx bootstrap), ALL debug-level
+// messages are *also* written to that file WITHOUT enabling isDebugMode().
+// This gives users a persistent daily log they can tail for troubleshooting,
+// while avoiding the CC debug banner and synchronous-write performance hit.
+let uaSessionLogWriter: BufferedWriter | null = null
+
+function getUASessionLogWriter(): BufferedWriter | null {
+  const sessionLogFile = process.env.UA_SESSION_LOG_FILE
+  if (!sessionLogFile) return null
+  if (!uaSessionLogWriter) {
+    let ensuredDir = false
+    uaSessionLogWriter = createBufferedWriter({
+      writeFn: (content: string) => {
+        try {
+          if (!ensuredDir) {
+            getFsImplementation().mkdirSync(dirname(sessionLogFile))
+            ensuredDir = true
+          }
+          getFsImplementation().appendFileSync(sessionLogFile, content)
+        } catch {
+          // Silently ignore write errors for the session log
+        }
+      },
+      flushIntervalMs: 1000,
+      maxBufferSize: 100,
+      immediateMode: false, // always buffered — never blocks the UI
+    })
+    registerCleanup(async () => {
+      uaSessionLogWriter?.dispose()
+    })
+  }
+  return uaSessionLogWriter
+}
+
 export type DebugLogLevel = 'verbose' | 'debug' | 'info' | 'warn' | 'error'
 
 const LEVEL_ORDER: Record<DebugLogLevel, number> = {
@@ -209,16 +244,29 @@ export function logForDebugging(
   if (LEVEL_ORDER[level] < LEVEL_ORDER[getMinDebugLogLevel()]) {
     return
   }
+
+  // Multiline messages break the jsonl output format, so make any multiline messages JSON.
+  let formattedMessage = message
+  if (hasFormattedOutput && message.includes('\n')) {
+    formattedMessage = jsonStringify(message)
+  }
+  const timestamp = new Date().toISOString()
+  const output = `${timestamp} [${level.toUpperCase()}] ${formattedMessage.trim()}\n`
+
+  // ── UA Session Log tee (always-on, no isDebugMode() dependency) ─────────
+  // Write to UA_SESSION_LOG_FILE regardless of debug mode so users can
+  // tail ~/.uagent/logs/session-YYYY-MM-DD.log for troubleshooting without
+  // needing --debug (which would show a visible banner and use sync writes).
+  const sessionWriter = getUASessionLogWriter()
+  if (sessionWriter) {
+    sessionWriter.write(output)
+  }
+
+  // ── Normal debug-mode path ───────────────────────────────────────────────
   if (!shouldLogDebugMessage(message)) {
     return
   }
 
-  // Multiline messages break the jsonl output format, so make any multiline messages JSON.
-  if (hasFormattedOutput && message.includes('\n')) {
-    message = jsonStringify(message)
-  }
-  const timestamp = new Date().toISOString()
-  const output = `${timestamp} [${level.toUpperCase()}] ${message.trim()}\n`
   if (isDebugToStdErr()) {
     writeToStderr(output)
     return
