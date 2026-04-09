@@ -3073,11 +3073,30 @@ export function mergePluginSources(sources: {
     }
     return true
   })
-  // Session first, then non-overridden marketplace, then builtin.
+
+  // Builtin plugins are overridden by session/marketplace plugins with the same name.
+  // This is intentional (dev/installed copy beats the bundled default) and does NOT
+  // generate an error — unlike session vs. managed, this override is expected and
+  // safe. We log a debug message so the override is diagnosable.
+  const sessionAndMarketplaceNames = new Set([
+    ...sessionPlugins.map(p => p.name),
+    ...marketplacePlugins.map(p => p.name),
+  ])
+  const builtinPlugins = sources.builtin.filter(p => {
+    if (sessionAndMarketplaceNames.has(p.name)) {
+      logForDebugging(
+        `Builtin plugin "${p.name}" overridden by session/marketplace plugin`,
+      )
+      return false
+    }
+    return true
+  })
+
+  // Session first, then non-overridden marketplace, then non-overridden builtin.
   // Downstream first-match consumers see session plugins before
   // installed ones for any that slipped past the name filter.
   return {
-    plugins: [...sessionPlugins, ...marketplacePlugins, ...sources.builtin],
+    plugins: [...sessionPlugins, ...marketplacePlugins, ...builtinPlugins],
     errors,
   }
 }
@@ -3165,6 +3184,151 @@ export const loadAllPluginsCacheOnly = memoize(
 )
 
 /**
+ * Load filesystem-based builtin plugins shipped with the CLI.
+ *
+ * Scans `src/builtin-plugins/` (relative to the CLI package root) for plugin
+ * directories and loads each via createPluginFromPath. These plugins are always
+ * enabled by default (users can toggle via enabledPlugins settings) and use the
+ * `@builtin` source suffix.
+ *
+ * Path resolution uses two strategies tried in order:
+ *   1. require.resolve('universal-agent/package.json') — most robust for npm installs;
+ *      resolves to the actual package root regardless of cwd.
+ *   2. import.meta.url dirname traversal — works when running directly from the source
+ *      tree (e.g. `bun run src/entrypoints/cli.ts`).
+ *
+ * Note: process.cwd()-based paths are intentionally omitted — users typically run
+ * `uagent` from arbitrary project directories, not from the CLI package root.
+ */
+async function loadFsBuiltinPlugins(): Promise<{
+  plugins: LoadedPlugin[]
+  errors: PluginError[]
+}> {
+  // Resolve path to src/builtin-plugins/ using multiple strategies to handle
+  // both source-tree runs and bun-bundled distributions.
+  //
+  // When bun bundles everything into dist/entrypoints/cli.js, import.meta.url
+  // points to the bundled file and dirname-based traversal becomes unreliable.
+  // We therefore try several strategies in order and use the first one that
+  // resolves to an existing directory.
+  let thisFilePath: string | undefined
+  try {
+    const { fileURLToPath } = await import('url')
+    thisFilePath = fileURLToPath(import.meta.url)
+  } catch {
+    // import.meta.url may be unavailable in some environments; proceed without it
+    thisFilePath = undefined
+  }
+
+  // Build candidate list, most reliable first.
+  const candidateDirs: string[] = []
+
+  // 1. Attempt to resolve via package.json location — most robust for npm-installed distributions.
+  //    createRequire lets us use require.resolve even in ESM / bun-bundled contexts.
+  try {
+    const { createRequire } = await import('module')
+    const req = createRequire(import.meta.url ?? process.cwd() + '/index.js')
+    const pkgJsonPath = req.resolve('universal-agent/package.json')
+    const pkgRoot = dirname(pkgJsonPath)
+    candidateDirs.push(
+      join(pkgRoot, 'src', 'builtin-plugins'),
+      join(pkgRoot, 'dist', 'builtin-plugins'),
+    )
+  } catch {
+    // package.json not resolvable (e.g. running directly from source tree)
+  }
+
+  // 2. import.meta.url-based traversal — works in non-bundled source runs.
+  //    Navigate 3 levels up from this file (utils/plugins/pluginLoader) to reach
+  //    the package root, then into src/builtin-plugins.
+  //    Also try 2 levels up which applies when running as a bundled dist/entrypoints/cli.js.
+  if (thisFilePath) {
+    const packageRoot = join(dirname(thisFilePath), '..', '..', '..')
+    const packageRoot2 = join(dirname(thisFilePath), '..', '..') // for dist/entrypoints/cli.js layout
+    candidateDirs.push(
+      join(packageRoot2, 'dist', 'builtin-plugins'), // dist/builtin-plugins/ (npm-installed, bundled)
+      join(packageRoot2, 'src', 'builtin-plugins'),  // src/builtin-plugins/ (local dev, bundled)
+      join(packageRoot, 'src', 'builtin-plugins'),   // local dev / source layout (unbundled)
+      join(packageRoot, 'dist', 'builtin-plugins'),  // npm-distributed layout (unbundled)
+      join(dirname(thisFilePath), '..', 'builtin-plugins'), // __dirname-relative fallback
+    )
+  }
+
+  let builtinPluginsDir: string | undefined
+  for (const candidate of candidateDirs) {
+    try {
+      await readdir(candidate)
+      builtinPluginsDir = candidate
+      break
+    } catch {
+      // not found, try next
+    }
+  }
+
+  if (!builtinPluginsDir) {
+    // Log a debug message so silent failures are diagnosable
+    if (process.env.UAGENT_DEBUG || process.env.DEBUG) {
+      console.error(
+        '[pluginLoader] loadFsBuiltinPlugins: no builtin-plugins directory found. Candidates tried:',
+        candidateDirs,
+      )
+    }
+    return { plugins: [], errors: [] }
+  }
+
+  const plugins: LoadedPlugin[] = []
+  const errors: PluginError[] = []
+
+  // builtinPluginsDir was already validated by readdir() above, safe to call again with withFileTypes
+  const entries = await readdir(builtinPluginsDir, { withFileTypes: true })
+
+  const settings = getSettings_DEPRECATED()
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const pluginPath = join(builtinPluginsDir, entry.name)
+    try {
+      // Load with a temporary source ID; re-derive the canonical ID from manifest.name
+      // after createPluginFromPath returns, so that settings lookup, source, and
+      // repository are all consistent with the name the plugin declares in plugin.json.
+      const { plugin, errors: pluginErrors } = await createPluginFromPath(
+        pluginPath,
+        `${entry.name}@builtin`, // temporary — overwritten below
+        true, // enabled flag overwritten below after settings lookup
+        entry.name,
+      )
+      // Use manifest name (plugin.name) as the canonical ID so that the user's
+      // enabledPlugins setting key matches the ID the plugin reports to the UI.
+      const canonicalId = `${plugin.name}@builtin`
+      const userSetting = settings?.enabledPlugins?.[canonicalId]
+      plugin.enabled = userSetting !== undefined ? userSetting === true : true
+      plugin.source = canonicalId
+      plugin.repository = canonicalId
+      plugin.isBuiltin = true
+      plugins.push(plugin)
+      errors.push(...pluginErrors)
+      logForDebugging(`Loaded filesystem builtin plugin: ${plugin.name}`)
+    } catch (err) {
+      const msg = errorMessage(err)
+      logForDebugging(`Failed to load fs builtin plugin ${entry.name}: ${msg}`, {
+        level: 'warn',
+      })
+      errors.push({
+        type: 'generic-error',
+        source: `${entry.name}@builtin`,
+        error: `Failed to load builtin plugin: ${msg}`,
+      })
+    }
+  }
+
+  if (plugins.length > 0) {
+    logForDebugging(`Loaded ${plugins.length} filesystem builtin plugin(s)`)
+  }
+
+  return { plugins, errors }
+}
+
+/**
  * Shared body of loadAllPlugins and loadAllPluginsCacheOnly.
  *
  * The only difference between the two is which marketplace loader runs —
@@ -3181,11 +3345,12 @@ async function assemblePluginLoadResult(
   // getInlinePlugins() is a synchronous state read with no dependency on
   // marketplace loading, so these two sources can be fetched concurrently.
   const inlinePlugins = getInlinePlugins()
-  const [marketplaceResult, sessionResult] = await Promise.all([
+  const [marketplaceResult, sessionResult, fsBuiltinResult] = await Promise.all([
     marketplaceLoader(),
     inlinePlugins.length > 0
       ? loadSessionOnlyPlugins(inlinePlugins)
       : Promise.resolve({ plugins: [], errors: [] }),
+    loadFsBuiltinPlugins(),
   ])
   // 3. Load built-in plugins that ship with the CLI
   const builtinResult = getBuiltinPlugins()
@@ -3196,12 +3361,17 @@ async function assemblePluginLoadResult(
   const { plugins: allPlugins, errors: mergeErrors } = mergePluginSources({
     session: sessionResult.plugins,
     marketplace: marketplaceResult.plugins,
-    builtin: [...builtinResult.enabled, ...builtinResult.disabled],
+    builtin: [
+      ...builtinResult.enabled,
+      ...builtinResult.disabled,
+      ...fsBuiltinResult.plugins,
+    ],
     managedNames: getManagedPluginNames(),
   })
   const allErrors = [
     ...marketplaceResult.errors,
     ...sessionResult.errors,
+    ...fsBuiltinResult.errors,
     ...mergeErrors,
   ]
 

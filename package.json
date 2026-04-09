@@ -1,6 +1,6 @@
 {
   "name": "universal-agent",
-  "version": "1.2.37",
+  "version": "1.2.38",
   "description": "\ud83e\udd16 A universal multi-domain AI Agent CLI - claude-code core engine with multi-LLM support (OpenAI, Gemini, Ollama, Anthropic)",
   "type": "module",
   "bin": {
@@ -8,7 +8,8 @@
     "claude": "./dist/entrypoints/cli.js"
   },
   "scripts": {
-    "build": "bun build src/entrypoints/cli.tsx --outdir dist-bun --target bun --root . --external react --external react-reconciler --external ink && mkdir -p dist/entrypoints && cp dist-bun/src/entrypoints/cli.js dist/entrypoints/cli.js && python3 -c \"import sys; c=open('dist/entrypoints/cli.js').read(); open('dist/entrypoints/cli.js','w').write(('#!/usr/bin/env bun\\n'+c[8:]) if c.startswith('// @bun') else (c if c.startswith('#!') else '#!/usr/bin/env bun\\n'+c))\" && chmod +x dist/entrypoints/cli.js",
+    "build:mcp": "cd src/builtin-plugins/omo-agents/mcp-server && npm install --ignore-scripts 2>/dev/null; npx esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs",
+    "build": "npm run build:mcp && bun build src/entrypoints/cli.tsx --outdir dist-bun --target bun --root . --external react --external react-reconciler --external ink && mkdir -p dist/entrypoints && cp dist-bun/src/entrypoints/cli.js dist/entrypoints/cli.js && python3 -c \"import sys; c=open('dist/entrypoints/cli.js').read(); open('dist/entrypoints/cli.js','w').write(('#!/usr/bin/env bun\\n'+c[8:]) if c.startswith('// @bun') else (c if c.startswith('#!') else '#!/usr/bin/env bun\\n'+c))\" && chmod +x dist/entrypoints/cli.js && rsync -a --exclude='node_modules' --exclude='*.ts' --exclude='dist' --include='*/' --include='*.md' --include='*.json' --include='*.cjs' --include='*.js' --exclude='*' src/builtin-plugins/ dist/builtin-plugins/",
     "dev": "bun --watch src/entrypoints/cli.tsx",
     "start": "bun src/entrypoints/cli.tsx",
     "typecheck": "tsc --noEmit",
