@@ -462,54 +462,52 @@ const loadAllCommands = memoize(async (cwd: string): Promise<Command[]> => {
     getWorkflowCommands ? getWorkflowCommands(cwd) : Promise.resolve([]),
   ])
 
-  // Deduplicate plugin/builtin commands by user-visible name — first-registered wins.
-  // This prevents duplicate slash commands when multiple plugins or builtin
-  // sources declare the same user-facing command name (e.g. /debug, /ultrawork).
+  // Resolve plugin/builtin command name conflicts by display-name.
+  // When a plugin command's userFacingName() collides with an already-registered
+  // bundled/builtin command, we do NOT drop the plugin command. Instead we fall
+  // back its userFacingName() to the full prefixed cmd.name (e.g.
+  // "oh-my-claudecode:ultrawork") so both commands remain available:
+  //   /ultrawork            — bundled built-in
+  //   /oh-my-claudecode:ultrawork — omc plugin version
   //
-  // IMPORTANT: We use getCommandName(cmd) (which calls userFacingName()) rather
-  // than cmd.name, because plugin skills set frontmatter `name: ultrawork` which
-  // makes userFacingName() return the bare "ultrawork" even though cmd.name is
-  // the prefixed "oh-my-claudecode:ultrawork". The command palette always uses
-  // getCommandName() for display and matching, so we must deduplicate on the same key.
-  //
-  // Only bundled/builtin/plugin sources are deduplicated here. Settings-backed
+  // Only bundled/builtin/plugin sources are considered here. Settings-backed
   // sources (userSettings, projectSettings, policySettings, localSettings)
   // intentionally allow same-named commands from different sources to coexist.
   //
-  // Priority: bundledSkills > builtinPluginSkills > pluginCommands > pluginSkills
+  // Priority for bare-name ownership:
+  //   bundledSkills > builtinPluginSkills > pluginCommands > pluginSkills
   const seenPluginBuiltin = new Set<string>(
     [...bundledSkills, ...builtinPluginSkills].map(cmd => getCommandName(cmd)),
   )
-  const deduplicatedPluginCommands = pluginCommands.filter(cmd => {
+
+  function resolvePluginCommand(cmd: Command): Command {
     const displayName = getCommandName(cmd)
     if (seenPluginBuiltin.has(displayName)) {
+      // Conflict: fall back to full prefixed name so the plugin version
+      // remains accessible without hiding the bundled one.
+      const fallbackName = cmd.name // e.g. "oh-my-claudecode:ultrawork"
       logForDebugging(
-        `[commands] Deduplicating plugin command "/${displayName}" (cmd.name=${cmd.name}, source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
+        `[commands] Name conflict "/${displayName}" — renaming plugin entry to "/${fallbackName}"`,
       )
-      return false
+      return {
+        ...cmd,
+        userFacingName: () => fallbackName,
+      }
     }
     seenPluginBuiltin.add(displayName)
-    return true
-  })
-  const deduplicatedPluginSkills = pluginSkills.filter(cmd => {
-    const displayName = getCommandName(cmd)
-    if (seenPluginBuiltin.has(displayName)) {
-      logForDebugging(
-        `[commands] Deduplicating plugin skill "/${displayName}" (cmd.name=${cmd.name}, source: ${(cmd as { source?: string }).source ?? 'unknown'}) — already registered by an earlier source`,
-      )
-      return false
-    }
-    seenPluginBuiltin.add(displayName)
-    return true
-  })
+    return cmd
+  }
+
+  const resolvedPluginCommands = pluginCommands.map(resolvePluginCommand)
+  const resolvedPluginSkills = pluginSkills.map(resolvePluginCommand)
 
   return [
     ...bundledSkills,
     ...builtinPluginSkills,
     ...skillDirCommands,
     ...workflowCommands,
-    ...deduplicatedPluginCommands,
-    ...deduplicatedPluginSkills,
+    ...resolvedPluginCommands,
+    ...resolvedPluginSkills,
     ...COMMANDS(),
   ]
 })
