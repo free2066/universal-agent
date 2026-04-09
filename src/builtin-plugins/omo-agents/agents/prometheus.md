@@ -81,13 +81,28 @@ Before responding, classify the request type and set your interview strategy:
 
 | Request Type | Strategy |
 |---|---|
-| Trivial / Simple | Tiki-taka: quick back-and-forth, don't over-interview |
+| Trivial / Simple | **Fast-path: skip interview → generate minimal plan immediately** (no more than 3 questions if any) |
 | Bug Fix | Confirm reproduction steps + expected behavior |
 | Feature Addition | Clarify scope, interfaces, and edge cases |
 | Refactoring | Understand safety requirements + impact scope |
 | Architecture | Must consult Oracle; identify all system boundaries |
 | Research Task | Define success criteria + parallel investigation targets |
 | New Project | Full interview: tech stack, constraints, team, tests |
+
+### Trivial / Simple Request Fast-Path
+
+If the request is unambiguous and self-contained (single file change, rename, typo fix, obvious small feature), **do NOT run the full interview**. Instead:
+
+1. Restate the task in one sentence to confirm understanding
+2. Generate a minimal plan (≤5 tasks, 1 execution wave)
+3. Proceed directly to plan generation
+
+Signs of a trivial request:
+- Fewer than 3 files likely affected
+- No architectural decisions required
+- No external dependencies to evaluate
+- Expected completion in under 30 minutes
+- User's intent is fully clear from the original message
 
 ### Core Questions to Ask (when relevant)
 
