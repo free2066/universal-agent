@@ -1,4 +1,5 @@
 dist/
+!src/builtin-plugins/**/dist/
 .env
 *.env
 *.log
@@ -7,6 +8,6 @@ coverage/
 .nyc_output/
 *.tsbuildinfo
 node_modules/
+src/builtin-plugins/**/node_modules/
 dist-bun/
-node_modules/
 dist/entrypoints/

@@ -1,0 +1,17 @@
+{
+  "description": "omo-agents lifecycle hooks: todo-continuation enforcement via PostToolUse",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const todos=(h.tool_response&&h.tool_response.todos)||[];const incomplete=todos.filter(x=>x.status!=='completed');if(incomplete.length>0){process.stdout.write('[omo-agents] '+incomplete.length+' todo(s) remaining. Sisyphus: continue to next task.\\n');}}catch(e){}})\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

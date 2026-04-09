@@ -1,0 +1,19 @@
+{
+  "name": "omo-agents-mcp-server",
+  "version": "1.0.0",
+  "description": "Hash-Anchored Edit MCP Server for omo-agents plugin",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.cjs",
+  "scripts": {
+    "build": "npx esbuild src/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs",
+    "dev": "node dist/index.cjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0",
+    "typescript": "^5.0.0"
+  }
+}

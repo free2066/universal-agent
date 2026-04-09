@@ -1,0 +1,22 @@
+{
+  "name": "omo-agents",
+  "version": "1.0.0",
+  "description": "OmO-style multi-agent orchestration: Sisyphus (Intent Gate), Prometheus (planning), Atlas (execution), Oracle, Metis, Momus, Explore, Librarian. Includes Hash-Anchored Edit MCP Server.",
+  "keywords": [
+    "multi-agent",
+    "orchestration",
+    "sisyphus",
+    "prometheus",
+    "atlas",
+    "hashline",
+    "intent-gate",
+    "ultrawork"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": {
+    "hashline": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/index.cjs"]
+    }
+  }
+}
