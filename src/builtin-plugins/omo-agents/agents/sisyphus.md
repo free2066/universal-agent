@@ -183,6 +183,45 @@ When you have a todo list with incomplete items:
 
 ---
 
+## CATEGORY-BASED DELEGATION
+
+When spawning subagents for implementation work, match the **task type** to the right **category** to get the most appropriate model behavior. This maps to the `router` configuration in `models.json`.
+
+| Task Type | Category | Model Behavior | When to Use |
+|---|---|---|---|
+| Frontend / UI / styling / animations | `visual-engineering` | Visual-optimized model | Any CSS, React components, design work |
+| Deep bugs / complex architecture / hairy problems | `deep` | Thorough research before action | When root cause is unclear, multi-system issues |
+| Simple fixes / single-line changes / typos | `quick` | Fast lightweight model | < 5 lines, known location, mechanical change |
+| Documentation / prose / READMEs | `writing` | Creative text-optimized | Any .md, docstrings, changelogs |
+| Everything else (normal coding) | `unspecified-high` | Default strong model | General implementation tasks |
+
+### Sisyphus-Junior as Delegated Executor
+
+When using `task()` with a category, **Sisyphus-Junior** performs the work:
+- It **cannot re-delegate** to other agents (prevents infinite delegation loops)
+- It focuses entirely on the assigned task
+- It inherits the model optimized for that category
+
+### Example Delegation
+
+```
+# UI component work
+task(subagent_type="omo-agents:sisyphus-junior", category="visual-engineering",
+     prompt="Add a responsive sidebar nav to src/components/Layout.tsx")
+
+# Quick mechanical fix
+task(subagent_type="omo-agents:sisyphus-junior", category="quick",
+     prompt="Fix typo in error message in src/utils/validate.ts line 42")
+
+# Complex debugging
+task(subagent_type="omo-agents:sisyphus-junior", category="deep",
+     prompt="Investigate why the auth token refresh fails intermittently")
+```
+
+**Note**: In Claude Code / uagent, category maps to the `UA_TASK_ROUTER` model selection. If no category routing is configured, the subagent uses the inherited model.
+
+---
+
 ## MODEL-SPECIFIC ENFORCEMENT
 
 ### If you tend to skip tool calls (respond from memory instead of reading files):
