@@ -1,5 +1,5 @@
 {
-  "description": "omo-agents lifecycle hooks: todo-continuation enforcement, dangerous command interception, post-edit LSP reminder, write-existing-file-guard, comment-checker, context-window-monitor, session-id-reminder, bash-file-read-guard",
+  "description": "omo-agents lifecycle hooks: todo-continuation enforcement, edit/json error recovery, empty task response detection, task reminder, dangerous command interception, post-edit LSP reminder, write-existing-file-guard, comment-checker, context-window-monitor, session-id-reminder, bash-file-read-guard, compaction-context-injector",
   "hooks": {
     "PostToolUse": [
       {
@@ -37,7 +37,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const out=(h.tool_response&&(typeof h.tool_response==='string'?h.tool_response:h.tool_response.output||JSON.stringify(h.tool_response)))||'';const m=out.match(/session[_-]id[:\\s=\\\"']+([a-zA-Z0-9_-]+)/i);if(m&&m[1]){process.stdout.write('[omo-agents] \\uD83D\\uDCBE session_id='+m[1]+'. STORE THIS. For follow-ups/fixes use: task(session_id=\\\"'+m[1]+'\\\", ...). Saves 70%+ tokens vs restarting.\\n');}const isErr=out.includes('[ERROR]')||out.includes('Invalid arguments');if(isErr){const patterns=[{p:'run_in_background',t:'missing_run_in_background',fix:'Add run_in_background=false (delegation) or run_in_background=true (parallel exploration)'},{p:'load_skills',t:'missing_load_skills',fix:'Add load_skills=[] parameter (empty array if no skills needed)'},{p:'category OR subagent_type',t:'mutual_exclusion',fix:'Provide ONLY one of: category (e.g., general) OR subagent_type (e.g., oracle, explore)'},{p:'Must provide either category or subagent_type',t:'missing_category_or_agent',fix:'Add either category=\\\"general\\\" OR subagent_type=\\\"explore\\\"'},{p:'Unknown category',t:'unknown_category',fix:'Use a valid category from the Available list in the error message'},{p:'Agent name cannot be empty',t:'empty_agent',fix:'Provide a non-empty subagent_type value'},{p:'Unknown agent',t:'unknown_agent',fix:'Use a valid agent from the Available agents list in the error message'},{p:'Cannot call primary agent',t:'primary_agent',fix:'Primary agents cannot be called via task. Use a subagent like explore, oracle, or librarian'},{p:'Skills not found',t:'unknown_skills',fix:'Use valid skill names from the Available list in the error message'}];const hit=patterns.find(x=>out.includes(x.p));if(hit){process.stdout.write('[omo-agents] \\u274C Task CALL FAILED ('+hit.t+')\\nFix: '+hit.fix+'\\nRetry NOW with corrected parameters. Example: task(description=\\\"...\\\",prompt=\\\"...\\\",category=\\\"unspecified-low\\\",run_in_background=false,load_skills=[])\\n');}else{process.stdout.write('[omo-agents] \\u26A0\\uFE0F Task delegation ERROR detected. Review error message and retry with corrected parameters.\\n');}}}catch(e){}})\"",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const out=(h.tool_response&&(typeof h.tool_response==='string'?h.tool_response:h.tool_response.output||JSON.stringify(h.tool_response)))||'';const m=out.match(/session[_-]id[:\\s=\\\"']+([a-zA-Z0-9_-]+)/i);if(m&&m[1]){process.stdout.write('[omo-agents] \\uD83D\\uDCBE session_id='+m[1]+'. STORE THIS. For follow-ups/fixes use: task(session_id=\\\"'+m[1]+'\\\", ...). Saves 70%+ tokens vs restarting.\\n');}if(!out.trim()){process.stdout.write('[omo-agents] \\u26A0\\uFE0F Task invocation returned EMPTY response. The call has already COMPLETED — you are NOT waiting. Agent either failed to execute or did not terminate correctly. Proceed accordingly.\\n');return;}const isErr=out.includes('[ERROR]')||out.includes('Invalid arguments');if(isErr){const patterns=[{p:'run_in_background',t:'missing_run_in_background',fix:'Add run_in_background=false (delegation) or run_in_background=true (parallel exploration)'},{p:'load_skills',t:'missing_load_skills',fix:'Add load_skills=[] parameter (empty array if no skills needed)'},{p:'category OR subagent_type',t:'mutual_exclusion',fix:'Provide ONLY one of: category (e.g., general) OR subagent_type (e.g., oracle, explore)'},{p:'Must provide either category or subagent_type',t:'missing_category_or_agent',fix:'Add either category=\\\"general\\\" OR subagent_type=\\\"explore\\\"'},{p:'Unknown category',t:'unknown_category',fix:'Use a valid category from the Available list in the error message'},{p:'Agent name cannot be empty',t:'empty_agent',fix:'Provide a non-empty subagent_type value'},{p:'Unknown agent',t:'unknown_agent',fix:'Use a valid agent from the Available agents list in the error message'},{p:'Cannot call primary agent',t:'primary_agent',fix:'Primary agents cannot be called via task. Use a subagent like explore, oracle, or librarian'},{p:'Skills not found',t:'unknown_skills',fix:'Use valid skill names from the Available list in the error message'}];const hit=patterns.find(x=>out.includes(x.p));if(hit){process.stdout.write('[omo-agents] \\u274C Task CALL FAILED ('+hit.t+')\\nFix: '+hit.fix+'\\nRetry NOW with corrected parameters. Example: task(description=\\\"...\\\",prompt=\\\"...\\\",category=\\\"unspecified-low\\\",run_in_background=false,load_skills=[])\\n');}else{process.stdout.write('[omo-agents] \\u26A0\\uFE0F Task delegation ERROR detected. Review error message and retry with corrected parameters.\\n');}}}catch(e){}})\"",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const out=(h.tool_response&&(typeof h.tool_response==='string'?h.tool_response:JSON.stringify(h.tool_response)))||'';const outLow=out.toLowerCase();const EDIT_ERRORS=['oldstring and newstring must be different','oldstring not found','oldstring found multiple times'];const hit=EDIT_ERRORS.find(p=>outLow.includes(p));if(hit){process.stdout.write('[omo-agents] \\u274C EDIT ERROR — IMMEDIATE ACTION REQUIRED\\n\\nYou made an Edit mistake. STOP and do this NOW:\\n1. READ the file immediately to see its ACTUAL current state\\n2. VERIFY what the content really looks like (your assumption was wrong)\\n3. CONTINUE with corrected action based on the real file content\\n\\nDO NOT attempt another edit until you have read and verified the file state.\\n');}}catch(e){}})\"",
+            "timeout": 2
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash|WebFetch|Read|Glob|Grep|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const fs=require('fs'),os=require('os'),path=require('path');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const tool=(h.tool_name||'').toLowerCase();const TODO_TOOLS=new Set(['todowrite','task_create','task_update','task_list']);const counterFile=path.join(os.tmpdir(),'omo-task-reminder-'+process.env.SESSION_ID||'default');if(TODO_TOOLS.has(tool)){fs.writeFileSync(counterFile,'0','utf8');return;}let count=0;try{count=parseInt(fs.readFileSync(counterFile,'utf8')||'0',10)||0;}catch(e){}count++;if(count>=10){fs.writeFileSync(counterFile,'0','utf8');process.stdout.write('[omo-agents] \\uD83D\\uDCCB Task tools not used in 10+ tool calls. If you are tracking work, use TodoWrite to record progress and mark tasks complete.\\n');}else{fs.writeFileSync(counterFile,String(count),'utf8');}}catch(e){}})\"",
             "timeout": 2
           }
         ]
@@ -60,6 +80,18 @@
           {
             "type": "command",
             "command": "node -e \"const fs=require('fs');let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const h=JSON.parse(d);const fp=h.tool_input&&(h.tool_input.file_path||h.tool_input.path);if(fp&&fs.existsSync(fp)){process.stdout.write('[omo-agents] ⚠️  WRITE-GUARD: \\\"'+fp+'\\\" already exists. You should READ the file first before overwriting it. Use Edit instead of Write for existing files to preserve context.\\n');process.exit(1);}}catch(e){}})\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"process.stdout.write('[omo-agents] COMPACTION CONTEXT INJECTION\\n\\nWhen summarizing this session, you MUST include ALL of the following 8 sections:\\n\\n## 1. User Requests (As-Is)\\n- List all original user requests exactly as stated\\n- Preserve the user exact wording and intent\\n\\n## 2. Final Goal\\n- What the user ultimately wanted to achieve\\n- The end result or deliverable expected\\n\\n## 3. Work Completed\\n- What has been done so far\\n- Files created/modified\\n- Features implemented\\n- Problems solved\\n\\n## 4. Remaining Tasks\\n- What still needs to be done\\n- Pending items from the original request\\n- Follow-up tasks identified during the work\\n\\n## 5. Active Working Context (For Seamless Continuation)\\n- Files: Paths of files currently being edited or frequently referenced\\n- Code in Progress: Key code snippets, function signatures, or data structures under active development\\n- External References: Documentation URLs, library APIs, or external resources being consulted\\n- State and Variables: Important variable names, configuration values, or runtime state relevant to ongoing work\\n\\n## 6. Explicit Constraints (Verbatim Only)\\n- Include ONLY constraints explicitly stated by the user or in existing AGENTS.md context\\n- Quote constraints verbatim (do not paraphrase)\\n- Do NOT invent, add, or modify constraints\\n- If no explicit constraints exist, write None\\n\\n## 7. Agent Verification State (Critical for Reviewers)\\n- Current Agent: What agent is running\\n- Verification Progress: Files already verified/validated\\n- Pending Verifications: Files still needing verification\\n- Previous Rejections: What was rejected and why\\n- Acceptance Status: Current state of review process\\n\\n## 8. Delegated Agent Sessions\\n- List ALL background agent tasks spawned during this session\\n- For each: agent name, category, status, description, and session_id\\n- RESUME DO NOT RESTART: Each listed session retains full context. After compaction, use session_id to continue existing agent sessions instead of spawning new ones. This saves tokens, preserves learned context, and prevents duplicate work.\\n')\"",
             "timeout": 2
           }
         ]
