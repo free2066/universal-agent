@@ -1518,3 +1518,70 @@ export async function execIntoTmuxWorktree(args: string[]): Promise<{
 
   return { handled: true }
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  G2: Worktree reset + startCommand
+//  Mirrors opencode's Worktree.reset() and startCommand support.
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reset a worktree to a clean state by discarding all uncommitted changes.
+ * Runs `git clean -fd` (remove untracked files/dirs) and `git checkout .`
+ * (restore tracked files to HEAD).  Safe to call on any worktree path.
+ *
+ * Mirrors opencode Worktree.reset().
+ */
+export async function resetWorktree(worktreePath: string): Promise<void> {
+  const cleanResult = await execFileNoThrowWithCwd(
+    gitExe(),
+    ['clean', '-fd'],
+    { cwd: worktreePath },
+  )
+  if (cleanResult.code !== 0) {
+    logForDebugging(
+      `resetWorktree: git clean failed (non-fatal): ${cleanResult.stderr}`,
+      { level: 'warn' },
+    )
+  }
+
+  const checkoutResult = await execFileNoThrowWithCwd(
+    gitExe(),
+    ['checkout', '.'],
+    { cwd: worktreePath },
+  )
+  if (checkoutResult.code !== 0) {
+    throw new Error(
+      `resetWorktree: git checkout . failed: ${checkoutResult.stderr}`,
+    )
+  }
+
+  logForDebugging(`resetWorktree: reset ${worktreePath} to clean state`)
+}
+
+/**
+ * Run a startup command inside the worktree after creation.
+ * The command is executed via the system shell (sh on Unix, cmd on Windows).
+ * Returns exit code and combined stdout+stderr output.
+ *
+ * Mirrors opencode's Worktree startCommand support.
+ */
+export async function runWorktreeStartCommand(
+  worktreePath: string,
+  command: string,
+): Promise<{ exitCode: number; output: string }> {
+  const isWindows = process.platform === 'win32'
+  const shell = isWindows ? 'cmd' : 'sh'
+  const shellArgs = isWindows ? ['/c', command] : ['-c', command]
+
+  const result = await execFileNoThrowWithCwd(shell, shellArgs, {
+    cwd: worktreePath,
+  })
+
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n')
+
+  logForDebugging(
+    `runWorktreeStartCommand: exitCode=${result.code}, cwd=${worktreePath}, cmd=${command}`,
+  )
+
+  return { exitCode: result.code ?? 0, output }
+}

@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * F2: WorktreeService — thin wrapper over the canonical utils/worktree.ts.
+ * F2 + G2: WorktreeService — thin wrapper over the canonical utils/worktree.ts.
  *
  * The real implementation lives in src/utils/worktree.ts which is used by
  * EnterWorktreeTool and ExitWorktreeTool. This module re-exports those
@@ -13,6 +13,8 @@ export {
   getCurrentWorktreeSession,
   worktreeBranchName,
   generateTmuxSessionName,
+  resetWorktree,
+  runWorktreeStartCommand,
 } from '../../utils/worktree.js'
 
 export function isWorktreeEnabled(): boolean {

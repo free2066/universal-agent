@@ -14,6 +14,7 @@ import { saveWorktreeState } from '../../utils/sessionStorage.js'
 import {
   createWorktreeForSession,
   getCurrentWorktreeSession,
+  runWorktreeStartCommand,
   validateWorktreeSlug,
 } from '../../utils/worktree.js'
 import { ENTER_WORKTREE_TOOL_NAME } from './constants.js'
@@ -35,6 +36,12 @@ const inputSchema = lazySchema(() =>
       .describe(
         'Optional name for the worktree. Each "/"-separated segment may contain only letters, digits, dots, underscores, and dashes; max 64 chars total. A random name is generated if not provided.',
       ),
+    startCommand: z
+      .string()
+      .optional()
+      .describe(
+        'Optional shell command to run inside the worktree after creation (e.g. "bun install" or "npm ci"). Skipped when resuming an existing worktree.',
+      ),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
@@ -44,6 +51,7 @@ const outputSchema = lazySchema(() =>
     worktreePath: z.string(),
     worktreeBranch: z.string().optional(),
     message: z.string(),
+    startCommandOutput: z.string().optional(),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -91,6 +99,18 @@ export const EnterWorktreeTool: Tool<InputSchema, Output> = buildTool({
 
     const worktreeSession = await createWorktreeForSession(getSessionId(), slug)
 
+    // Run the optional startCommand inside the newly-created worktree.
+    // Only run when the worktree was just created (not resumed), inferred by
+    // checking creationDurationMs which is only set on fresh creation.
+    let startCommandOutput: string | undefined
+    if (input.startCommand && worktreeSession.creationDurationMs !== undefined) {
+      const result = await runWorktreeStartCommand(
+        worktreeSession.worktreePath,
+        input.startCommand,
+      )
+      startCommandOutput = result.output
+    }
+
     process.chdir(worktreeSession.worktreePath)
     setCwd(worktreeSession.worktreePath)
     setOriginalCwd(getCwd())
@@ -109,11 +129,16 @@ export const EnterWorktreeTool: Tool<InputSchema, Output> = buildTool({
       ? ` on branch ${worktreeSession.worktreeBranch}`
       : ''
 
+    const startInfo = startCommandOutput
+      ? `\n\nStart command output:\n${startCommandOutput}`
+      : ''
+
     return {
       data: {
         worktreePath: worktreeSession.worktreePath,
         worktreeBranch: worktreeSession.worktreeBranch,
-        message: `Created worktree at ${worktreeSession.worktreePath}${branchInfo}. The session is now working in the worktree. Use ExitWorktree to leave mid-session, or exit the session to be prompted.`,
+        startCommandOutput,
+        message: `Created worktree at ${worktreeSession.worktreePath}${branchInfo}. The session is now working in the worktree. Use ExitWorktree to leave mid-session, or exit the session to be prompted.${startInfo}`,
       },
     }
   },

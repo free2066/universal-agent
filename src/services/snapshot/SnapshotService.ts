@@ -38,6 +38,27 @@ export interface RevertPatch {
   files: string[]
 }
 
+/**
+ * G5: Snapshot patch info — which files are contained in a given tree hash.
+ * Mirrors opencode's Snapshot.Patch type.
+ */
+export interface SnapshotPatch {
+  hash: string
+  files: string[]
+}
+
+/**
+ * G1: Per-file diff information returned by diffFull().
+ * Mirrors opencode's Snapshot.FileDiff type.
+ */
+export interface FileDiff {
+  file: string
+  patch: string
+  additions: number
+  deletions: number
+  status: 'added' | 'deleted' | 'modified'
+}
+
 export class SnapshotService {
   /** Absolute path to the isolated git directory */
   readonly gitDir: string
@@ -210,6 +231,106 @@ export class SnapshotService {
     } catch {
       // gc failure is non-fatal
     }
+  }
+
+  /**
+   * G5: Return the list of files contained in a tracked tree hash.
+   * Mirrors opencode's Snapshot.patch(hash) → { hash, files[] }.
+   */
+  async patch(hash: string): Promise<SnapshotPatch> {
+    return this._withLock(async () => {
+      await this.init()
+      try {
+        const out = await this._run(
+          `git --git-dir="${this.gitDir}" ls-tree -r --name-only "${hash}"`,
+        )
+        const files = out
+          .split('\n')
+          .map(l => l.trim())
+          .filter(Boolean)
+        return { hash, files }
+      } catch {
+        return { hash, files: [] }
+      }
+    })
+  }
+
+  /**
+   * G1: Return a structured per-file diff between a tracked hash and the
+   * current work-tree state.
+   * Mirrors opencode's Snapshot.diffFull(from, to) → FileDiff[].
+   *
+   * Implementation:
+   *  1. git diff --numstat <hash>  — get additions/deletions per file
+   *  2. git diff --unified=3 -- <file>  — get patch text per file
+   *  3. Detect status (added/deleted/modified) from numstat special values
+   */
+  async diffFull(fromHash?: string): Promise<FileDiff[]> {
+    return this._withLock(async () => {
+      await this.init()
+      try {
+        // Read the tree into the index so diff-index works
+        const hashArg = fromHash ?? (await this._run(this._git('write-tree')))
+        await this._run(this._git(`read-tree "${hashArg}"`))
+
+        // --numstat: "<additions>\t<deletions>\t<file>"
+        // Special: "-" means binary. New files have 0 deletions, deleted have 0 additions.
+        const numstatOut = await this._run(this._git('diff --cached --numstat'))
+        if (!numstatOut.trim()) return []
+
+        const results: FileDiff[] = []
+
+        for (const line of numstatOut.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+
+          // Format: "<add>\t<del>\t<file>"  (binary files use "-")
+          const parts = trimmed.split('\t')
+          if (parts.length < 3) continue
+
+          const addStr = parts[0]!
+          const delStr = parts[1]!
+          const file = parts.slice(2).join('\t')  // handle tabs in filename
+
+          const additions = addStr === '-' ? 0 : parseInt(addStr, 10) || 0
+          const deletions = delStr === '-' ? 0 : parseInt(delStr, 10) || 0
+
+          // Determine status: check if file exists in current work-tree
+          const absPath = path.join(this.workTree, file)
+          const existsNow = fs.existsSync(absPath)
+
+          let status: FileDiff['status']
+          if (deletions === 0 && !existsNow) {
+            status = 'deleted'
+          } else if (additions > 0 && deletions === 0) {
+            // Check if file existed in the snapshot tree
+            const inTree = await this._run(
+              `git --git-dir="${this.gitDir}" ls-tree --name-only "${hashArg}" -- "${file}"`,
+            ).catch(() => '')
+            status = inTree.trim() ? 'modified' : 'added'
+          } else {
+            status = 'modified'
+          }
+
+          // Get unified patch for this file
+          let patch = ''
+          try {
+            patch = await this._run(
+              this._git(`diff --cached --unified=3 -- "${file}"`),
+            )
+          } catch {
+            // ignore
+          }
+
+          results.push({ file, patch, additions, deletions, status })
+        }
+
+        return results
+      } catch (err) {
+        console.error('[snapshot] diffFull() failed:', err)
+        return []
+      }
+    })
   }
 
   // ──────────────────────────────────────────────────────────

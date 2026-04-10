@@ -10,4 +10,4 @@
  */
 
 export { SnapshotService, getSnapshotService } from './SnapshotService.js'
-export type { RevertPatch } from './SnapshotService.js'
+export type { RevertPatch, SnapshotPatch, FileDiff } from './SnapshotService.js'

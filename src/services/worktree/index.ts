@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * F2: Worktree service public exports — thin wrapper over utils/worktree.ts.
+ * F2 + G2: Worktree service public exports — thin wrapper over utils/worktree.ts.
  */
 
 export {
@@ -8,6 +8,8 @@ export {
   getCurrentWorktreeSession,
   worktreeBranchName,
   generateTmuxSessionName,
+  resetWorktree,
+  runWorktreeStartCommand,
 } from '../../utils/worktree.js'
 
 export { isWorktreeEnabled } from './WorktreeService.js'
