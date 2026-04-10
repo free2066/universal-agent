@@ -209,9 +209,10 @@ function printResumeHint(): void {
       rows.push(['🆔  Session ID:', sessionId])
 
       // Approval mode (工作模式: default / auto-edit / bypassPermissions etc.)
+      // Fall back to 'default' when setExitSummaryInfo was not called (e.g. Ctrl+C exits).
       try {
-        const mode = getExitPermissionMode()
-        if (mode) rows.push(['✅  Approval mode:', mode])
+        const mode = getExitPermissionMode() || 'default'
+        rows.push(['✅  Approval mode:', mode])
       } catch { /* ignore */ }
 
       // Log file
