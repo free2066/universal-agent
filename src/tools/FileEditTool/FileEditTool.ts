@@ -507,8 +507,8 @@ export const FileEditTool = buildTool({
     getSnapshotService().track().catch(() => {})
     writeTextContent(absoluteFilePath, updatedFile, encoding, endings)
 
-    // Feature 11: Auto-format after edit (best-effort, silently ignored on failure)
-    formatFile(absoluteFilePath).catch(() => {})
+    // Feature 11: Auto-format after edit — await up to 5s so AI sees formatted result
+    await formatFile(absoluteFilePath, 5000).catch(() => {})
 
     // Notify LSP servers about file modification (didChange) and save (didSave)
     const lspManager = getLspServerManager()

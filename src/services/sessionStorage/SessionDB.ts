@@ -187,6 +187,54 @@ export class SessionDB {
   private _sessionDir(sessionId: string): string {
     return path.join(this.sessionsDir, sessionId)
   }
+
+  /**
+   * Fork an existing session: copy messages up to an optional cutoff,
+   * creating a new independent session.
+   *
+   * @param sourceSessionId  The session to fork from
+   * @param newSessionId     ID for the forked session
+   * @param upToMessageId    If provided, only copy messages before this ID
+   * @returns The new session's metadata
+   */
+  forkSession(
+    sourceSessionId: string,
+    newSessionId: string,
+    upToMessageId?: string,
+  ): SessionMeta | null {
+    const sourceMeta = this.loadSession(sourceSessionId)
+    if (!sourceMeta) return null
+
+    let messages = this.getMessages(sourceSessionId)
+    if (upToMessageId) {
+      const cutoff = messages.findIndex(m => m.id === upToMessageId)
+      if (cutoff !== -1) messages = messages.slice(0, cutoff + 1)
+    }
+
+    // Create new session with forked metadata
+    const forkedMeta: SessionMeta = {
+      id: newSessionId,
+      title: `Fork of ${sourceMeta.title || sourceSessionId.slice(0, 8)}`,
+      model: sourceMeta.model,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messageCount: messages.length,
+      totalTokens: sourceMeta.totalTokens,
+    }
+    this.saveSession(forkedMeta)
+
+    // Copy messages with updated sessionId
+    const dir = this._sessionDir(newSessionId)
+    fs.mkdirSync(dir, { recursive: true })
+    const lines = messages
+      .map(m => JSON.stringify({ ...m, sessionId: newSessionId }))
+      .join('\n')
+    if (lines) {
+      fs.writeFileSync(path.join(dir, 'messages.jsonl'), lines + '\n')
+    }
+
+    return forkedMeta
+  }
 }
 
 // ── Singleton ─────────────────────────────────────────────

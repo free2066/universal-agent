@@ -53,6 +53,8 @@ import {
   generateTmuxSessionName,
   worktreeBranchName,
 } from './utils/worktree.js'
+import { getSessionDB } from './services/sessionStorage/index.js'
+import { startFileWatcherIfEnabled } from './services/fileWatcher/index.js'
 
 export async function setup(
   cwd: string,
@@ -377,6 +379,30 @@ export async function setup(
   // event after this point was dead. This beacon is the earliest reliable
   // "process started" signal for release health monitoring.
   logEvent('tengu_started', {})
+
+  // UA: Record session to SessionDB for /history command
+  try {
+    const db = getSessionDB()
+    db.saveSession({
+      id: getSessionId(),
+      title: '',
+      model: process.env.ANTHROPIC_MODEL ?? 'unknown',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messageCount: 0,
+    })
+  } catch {
+    // SessionDB is best-effort — never crash the main process
+  }
+
+  // UA: Start file watcher if UAGENT_FILEWATCHER=1 (F6)
+  if (!isBareMode()) {
+    try {
+      startFileWatcherIfEnabled(cwd)
+    } catch {
+      // FileWatcher is best-effort
+    }
+  }
 
   void prefetchApiKeyFromApiKeyHelperIfSafe(getIsNonInteractiveSession()) // Prefetch safely - only executes if trust already confirmed
   profileCheckpoint('setup_after_prefetch')

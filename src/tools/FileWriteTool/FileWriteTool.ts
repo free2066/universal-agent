@@ -312,8 +312,8 @@ export const FileWriteTool = buildTool({
     getSnapshotService().track().catch(() => {})
     writeTextContent(fullFilePath, content, enc, 'LF')
 
-    // Feature 11: Auto-format after write (best-effort, silently ignored on failure)
-    formatFile(fullFilePath).catch(() => {})
+    // Feature 11: Auto-format after write — await up to 5s so AI sees formatted result
+    await formatFile(fullFilePath, 5000).catch(() => {})
 
     // Notify LSP servers about file modification (didChange) and save (didSave)
     const lspManager = getLspServerManager()

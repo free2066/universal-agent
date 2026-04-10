@@ -178,6 +178,95 @@ function detectFormatter(filePath: string): string | false {
     }
   }
 
+  // Nix (nixfmt)
+  else if (ext === '.nix') {
+    if (commandExists('nixfmt')) {
+      formatter = 'nixfmt $FILE'
+    }
+  }
+
+  // Gleam
+  else if (ext === '.gleam') {
+    if (commandExists('gleam')) {
+      formatter = 'gleam format $FILE'
+    }
+  }
+
+  // OCaml (ocamlformat)
+  else if (ext === '.ml' || ext === '.mli') {
+    if (commandExists('ocamlformat')) {
+      formatter = 'ocamlformat -i $FILE'
+    }
+  }
+
+  // Haskell (ormolu preferred, then fourmolu)
+  else if (ext === '.hs' || ext === '.lhs') {
+    if (commandExists('ormolu')) {
+      formatter = 'ormolu -i $FILE'
+    } else if (commandExists('fourmolu')) {
+      formatter = 'fourmolu -i $FILE'
+    } else if (commandExists('hindent')) {
+      formatter = 'hindent $FILE'
+    }
+  }
+
+  // PHP (pint)
+  else if (ext === '.php') {
+    // Laravel Pint (project-local)
+    const pintBin = join(dir, 'vendor', 'bin', 'pint')
+    if (existsSync(pintBin)) {
+      formatter = `${pintBin} $FILE`
+    } else if (commandExists('pint')) {
+      formatter = 'pint $FILE'
+    }
+  }
+
+  // Swift (swift-format)
+  else if (ext === '.swift') {
+    if (commandExists('swift-format')) {
+      formatter = 'swift-format -i $FILE'
+    } else if (commandExists('swiftformat')) {
+      formatter = 'swiftformat $FILE'
+    }
+  }
+
+  // Scala (scalafmt)
+  else if (ext === '.scala' || ext === '.sbt' || ext === '.sc') {
+    if (commandExists('scalafmt')) {
+      formatter = 'scalafmt $FILE'
+    }
+  }
+
+  // Lua (stylua)
+  else if (ext === '.lua') {
+    if (commandExists('stylua')) {
+      formatter = 'stylua $FILE'
+    }
+  }
+
+  // TOML (taplo)
+  else if (ext === '.toml') {
+    if (commandExists('taplo')) {
+      formatter = 'taplo format $FILE'
+    }
+  }
+
+  // SQL (pg_format or sqlfluff)
+  else if (ext === '.sql') {
+    if (commandExists('pg_format')) {
+      formatter = 'pg_format -i $FILE'
+    } else if (commandExists('sqlfluff')) {
+      formatter = 'sqlfluff format $FILE'
+    }
+  }
+
+  // Zig (also .zon files)
+  else if (ext === '.zon') {
+    if (commandExists('zig')) {
+      formatter = 'zig fmt $FILE'
+    }
+  }
+
   formatterCache.set(cacheKey, formatter)
   return formatter
 }

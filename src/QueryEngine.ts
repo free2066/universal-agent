@@ -76,6 +76,8 @@ import {
   flushSessionStorage,
   recordTranscript,
 } from './utils/sessionStorage.js'
+import { getSessionDB } from './services/sessionStorage/index.js'
+import { getSnapshotService } from './services/snapshot/index.js'
 import { asSystemPrompt } from './utils/systemPromptType.js'
 import { resolveThemeSetting } from './utils/systemTheme.js'
 import {
@@ -673,6 +675,9 @@ export class QueryEngine {
       ? countToolCalls(this.mutableMessages, SYNTHETIC_OUTPUT_TOOL_NAME)
       : 0
 
+    // UA: Snapshot state before each LLM turn (F3 — every-turn auto-snapshot)
+    void getSnapshotService().track().catch(() => {})
+
     for await (const message of query({
       messages,
       systemPrompt,
@@ -1078,6 +1083,29 @@ export class QueryEngine {
       ) {
         await flushSessionStorage()
       }
+    }
+
+    // UA: Persist assistant reply to SessionDB after each turn (F1)
+    try {
+      const db = getSessionDB()
+      const sessionId = getSessionId()
+      // Find the last assistant text reply to record
+      const lastAssistant = messages.findLast(m => m.type === 'assistant')
+      if (lastAssistant && lastAssistant.type === 'assistant') {
+        const textBlock = last(lastAssistant.message.content)
+        const text = textBlock?.type === 'text' ? textBlock.text : ''
+        if (text) {
+          db.appendMessage({
+            id: randomUUID(),
+            sessionId,
+            role: 'assistant',
+            content: text.slice(0, 4096), // cap to keep files small
+            createdAt: new Date().toISOString(),
+          })
+        }
+      }
+    } catch {
+      // SessionDB is best-effort
     }
 
     if (!isResultSuccessful(result, lastStopReason)) {
