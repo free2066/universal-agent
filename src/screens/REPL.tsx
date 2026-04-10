@@ -3621,11 +3621,13 @@ export function REPL({
     });
   }, []);
   const handleExit = useCallback(async () => {
-    // Capture permission mode + effort before exiting, for the exit summary
+    // Capture permission mode + effort before exiting, for the exit summary.
+    // Use store.getState() to bypass stale closure — useCallback has [] deps.
     try {
+      const currentState = store.getState()
       setExitSummaryInfo({
-        permissionMode: toolPermissionContext.mode,
-        effortLevel: (store.getState() as any).effortValue ?? undefined,
+        permissionMode: (currentState as any).toolPermissionContext?.mode,
+        effortLevel: String((currentState as any).effortValue ?? ''),
       })
     } catch { /* ignore */ }
     setIsExiting(true);

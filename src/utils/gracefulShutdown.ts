@@ -190,10 +190,13 @@ function printResumeHint(): void {
         rows.push(['📁  Working directory:', getCwdState()])
       } catch { /* ignore */ }
 
-      // Model (last model used)
+      // Model: prefer UA_MODEL_DISPLAY_NAME (human-readable name set by bootstrap)
+      // fallback to the last model key from usage stats
       try {
-        const models = Object.keys(getModelUsage())
-        if (models.length > 0) rows.push(['🤖  Model:', models[models.length - 1]])
+        const displayName = process.env['UA_MODEL_DISPLAY_NAME']
+        const modelKey = Object.keys(getModelUsage()).pop()
+        const model = displayName || modelKey
+        if (model) rows.push(['🤖  Model:', model])
       } catch { /* ignore */ }
 
       // Total tokens
@@ -205,16 +208,10 @@ function printResumeHint(): void {
       // Session ID
       rows.push(['🆔  Session ID:', sessionId])
 
-      // Approval mode
+      // Approval mode (工作模式: default / auto-edit / bypassPermissions etc.)
       try {
         const mode = getExitPermissionMode()
         if (mode) rows.push(['✅  Approval mode:', mode])
-      } catch { /* ignore */ }
-
-      // Effort level
-      try {
-        const effort = getExitEffortLevel()
-        if (effort) rows.push(['⚡  Effort:', effort])
       } catch { /* ignore */ }
 
       // Log file
