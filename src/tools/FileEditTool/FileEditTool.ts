@@ -50,6 +50,7 @@ import {
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
+import { formatFile } from '../../services/format/index.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import {
   FILE_EDIT_TOOL_NAME,
@@ -73,6 +74,7 @@ import {
 import {
   areFileEditsInputsEquivalent,
   findActualString,
+  findFuzzyOldString,
   getPatchForEdit,
   preserveQuoteStyle,
 } from './utils.js'
@@ -468,9 +470,19 @@ export const FileEditTool = buildTool({
       }
     }
 
-    // 3. Use findActualString to handle quote normalization
-    const actualOldString =
+    // 3. Use findActualString to handle quote normalization, then fuzzy fallback
+    // Strategy 1 (exact + quote normalization) via findActualString
+    let actualOldString =
       findActualString(originalFileContents, old_string) || old_string
+
+    // Strategies 2-5 (line-trim, block-anchor, whitespace-normalize, indent-flexible)
+    // Only activate when exact match would fail to avoid changing semantics
+    if (actualOldString === old_string && !originalFileContents.includes(old_string)) {
+      const fuzzyMatch = findFuzzyOldString(originalFileContents, old_string)
+      if (fuzzyMatch !== null) {
+        actualOldString = fuzzyMatch
+      }
+    }
 
     // Preserve curly quotes in new_string when the file uses them
     const actualNewString = preserveQuoteStyle(
@@ -490,6 +502,9 @@ export const FileEditTool = buildTool({
 
     // 5. Write to disk
     writeTextContent(absoluteFilePath, updatedFile, encoding, endings)
+
+    // Feature 11: Auto-format after edit (best-effort, silently ignored on failure)
+    formatFile(absoluteFilePath).catch(() => {})
 
     // Notify LSP servers about file modification (didChange) and save (didSave)
     const lspManager = getLspServerManager()

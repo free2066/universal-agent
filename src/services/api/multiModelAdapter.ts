@@ -254,6 +254,63 @@ function buildStreamResult(
 }
 
 /**
+ * Feature 12: Model-specific behavioral rules
+ *
+ * Different model families have known behavioral tendencies that degrade performance
+ * when using the standard system prompt. Inject targeted correction rules per model.
+ *
+ * Inspired by opencode's per-model prompt files (beast.txt, gemini.txt, etc.)
+ */
+function getModelSpecificPromptRules(modelName: string): string | null {
+  const lower = modelName.toLowerCase()
+
+  // Gemini models tend to describe actions without actually calling tools
+  if (lower.startsWith('gemini') || lower.includes('gemini')) {
+    return `<model_specific_rules>
+You MUST call tools to complete tasks. Do NOT describe what you would do — actually DO it by calling the appropriate tool.
+When asked to edit, read, or run something: call the tool immediately, do not narrate.
+Do not say "I will use the Bash tool to..." — just call it.
+Complete tasks with the minimum number of tool calls. Avoid unnecessary intermediate steps.
+</model_specific_rules>`
+  }
+
+  // GPT o-series (o1, o3, o4) tend to over-reason and produce verbose chain-of-thought
+  if (/\bo[1-9][-\w]*/.test(lower) || lower.includes('-o1') || lower.includes('-o3') || lower.includes('-o4')) {
+    return `<model_specific_rules>
+Be concise and direct. Avoid excessive chain-of-thought or reasoning narration.
+Execute tasks immediately without lengthy preamble.
+When you know what tool to call, call it — don't explain your plan first.
+</model_specific_rules>`
+  }
+
+  // GPT-4o family tends to be verbose with explanations
+  if (lower.startsWith('gpt-4') || lower.includes('gpt-4o')) {
+    return `<model_specific_rules>
+Be concise. Execute tasks directly via tool calls. Minimize explanatory text before taking action.
+When editing code: call the edit tool immediately. When running commands: call bash immediately.
+</model_specific_rules>`
+  }
+
+  // DeepSeek models sometimes struggle with tool format compliance
+  if (lower.startsWith('deepseek') || lower.includes('deepseek')) {
+    return `<model_specific_rules>
+Always use the exact tool call format specified. Do not deviate from the tool schema.
+For file edits, always provide both old_string and new_string parameters exactly as required.
+</model_specific_rules>`
+  }
+
+  // Qwen models may need encouragement to use code tools
+  if (lower.startsWith('qwen') || lower.includes('qwen')) {
+    return `<model_specific_rules>
+You have access to powerful tools — use them. Do not attempt to answer coding tasks from memory alone.
+Always read the actual file contents before editing. Always verify changes after applying them.
+</model_specific_rules>`
+  }
+
+  return null
+}
+
+/**
  * MultiModelAnthropicAdapter — the main export.
  *
  * Mimics the minimum subset of Anthropic SDK's `beta.messages` interface
@@ -276,6 +333,15 @@ export class MultiModelAnthropicAdapter {
       systemPrompt = Array.isArray(params.system)
         ? params.system.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
         : String(params.system)
+    }
+
+    // Feature 12: Inject model-specific behavioral rules
+    // Different model families have known behavioral tendencies that need correction
+    const modelSpecificRules = getModelSpecificPromptRules(this.modelName)
+    if (modelSpecificRules) {
+      systemPrompt = systemPrompt
+        ? `${systemPrompt}\n\n${modelSpecificRules}`
+        : modelSpecificRules
     }
 
     const messages = convertAnthropicMessagesToUA(params)

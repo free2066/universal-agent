@@ -74,14 +74,14 @@ The main value-add of universal-agent. Located at `src/builtin-plugins/omo-agent
 | **sisyphus** | Main orchestrator, intent gate, parallel dispatch | maxTurns: 100 |
 | **atlas** | Plan executor, reads `.sisyphus/plans/` | maxTurns: 200 |
 | **prometheus** | Strategic planner, interviews user | disallowedTools: Write, Edit |
-| **oracle** | Architecture consultant, analysis only | disallowedTools: Write, Edit, Bash, TodoWrite |
-| **explore** | Codebase scout, read-only | disallowedTools: Write, Edit |
-| **librarian** | External docs/library researcher | disallowedTools: Write, Edit |
+| **oracle** | Architecture consultant, analysis only | tools: Read, Grep, Glob, LS, WebFetch, WebSearch, Skill |
+| **explore** | Codebase scout, read-only | tools: Read, Grep, Glob, Bash, LS, WebFetch, WebSearch, Agent, Skill |
+| **librarian** | External docs/library researcher | tools: Read, Glob, LS, WebFetch, WebSearch, Skill |
 | **hephaestus** | Deep autonomous developer | maxTurns: 150 |
-| **metis** | Gap analyst for plans | disallowedTools: Write, Edit |
-| **momus** | Plan quality reviewer, OKAY/REJECT | disallowedTools: Write, Edit |
+| **metis** | Gap analyst for plans | tools: Read, Grep, Glob, Bash, LS, Skill |
+| **momus** | Plan quality reviewer, OKAY/REJECT | tools: Read, Grep, Glob, LS, Skill |
 | **sisyphus-junior** | Task executor (no further delegation) | maxTurns: 30 |
-| **multimodal-looker** | Visual/image analysis | disallowedTools: Write, Edit, Bash |
+| **multimodal-looker** | Visual/image analysis | tools: Read, Glob, LS, Skill |
 
 ### Commands (Markdown prompts, `src/builtin-plugins/omo-agents/commands/`)
 

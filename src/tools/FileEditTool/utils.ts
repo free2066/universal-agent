@@ -774,3 +774,170 @@ export function areFileEditsInputsEquivalent(
 
   return areFileEditsEquivalent(input1.edits, input2.edits, fileContent)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Feature 9: Multi-strategy fuzzy oldString matching
+// Inspired by opencode's edit.ts 9-layer fallback chain
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Simple Levenshtein distance between two strings (capped for performance)
+ */
+function levenshtein(a: string, b: string, cap = 1000): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1
+  const m = a.length
+  const n = b.length
+  const dp: number[] = Array.from({ length: n + 1 }, (_, i) => i)
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0]!
+    dp[0] = i
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j]!
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j]!, dp[j - 1]!)
+      prev = temp
+    }
+  }
+  return dp[n]!
+}
+
+/** Similarity score [0,1] — 1 = identical */
+function similarity(a: string, b: string): number {
+  if (a === b) return 1
+  const maxLen = Math.max(a.length, b.length)
+  if (maxLen === 0) return 1
+  return 1 - levenshtein(a, b, maxLen) / maxLen
+}
+
+/**
+ * Strategy 2: Per-line trim matching
+ * Strip leading/trailing whitespace from each line before comparing.
+ */
+function lineTrimmedFind(fileContent: string, search: string): string | null {
+  const searchLines = search.split('\n').map(l => l.trim())
+  const fileLines = fileContent.split('\n')
+
+  for (let i = 0; i <= fileLines.length - searchLines.length; i++) {
+    const candidate = fileLines.slice(i, i + searchLines.length)
+    if (candidate.every((line, j) => line.trim() === searchLines[j])) {
+      return fileLines.slice(i, i + searchLines.length).join('\n')
+    }
+  }
+  return null
+}
+
+/**
+ * Strategy 3: Block-anchor + Levenshtein
+ * Use first and last lines as anchors, find closest middle block by similarity.
+ */
+function blockAnchorFind(fileContent: string, search: string): string | null {
+  const searchLines = search.split('\n')
+  if (searchLines.length < 2) return null
+
+  const firstLine = searchLines[0]!.trim()
+  const lastLine = searchLines[searchLines.length - 1]!.trim()
+  const fileLines = fileContent.split('\n')
+  const len = searchLines.length
+
+  let bestScore = -1
+  let bestMatch: string | null = null
+
+  for (let i = 0; i <= fileLines.length - len; i++) {
+    if (
+      fileLines[i]!.trim() === firstLine &&
+      fileLines[i + len - 1]!.trim() === lastLine
+    ) {
+      const candidate = fileLines.slice(i, i + len)
+      const score = similarity(candidate.join('\n'), search)
+      if (score > bestScore) {
+        bestScore = score
+        bestMatch = candidate.join('\n')
+      }
+    }
+  }
+  // Single match: accept any score; multiple matches: need >0.3
+  return bestMatch !== null && bestScore >= 0 ? bestMatch : null
+}
+
+/**
+ * Strategy 4: Whitespace-normalized matching
+ * Collapse runs of whitespace before comparing.
+ */
+function whitespaceNormalizedFind(fileContent: string, search: string): string | null {
+  const normalize = (s: string) => s.replace(/\s+/g, ' ').trim()
+  const normalSearch = normalize(search)
+  const fileLines = fileContent.split('\n')
+  const searchLines = search.split('\n')
+  const len = searchLines.length
+
+  for (let i = 0; i <= fileLines.length - len; i++) {
+    const candidate = fileLines.slice(i, i + len).join('\n')
+    if (normalize(candidate) === normalSearch) {
+      return candidate
+    }
+  }
+  return null
+}
+
+/**
+ * Strategy 5: Indentation-flexible matching
+ * Remove the common leading indentation before comparing.
+ */
+function indentationFlexibleFind(fileContent: string, search: string): string | null {
+  const dedent = (s: string) => {
+    const lines = s.split('\n')
+    const minIndent = lines
+      .filter(l => l.trim().length > 0)
+      .reduce((min, l) => {
+        const m = l.match(/^(\s*)/)
+        return Math.min(min, m ? m[1]!.length : 0)
+      }, Infinity)
+    return lines.map(l => l.slice(minIndent === Infinity ? 0 : minIndent)).join('\n')
+  }
+
+  const normalSearch = dedent(search)
+  const fileLines = fileContent.split('\n')
+  const searchLines = search.split('\n')
+  const len = searchLines.length
+
+  for (let i = 0; i <= fileLines.length - len; i++) {
+    const candidate = fileLines.slice(i, i + len).join('\n')
+    if (dedent(candidate) === normalSearch) {
+      return candidate
+    }
+  }
+  return null
+}
+
+/**
+ * Attempt to find the actual oldString in the file using multiple fallback strategies.
+ * Returns the exact matching substring from fileContent, or null if no strategy succeeds.
+ *
+ * Strategy order (per opencode's approach):
+ * 1. Exact match (already handled upstream via findActualString)
+ * 2. Per-line trim
+ * 3. Block anchor + Levenshtein
+ * 4. Whitespace normalized
+ * 5. Indentation flexible
+ */
+export function findFuzzyOldString(
+  fileContent: string,
+  oldString: string,
+): string | null {
+  // Strategy 2: Per-line trim
+  const trimResult = lineTrimmedFind(fileContent, oldString)
+  if (trimResult !== null) return trimResult
+
+  // Strategy 3: Block anchor + Levenshtein
+  const anchorResult = blockAnchorFind(fileContent, oldString)
+  if (anchorResult !== null) return anchorResult
+
+  // Strategy 4: Whitespace normalized
+  const wsResult = whitespaceNormalizedFind(fileContent, oldString)
+  if (wsResult !== null) return wsResult
+
+  // Strategy 5: Indentation flexible
+  const indentResult = indentationFlexibleFind(fileContent, oldString)
+  if (indentResult !== null) return indentResult
+
+  return null
+}
