@@ -6,6 +6,8 @@ import { onExit } from 'signal-exit'
 import type { ExitReason } from 'src/entrypoints/agentSdkTypes.js'
 import {
   getCwdState,
+  getExitEffortLevel,
+  getExitPermissionMode,
   getIsInteractive,
   getIsScrollDraining,
   getLastMainRequestId,
@@ -153,7 +155,7 @@ function printResumeHint(): void {
   }
   // Only show with TTY, interactive sessions, and persistence
   if (
-    process.stdout.isTTY &&
+    process.stderr.isTTY &&
     getIsInteractive() &&
     !isSessionPersistenceDisabled()
   ) {
@@ -175,54 +177,70 @@ function printResumeHint(): void {
         resumeArg = sessionId
       }
 
-      // Build session summary (opencode-style exit info)
-      const lines: string[] = []
-      lines.push('')
-      lines.push(chalk.dim('---'))
-      lines.push(chalk.dim('Session ended'))
-      lines.push('')
+      // ── Build session summary ──────────────────────────────────────────────
+      // Print to stderr so it appears cleanly AFTER Ink's alt-screen teardown
+      // and doesn't interleave with stdout autocomplete suggestions.
+      const LBL = chalk.dim    // dim label colour
+      const VAL = chalk.white  // bright value colour
+
+      const rows: [string, string][] = []
 
       // Working directory
       try {
-        const cwd = getCwdState()
-        lines.push(`📁  ${chalk.dim('Working directory:')} ${cwd}`)
+        rows.push(['📁  Working directory:', getCwdState()])
       } catch { /* ignore */ }
 
-      // Model
+      // Model (last model used)
       try {
-        const usage = getModelUsage()
-        const models = Object.keys(usage)
-        if (models.length > 0) {
-          lines.push(`🤖  ${chalk.dim('Model:')} ${models[models.length - 1]}`)
-        }
+        const models = Object.keys(getModelUsage())
+        if (models.length > 0) rows.push(['🤖  Model:', models[models.length - 1]])
       } catch { /* ignore */ }
 
-      // Total tokens used
+      // Total tokens
       try {
-        const inputTokens = getTotalInputTokens()
-        const outputTokens = getTotalOutputTokens()
-        const total = inputTokens + outputTokens
-        if (total > 0) {
-          lines.push(`🦎  ${chalk.dim('Total tokens used:')} ${total.toLocaleString()}`)
-        }
+        const total = getTotalInputTokens() + getTotalOutputTokens()
+        if (total > 0) rows.push(['🦎  Total tokens used:', total.toLocaleString()])
       } catch { /* ignore */ }
 
       // Session ID
-      lines.push(`🆔  ${chalk.dim('Session ID:')} ${sessionId}`)
+      rows.push(['🆔  Session ID:', sessionId])
 
-      // Log file path
+      // Approval mode
       try {
-        const logFile = getTranscriptPath()
-        lines.push(`📝  ${chalk.dim('Log file:')} ${logFile}`)
+        const mode = getExitPermissionMode()
+        if (mode) rows.push(['✅  Approval mode:', mode])
       } catch { /* ignore */ }
 
-      lines.push('')
+      // Effort level
+      try {
+        const effort = getExitEffortLevel()
+        if (effort) rows.push(['⚡  Effort:', effort])
+      } catch { /* ignore */ }
 
-      // Resume hint
-      lines.push(chalk.dim(`Resume this session with:\nuagent --resume ${resumeArg}`))
-      lines.push('')
+      // Log file
+      try {
+        rows.push(['📝  Log file:', getTranscriptPath()])
+      } catch { /* ignore */ }
 
-      writeSync(1, lines.join('\n'))
+      // Align labels and values
+      const maxLabelLen = Math.max(...rows.map(([l]) => l.length))
+      const formatted = rows.map(([label, value]) =>
+        `  ${LBL(label.padEnd(maxLabelLen))}  ${VAL(value)}`,
+      )
+
+      const output = [
+        '',
+        chalk.dim('───────────────────────────'),
+        chalk.bold('Session ended'),
+        '',
+        ...formatted,
+        '',
+        chalk.dim(`Resume: uagent --resume ${resumeArg}`),
+        '',
+      ].join('\n')
+
+      // Write to stderr (fd=2) — avoids contaminating stdout / Ink rendering
+      writeSync(2, output)
       resumeHintPrinted = true
     } catch {
       // Ignore write errors

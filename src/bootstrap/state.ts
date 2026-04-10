@@ -832,6 +832,26 @@ export function getUsageForModel(model: string): ModelUsage | undefined {
   return STATE.modelUsage[model]
 }
 
+// ── Exit summary info ────────────────────────────────────────────────────────
+// Set by REPL/AppState before exit so gracefulShutdown can print it.
+let _exitPermissionMode: string | undefined
+let _exitEffortLevel: string | undefined
+
+export function setExitSummaryInfo(info: {
+  permissionMode?: string
+  effortLevel?: string
+}): void {
+  if (info.permissionMode) _exitPermissionMode = info.permissionMode
+  if (info.effortLevel) _exitEffortLevel = info.effortLevel
+}
+
+export function getExitPermissionMode(): string | undefined {
+  return _exitPermissionMode
+}
+
+export function getExitEffortLevel(): string | undefined {
+  return _exitEffortLevel
+}
 /**
  * Gets the model override set from the --model CLI flag or after the user
  * updates their configured model.
