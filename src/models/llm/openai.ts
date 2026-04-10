@@ -107,19 +107,24 @@ export class OpenAIClient implements LLMClient {
       const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
 
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta;
+        const delta = chunk.choices[0]?.delta as {
+          content?: string;
+          reasoning_content?: string;
+          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
+        };
         if (!delta) continue;
 
         if (delta.content) {
           onChunk(delta.content);
           textContent += delta.content;
+        } else if ((delta as any).reasoning_content) {
+          // GLM-5/MiMo: reasoning phase only emits reasoning_content, not content.
+          // Call onChunk with empty string so downstream stream generators (buildRealStreamResult)
+          // don't deadlock waiting for the first real-content chunk.
+          onChunk('');
         }
 
-        const toolCallDeltas = (delta as { tool_calls?: Array<{
-          index: number;
-          id?: string;
-          function?: { name?: string; arguments?: string };
-        }> }).tool_calls;
+        const toolCallDeltas = delta.tool_calls;
         if (toolCallDeltas) {
           for (const tc of toolCallDeltas) {
             if (!toolCallMap.has(tc.index)) {
