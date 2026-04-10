@@ -76,6 +76,8 @@ const outputSchema = lazySchema(() =>
       .describe('Whether the user modified the proposed changes'),
     replaceAll: z.boolean().describe('Whether all occurrences were replaced'),
     gitDiff: gitDiffSchema().optional(),
+    // G2: Active LSP diagnostics collected after the edit
+    lspDiagnostics: z.string().optional().describe('LSP errors detected after the edit'),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>

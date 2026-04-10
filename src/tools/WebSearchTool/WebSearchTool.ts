@@ -23,6 +23,90 @@ import {
   renderToolUseProgressMessage,
 } from './UI.js'
 
+// ─────────────────────────────────────────────────────────────────────────────
+// G1: Tavily search fallback — enables WebSearch for non-Anthropic models
+// Set TAVILY_API_KEY in env or ~/.uagent/.env to activate
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getTavilyApiKey(): string | null {
+  return process.env.TAVILY_API_KEY || null
+}
+
+interface TavilyResult {
+  title: string
+  url: string
+  content: string
+  score?: number
+}
+
+interface TavilyResponse {
+  query: string
+  results: TavilyResult[]
+  answer?: string
+}
+
+async function searchWithTavily(
+  query: string,
+  apiKey: string,
+  allowedDomains?: string[],
+  blockedDomains?: string[],
+): Promise<Output> {
+  const startTime = performance.now()
+
+  const body: Record<string, unknown> = {
+    api_key: apiKey,
+    query,
+    max_results: 8,
+    search_depth: 'basic',
+    include_answer: true,
+  }
+
+  // Tavily supports include_domains and exclude_domains
+  if (allowedDomains?.length) body.include_domains = allowedDomains
+  if (blockedDomains?.length) body.exclude_domains = blockedDomains
+
+  let tavilyData: TavilyResponse
+  try {
+    const resp = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(25_000),
+    })
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => String(resp.status))
+      throw new Error(`Tavily API error ${resp.status}: ${errText}`)
+    }
+    tavilyData = await resp.json()
+  } catch (e: any) {
+    logError(e)
+    return { query, results: [`Web search failed: ${e?.message || e}`], durationSeconds: 0 }
+  }
+
+  const durationSeconds = (performance.now() - startTime) / 1000
+  const results: (SearchResult | string)[] = []
+
+  // Include AI answer if available
+  if (tavilyData.answer?.trim()) {
+    results.push(tavilyData.answer.trim())
+  }
+
+  // Convert Tavily results to SearchResult format
+  if (tavilyData.results?.length) {
+    const hits = tavilyData.results.map(r => ({ title: r.title, url: r.url }))
+    results.push({ tool_use_id: `tavily-${Date.now()}`, content: hits })
+
+    // Also add snippet text for each result
+    const snippets = tavilyData.results
+      .filter(r => r.content)
+      .map(r => `**${r.title}** (${r.url})\n${r.content}`)
+      .join('\n\n')
+    if (snippets) results.push(snippets)
+  }
+
+  return { query, results, durationSeconds }
+}
+
 const inputSchema = lazySchema(() =>
   z.strictObject({
     query: z.string().min(2).describe('The search query to use'),
@@ -167,6 +251,11 @@ export const WebSearchTool = buildTool({
     return summary ? `Searching for ${summary}` : 'Searching the web'
   },
   isEnabled() {
+    // G1: If TAVILY_API_KEY is set, enable for ALL providers (non-Anthropic fallback)
+    if (getTavilyApiKey()) {
+      return true
+    }
+
     const provider = getAPIProvider()
     const model = getMainLoopModel()
 
@@ -254,7 +343,35 @@ export const WebSearchTool = buildTool({
   },
   async call(input, context, _canUseTool, _parentMessage, onProgress) {
     const startTime = performance.now()
-    const { query } = input
+    const { query, allowed_domains, blocked_domains } = input
+
+    // G1: Use Tavily for non-Anthropic providers (or when TAVILY_API_KEY is set)
+    const provider = getAPIProvider()
+    const tavilyApiKey = getTavilyApiKey()
+    const useNativeSearch = provider === 'firstParty' || provider === 'vertex' || provider === 'foundry'
+
+    if (tavilyApiKey && !useNativeSearch) {
+      if (onProgress) {
+        onProgress({
+          toolUseID: 'tavily-search-1',
+          data: { type: 'query_update', query },
+        })
+      }
+      const result = await searchWithTavily(query, tavilyApiKey, allowed_domains, blocked_domains)
+      if (onProgress) {
+        onProgress({
+          toolUseID: 'tavily-search-1',
+          data: {
+            type: 'search_results_received',
+            resultCount: result.results.length,
+            query,
+          },
+        })
+      }
+      return { data: result }
+    }
+
+    // Original Anthropic-native search path
     const userMessage = createUserMessage({
       content: 'Perform a web search for the query: ' + query,
     })

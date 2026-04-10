@@ -5,6 +5,7 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/gr
 import { diagnosticTracker } from '../../services/diagnosticTracking.js'
 import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnosticRegistry.js'
 import { getLspServerManager } from '../../services/lsp/manager.js'
+import { collectLSPDiagnosticsForFile } from '../../services/lsp/collectDiagnostics.js'
 import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
 import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
 import {
@@ -573,6 +574,9 @@ export const FileEditTool = buildTool({
       })
     }
 
+    // G2: Collect LSP diagnostics after edit (best-effort, up to 2s wait)
+    const lspDiagnostics = await collectLSPDiagnosticsForFile(absoluteFilePath, 2000).catch(() => null)
+
     // 8. Yield result
     const data = {
       filePath: file_path,
@@ -583,29 +587,32 @@ export const FileEditTool = buildTool({
       userModified: userModified ?? false,
       replaceAll: replace_all,
       ...(gitDiff && { gitDiff }),
+      ...(lspDiagnostics && { lspDiagnostics }),
     }
     return {
       data,
     }
   },
   mapToolResultToToolResultBlockParam(data: FileEditOutput, toolUseID) {
-    const { filePath, userModified, replaceAll } = data
+    const { filePath, userModified, replaceAll, lspDiagnostics } = data
     const modifiedNote = userModified
       ? '.  The user modified your proposed changes before accepting them. '
       : ''
 
+    let successMsg: string
     if (replaceAll) {
-      return {
-        tool_use_id: toolUseID,
-        type: 'tool_result',
-        content: `The file ${filePath} has been updated${modifiedNote}. All occurrences were successfully replaced.`,
-      }
+      successMsg = `The file ${filePath} has been updated${modifiedNote}. All occurrences were successfully replaced.`
+    } else {
+      successMsg = `The file ${filePath} has been updated successfully${modifiedNote}.`
     }
+
+    // G2: Append LSP diagnostics if present
+    const content = lspDiagnostics ? `${successMsg}${lspDiagnostics}` : successMsg
 
     return {
       tool_use_id: toolUseID,
       type: 'tool_result',
-      content: `The file ${filePath} has been updated successfully${modifiedNote}.`,
+      content,
     }
   },
 } satisfies ToolDef<ReturnType<typeof inputSchema>, FileEditOutput>)

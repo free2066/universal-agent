@@ -6,6 +6,7 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/gr
 import { diagnosticTracker } from '../../services/diagnosticTracking.js'
 import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnosticRegistry.js'
 import { getLspServerManager } from '../../services/lsp/manager.js'
+import { collectLSPDiagnosticsForFile } from '../../services/lsp/collectDiagnostics.js'
 import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
 import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
 import {
@@ -86,6 +87,8 @@ const outputSchema = lazySchema(() =>
         'The original file content before the write (null for new files)',
       ),
     gitDiff: gitDiffSchema().optional(),
+    // G2: Active LSP diagnostics collected after the write
+    lspDiagnostics: z.string().optional().describe('LSP errors detected after the write'),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -361,6 +364,9 @@ export const FileWriteTool = buildTool({
       })
     }
 
+    // G2: Collect LSP diagnostics after write (best-effort, up to 2s wait)
+    const lspDiagnostics = await collectLSPDiagnosticsForFile(fullFilePath, 2000).catch(() => null)
+
     if (oldContent) {
       const patch = getPatchForDisplay({
         filePath: file_path,
@@ -381,6 +387,7 @@ export const FileWriteTool = buildTool({
         structuredPatch: patch,
         originalFile: oldContent,
         ...(gitDiff && { gitDiff }),
+        ...(lspDiagnostics && { lspDiagnostics }),
       }
       // Track lines added and removed for file updates, right before yielding result
       countLinesChanged(patch)
@@ -404,6 +411,7 @@ export const FileWriteTool = buildTool({
       structuredPatch: [],
       originalFile: null,
       ...(gitDiff && { gitDiff }),
+      ...(lspDiagnostics && { lspDiagnostics }),
     }
 
     // For creation of new files, count all lines as additions, right before yielding the result
@@ -420,20 +428,22 @@ export const FileWriteTool = buildTool({
       data,
     }
   },
-  mapToolResultToToolResultBlockParam({ filePath, type }, toolUseID) {
+  mapToolResultToToolResultBlockParam({ filePath, type, lspDiagnostics }, toolUseID) {
+    let baseMsg: string
     switch (type) {
       case 'create':
-        return {
-          tool_use_id: toolUseID,
-          type: 'tool_result',
-          content: `File created successfully at: ${filePath}`,
-        }
+        baseMsg = `File created successfully at: ${filePath}`
+        break
       case 'update':
-        return {
-          tool_use_id: toolUseID,
-          type: 'tool_result',
-          content: `The file ${filePath} has been updated successfully.`,
-        }
+        baseMsg = `The file ${filePath} has been updated successfully.`
+        break
+    }
+    // G2: Append LSP diagnostics if present
+    const content = lspDiagnostics ? `${baseMsg}${lspDiagnostics}` : baseMsg
+    return {
+      tool_use_id: toolUseID,
+      type: 'tool_result',
+      content,
     }
   },
 } satisfies ToolDef<InputSchema, Output>)

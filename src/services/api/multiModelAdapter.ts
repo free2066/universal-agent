@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'crypto'
 import { createLLMClient } from '../../models/llm/factory.js'
+import { getModelPromptRules } from '../modelPrompt/index.js'
 
 /** Convert Anthropic BetaMessageStreamParams → UA ChatOptions messages array (NO system) */
 function convertAnthropicMessagesToUA(params: any): any[] {
@@ -254,60 +255,196 @@ function buildStreamResult(
 }
 
 /**
- * Feature 12: Model-specific behavioral rules
+ * G6: Build a REAL streaming result that emits SSE events as tokens arrive.
  *
- * Different model families have known behavioral tendencies that degrade performance
- * when using the standard system prompt. Inject targeted correction rules per model.
+ * Instead of waiting for the full response before emitting events (batch mode),
+ * this function starts emitting text deltas in real-time as the underlying
+ * LLM client's streamChat onChunk callback fires.
  *
- * Inspired by opencode's per-model prompt files (beast.txt, gemini.txt, etc.)
+ * For tool_calls responses we fall back to batch mode (tool calls must arrive complete).
+ *
+ * Architecture:
+ * - streamChat() is called with an onChunk callback that pushes tokens into a queue
+ * - An async generator reads from the queue and yields SSE events
+ * - The queue uses a Promise-based notify mechanism to avoid busy-waiting
+ */
+function buildRealStreamResult(
+  streamChatPromise: Promise<any>,
+  chunkQueue: string[],
+  notifyChunk: () => void,
+  chunkDoneResolvers: Array<() => void>,
+  model: string,
+  inputTokensFn: () => number,
+  outputTokensFn: () => number,
+): any {
+  const fakeRequestId = `ua-${randomUUID()}`
+  const fakeResponse = new Response(null, { status: 200 })
+
+  const makeStream = () => realStream()
+
+  async function* realStream(): AsyncGenerator<any> {
+    const messageId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+
+    // Emit message_start immediately
+    yield {
+      type: 'message_start',
+      message: {
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        content: [],
+        model,
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    }
+
+    // Emit content_block_start for the text block
+    yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }
+
+    let chunkIndex = 0
+    let done = false
+
+    // Wait for streamChat to complete and get the full response
+    const fullResponsePromise = streamChatPromise.then(
+      (r: any) => { done = true; return r },
+      (e: any) => { done = true; throw e },
+    )
+
+    // Stream text chunks as they arrive
+    while (!done || chunkIndex < chunkQueue.length) {
+      if (chunkIndex >= chunkQueue.length) {
+        if (done) break
+        // Wait for more chunks or completion
+        await new Promise<void>((resolve) => {
+          chunkDoneResolvers.push(resolve)
+        })
+        continue
+      }
+
+      // Emit all buffered chunks
+      while (chunkIndex < chunkQueue.length) {
+        const chunk = chunkQueue[chunkIndex++]
+        if (chunk) {
+          yield {
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: chunk },
+          }
+        }
+      }
+    }
+
+    // Get the final response (tool calls etc)
+    let finalResponse: any
+    try {
+      finalResponse = await fullResponsePromise
+    } catch (e: any) {
+      throw e
+    }
+
+    const inputTokens = inputTokensFn()
+    const outputTokens = outputTokensFn()
+
+    // If tool_calls response, emit tool_use blocks
+    if (finalResponse?.type === 'tool_calls') {
+      yield { type: 'content_block_stop', index: 0 }
+
+      for (let i = 0; i < (finalResponse.toolCalls || []).length; i++) {
+        const tc = finalResponse.toolCalls[i]
+        const toolId = tc.id || `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        yield {
+          type: 'content_block_start',
+          index: i + 1,
+          content_block: { type: 'tool_use', id: toolId, name: tc.name, input: {} },
+        }
+        yield {
+          type: 'content_block_delta',
+          index: i + 1,
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify(tc.arguments || {}) },
+        }
+        yield { type: 'content_block_stop', index: i + 1 }
+      }
+
+      yield {
+        type: 'message_delta',
+        delta: { stop_reason: 'tool_use', stop_sequence: null },
+        usage: { output_tokens: outputTokens },
+      }
+    } else {
+      yield { type: 'content_block_stop', index: 0 }
+      yield {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: outputTokens },
+      }
+    }
+
+    yield { type: 'message_stop' }
+
+    // Patch the final message into the stream data (CC reads it via .finalMessage())
+    const finalContent: any[] = []
+    const textContent = finalResponse?.content || chunkQueue.join('')
+    if (textContent) finalContent.push({ type: 'text', text: textContent })
+    if (finalResponse?.type === 'tool_calls') {
+      for (const tc of finalResponse.toolCalls || []) {
+        finalContent.push({
+          type: 'tool_use',
+          id: tc.id || `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+          name: tc.name,
+          input: tc.arguments || {},
+        })
+      }
+    }
+    if (_storedFinalMessage) {
+      _storedFinalMessage.content = finalContent
+      _storedFinalMessage.usage.input_tokens = inputTokens
+      _storedFinalMessage.usage.output_tokens = outputTokens
+      _storedFinalMessage.stop_reason = finalResponse?.type === 'tool_calls' ? 'tool_use' : 'end_turn'
+    }
+  }
+
+  // Placeholder for final message (filled in after stream completes)
+  const _storedFinalMessage: any = {
+    id: `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+    type: 'message',
+    role: 'assistant',
+    model,
+    content: [],
+    stop_reason: null,
+    stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+  }
+
+  const data = Object.assign(makeStream(), {
+    finalMessage: () => Promise.resolve(_storedFinalMessage),
+    [Symbol.asyncIterator]: makeStream,
+    withResponse: () => ({ data, response: fakeResponse, request_id: fakeRequestId }),
+  })
+
+  const result = Object.assign(
+    {
+      then: (resolve: any, _reject: any) => Promise.resolve(data).then(resolve),
+      withResponse: () =>
+        Promise.resolve({ data, response: fakeResponse, request_id: fakeRequestId }),
+    },
+    data,
+  )
+
+  return result
+}
+
+/**
+ * G3: Model-specific behavioral rules — now loaded from .md files for hot-reload support.
+ *
+ * Priority: ~/.uagent/model-prompts/{family}.md > builtin model-prompts/ directory
+ * Use getModelPromptRules() from src/services/modelPrompt/index.ts
+ *
+ * Kept as a thin wrapper for backward compatibility with existing callers.
  */
 function getModelSpecificPromptRules(modelName: string): string | null {
-  const lower = modelName.toLowerCase()
-
-  // Gemini models tend to describe actions without actually calling tools
-  if (lower.startsWith('gemini') || lower.includes('gemini')) {
-    return `<model_specific_rules>
-You MUST call tools to complete tasks. Do NOT describe what you would do — actually DO it by calling the appropriate tool.
-When asked to edit, read, or run something: call the tool immediately, do not narrate.
-Do not say "I will use the Bash tool to..." — just call it.
-Complete tasks with the minimum number of tool calls. Avoid unnecessary intermediate steps.
-</model_specific_rules>`
-  }
-
-  // GPT o-series (o1, o3, o4) tend to over-reason and produce verbose chain-of-thought
-  if (/\bo[1-9][-\w]*/.test(lower) || lower.includes('-o1') || lower.includes('-o3') || lower.includes('-o4')) {
-    return `<model_specific_rules>
-Be concise and direct. Avoid excessive chain-of-thought or reasoning narration.
-Execute tasks immediately without lengthy preamble.
-When you know what tool to call, call it — don't explain your plan first.
-</model_specific_rules>`
-  }
-
-  // GPT-4o family tends to be verbose with explanations
-  if (lower.startsWith('gpt-4') || lower.includes('gpt-4o')) {
-    return `<model_specific_rules>
-Be concise. Execute tasks directly via tool calls. Minimize explanatory text before taking action.
-When editing code: call the edit tool immediately. When running commands: call bash immediately.
-</model_specific_rules>`
-  }
-
-  // DeepSeek models sometimes struggle with tool format compliance
-  if (lower.startsWith('deepseek') || lower.includes('deepseek')) {
-    return `<model_specific_rules>
-Always use the exact tool call format specified. Do not deviate from the tool schema.
-For file edits, always provide both old_string and new_string parameters exactly as required.
-</model_specific_rules>`
-  }
-
-  // Qwen models may need encouragement to use code tools
-  if (lower.startsWith('qwen') || lower.includes('qwen')) {
-    return `<model_specific_rules>
-You have access to powerful tools — use them. Do not attempt to answer coding tasks from memory alone.
-Always read the actual file contents before editing. Always verify changes after applying them.
-</model_specific_rules>`
-  }
-
-  return null
+  return getModelPromptRules(modelName)
 }
 
 /**
@@ -365,19 +502,65 @@ export class MultiModelAnthropicAdapter {
     let chatResponse: any
     try {
       if (this.llmClient.streamChat && params.stream) {
-        let accumulated = ''
-        chatResponse = await this.llmClient.streamChat(
-          chatOptions,
-          (chunk: string) => { accumulated += chunk },
-        )
-        // Log success after streamChat completes
-        if (process.env.UA_DEBUG_LOG) {
-          try {
-            const r = chatResponse
-            require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
-              `[UA:multiModel] streamChat OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0} content=${(r?.content || '').slice(0, 80)}\n`)
-          } catch {}
+        // G6: Real streaming — emit tokens as they arrive instead of batch
+        const chunkQueue: string[] = []
+        const chunkDoneResolvers: Array<() => void> = []
+        let streamChatDone = false
+        let inputLen = 0
+        let outputLen = 0
+
+        const onChunk = (chunk: string) => {
+          chunkQueue.push(chunk)
+          outputLen += chunk.length
+          // Notify waiting consumers
+          const resolver = chunkDoneResolvers.shift()
+          if (resolver) resolver()
         }
+
+        inputLen = messages.reduce((s: number, m: any) => s + JSON.stringify(m).length, 0)
+        const inputTokensFn = () => Math.ceil(inputLen / 4)
+        const outputTokensFn = () => Math.ceil(outputLen / 4)
+
+        // Start streamChat and track the promise
+        const streamChatPromise = this.llmClient.streamChat(chatOptions, onChunk).then(
+          (r: any) => {
+            streamChatDone = true
+            chatResponse = r
+            // Notify any waiting consumer that we're done
+            for (const resolver of chunkDoneResolvers.splice(0)) resolver()
+            if (process.env.UA_DEBUG_LOG) {
+              try {
+                require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
+                  `[UA:multiModel] realStream OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
+              } catch {}
+            }
+            return r
+          },
+          (e: any) => {
+            streamChatDone = true
+            for (const resolver of chunkDoneResolvers.splice(0)) resolver()
+            throw e
+          },
+        )
+
+        // Return real stream immediately (before streamChat completes)
+        return Promise.resolve({
+          chatResponse: null, // not used in real stream path
+          inputTokens: Math.ceil(inputLen / 4),
+          outputTokens: 0,
+          _realStream: buildRealStreamResult(
+            streamChatPromise,
+            chunkQueue,
+            () => {
+              const resolver = chunkDoneResolvers.shift()
+              if (resolver) resolver()
+            },
+            chunkDoneResolvers,
+            this.modelName,
+            inputTokensFn,
+            outputTokensFn,
+          ),
+        })
       } else {
         chatResponse = await this.llmClient.chat(chatOptions)
         if (process.env.UA_DEBUG_LOG) {
@@ -447,10 +630,13 @@ export class MultiModelAnthropicAdapter {
       messages: {
         create(params: any, options?: any) {
           if (params.stream) {
-            // Streaming: return an object that has .withResponse()
-            const promise = self._callModel(params, options).then(({ chatResponse, inputTokens, outputTokens }) =>
-              buildStreamResult(chatResponse, self.modelName, inputTokens, outputTokens),
-            )
+            // G6: Use real streaming when available (_realStream path)
+            const promise = self._callModel(params, options).then((result) => {
+              // Real stream path returns _realStream
+              if (result._realStream) return result._realStream
+              // Fallback batch stream path
+              return buildStreamResult(result.chatResponse, self.modelName, result.inputTokens, result.outputTokens)
+            })
             // Return a thenable that also exposes .withResponse()
             return {
               then: (resolve: any, reject: any) => promise.then((r) => resolve(r), reject),
