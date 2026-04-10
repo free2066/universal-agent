@@ -502,65 +502,18 @@ export class MultiModelAnthropicAdapter {
     let chatResponse: any
     try {
       if (this.llmClient.streamChat && params.stream) {
-        // G6: Real streaming — emit tokens as they arrive instead of batch
-        const chunkQueue: string[] = []
-        const chunkDoneResolvers: Array<() => void> = []
-        let streamChatDone = false
-        let inputLen = 0
-        let outputLen = 0
-
-        const onChunk = (chunk: string) => {
-          chunkQueue.push(chunk)
-          outputLen += chunk.length
-          // Notify waiting consumers
-          const resolver = chunkDoneResolvers.shift()
-          if (resolver) resolver()
+        // Batch mode: wait for full response, then emit SSE via buildStreamResult.
+        // Real streaming was reverted because models that emit only reasoning_content
+        // (GLM-5, MiMo) during the thinking phase never trigger onChunk, causing the
+        // chunkDoneResolvers Promise to hang indefinitely (stream stall).
+        chatResponse = await this.llmClient.streamChat(chatOptions, () => {})
+        if (process.env.UA_DEBUG_LOG) {
+          try {
+            const r = chatResponse
+            require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
+              `[UA:multiModel] streamChat(batch) OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
+          } catch {}
         }
-
-        inputLen = messages.reduce((s: number, m: any) => s + JSON.stringify(m).length, 0)
-        const inputTokensFn = () => Math.ceil(inputLen / 4)
-        const outputTokensFn = () => Math.ceil(outputLen / 4)
-
-        // Start streamChat and track the promise
-        const streamChatPromise = this.llmClient.streamChat(chatOptions, onChunk).then(
-          (r: any) => {
-            streamChatDone = true
-            chatResponse = r
-            // Notify any waiting consumer that we're done
-            for (const resolver of chunkDoneResolvers.splice(0)) resolver()
-            if (process.env.UA_DEBUG_LOG) {
-              try {
-                require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
-                  `[UA:multiModel] realStream OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
-              } catch {}
-            }
-            return r
-          },
-          (e: any) => {
-            streamChatDone = true
-            for (const resolver of chunkDoneResolvers.splice(0)) resolver()
-            throw e
-          },
-        )
-
-        // Return real stream immediately (before streamChat completes)
-        return Promise.resolve({
-          chatResponse: null, // not used in real stream path
-          inputTokens: Math.ceil(inputLen / 4),
-          outputTokens: 0,
-          _realStream: buildRealStreamResult(
-            streamChatPromise,
-            chunkQueue,
-            () => {
-              const resolver = chunkDoneResolvers.shift()
-              if (resolver) resolver()
-            },
-            chunkDoneResolvers,
-            this.modelName,
-            inputTokensFn,
-            outputTokensFn,
-          ),
-        })
       } else {
         chatResponse = await this.llmClient.chat(chatOptions)
         if (process.env.UA_DEBUG_LOG) {
@@ -630,11 +583,7 @@ export class MultiModelAnthropicAdapter {
       messages: {
         create(params: any, options?: any) {
           if (params.stream) {
-            // G6: Use real streaming when available (_realStream path)
             const promise = self._callModel(params, options).then((result) => {
-              // Real stream path returns _realStream
-              if (result._realStream) return result._realStream
-              // Fallback batch stream path
               return buildStreamResult(result.chatResponse, self.modelName, result.inputTokens, result.outputTokens)
             })
             // Return a thenable that also exposes .withResponse()
