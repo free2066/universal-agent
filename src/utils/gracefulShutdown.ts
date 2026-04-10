@@ -5,10 +5,14 @@ import memoize from 'lodash-es/memoize.js'
 import { onExit } from 'signal-exit'
 import type { ExitReason } from 'src/entrypoints/agentSdkTypes.js'
 import {
+  getCwdState,
   getIsInteractive,
   getIsScrollDraining,
   getLastMainRequestId,
+  getModelUsage,
   getSessionId,
+  getTotalInputTokens,
+  getTotalOutputTokens,
   isSessionPersistenceDisabled,
 } from '../bootstrap/state.js'
 import instances from '../ink/instances.js'
@@ -41,7 +45,7 @@ import { runCleanupFunctions } from './cleanupRegistry.js'
 import { logForDebugging } from './debug.js'
 import { logForDiagnosticsNoPII } from './diagLogs.js'
 import { isEnvTruthy } from './envUtils.js'
-import { getCurrentSessionTitle, sessionIdExists } from './sessionStorage.js'
+import { getCurrentSessionTitle, getTranscriptPath, sessionIdExists } from './sessionStorage.js'
 import { sleep } from './sleep.js'
 import { profileReport } from './startupProfiler.js'
 
@@ -171,12 +175,54 @@ function printResumeHint(): void {
         resumeArg = sessionId
       }
 
-      writeSync(
-        1,
-        chalk.dim(
-          `\nResume this session with:\nuagent --resume ${resumeArg}\n`,
-        ),
-      )
+      // Build session summary (opencode-style exit info)
+      const lines: string[] = []
+      lines.push('')
+      lines.push(chalk.dim('---'))
+      lines.push(chalk.dim('Session ended'))
+      lines.push('')
+
+      // Working directory
+      try {
+        const cwd = getCwdState()
+        lines.push(`📁  ${chalk.dim('Working directory:')} ${cwd}`)
+      } catch { /* ignore */ }
+
+      // Model
+      try {
+        const usage = getModelUsage()
+        const models = Object.keys(usage)
+        if (models.length > 0) {
+          lines.push(`🤖  ${chalk.dim('Model:')} ${models[models.length - 1]}`)
+        }
+      } catch { /* ignore */ }
+
+      // Total tokens used
+      try {
+        const inputTokens = getTotalInputTokens()
+        const outputTokens = getTotalOutputTokens()
+        const total = inputTokens + outputTokens
+        if (total > 0) {
+          lines.push(`🦎  ${chalk.dim('Total tokens used:')} ${total.toLocaleString()}`)
+        }
+      } catch { /* ignore */ }
+
+      // Session ID
+      lines.push(`🆔  ${chalk.dim('Session ID:')} ${sessionId}`)
+
+      // Log file path
+      try {
+        const logFile = getTranscriptPath()
+        lines.push(`📝  ${chalk.dim('Log file:')} ${logFile}`)
+      } catch { /* ignore */ }
+
+      lines.push('')
+
+      // Resume hint
+      lines.push(chalk.dim(`Resume this session with:\nuagent --resume ${resumeArg}`))
+      lines.push('')
+
+      writeSync(1, lines.join('\n'))
       resumeHintPrinted = true
     } catch {
       // Ignore write errors
