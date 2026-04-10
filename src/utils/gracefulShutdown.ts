@@ -236,8 +236,11 @@ function printResumeHint(): void {
         '',
       ].join('\n')
 
-      // Write to stderr (fd=2) — avoids contaminating stdout / Ink rendering
-      writeSync(2, output)
+      // Write to stderr (fd=2) — avoids contaminating stdout / Ink rendering.
+      // \r\x1b[2K = carriage-return + erase-entire-line: clears any partial text
+      // left by Ink's final render (e.g. autocomplete list) before we print,
+      // ensuring Session-ended block always starts at column 0 on a clean line.
+      writeSync(2, '\r\x1b[2K' + output)
       resumeHintPrinted = true
     } catch {
       // Ignore write errors
