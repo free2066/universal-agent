@@ -88,6 +88,7 @@
     "jsonc-parser": "^3.3.1",
     "lodash-es": "^4.17.21",
     "marked": "^15.0.12",
+    "minimatch": "^10.0.1",
     "modifiers-napi": "^0.0.1",
     "openai": "^4.77.0",
     "p-map": "^7.0.3",

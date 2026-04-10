@@ -300,16 +300,15 @@ export class SnapshotService {
           const existsNow = fs.existsSync(absPath)
 
           let status: FileDiff['status']
-          if (deletions === 0 && !existsNow) {
+          if (!existsNow) {
+            // File no longer exists in worktree → deleted
             status = 'deleted'
-          } else if (additions > 0 && deletions === 0) {
-            // Check if file existed in the snapshot tree
+          } else {
+            // Check if file existed in the snapshot tree to distinguish added vs modified
             const inTree = await this._run(
               `git --git-dir="${this.gitDir}" ls-tree --name-only "${hashArg}" -- "${file}"`,
             ).catch(() => '')
             status = inTree.trim() ? 'modified' : 'added'
-          } else {
-            status = 'modified'
           }
 
           // Get unified patch for this file
