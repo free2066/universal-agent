@@ -236,11 +236,14 @@ function printResumeHint(): void {
         '',
       ].join('\n')
 
-      // Write to stderr (fd=2) — avoids contaminating stdout / Ink rendering.
-      // \r\x1b[2K = carriage-return + erase-entire-line: clears any partial text
-      // left by Ink's final render (e.g. autocomplete list) before we print,
-      // ensuring Session-ended block always starts at column 0 on a clean line.
-      writeSync(2, '\r\x1b[2K' + output)
+      // Write to stdout (fd=1) — same fd as Ink/CC output, so OS guarantees
+      // ordered delivery and prevents the content from interleaving with CC's
+      // ExitFlow command-list that is also on stdout.
+      // printResumeHint() is always called AFTER cleanupTerminalModes() which
+      // synchronously unmounts Ink, so Ink rendering is already complete.
+      // \r\x1b[J = CR + erase from cursor to end of screen: clears any Ink
+      // render residue (typeahead list, command suggestions) before printing.
+      writeSync(1, '\r\x1b[J' + output)
       resumeHintPrinted = true
     } catch {
       // Ignore write errors
