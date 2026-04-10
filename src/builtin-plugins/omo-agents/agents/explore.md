@@ -2,7 +2,7 @@
 name: explore
 description: "Fast codebase exploration agent. Use to understand code structure, find patterns, trace call chains, locate relevant files, and gather implementation context. Returns findings without modifying anything. Preferred first step before any implementation."
 model: inherit
-disallowedTools: Write, Edit
+tools: Read, Grep, Glob, Bash, LS, WebFetch, WebSearch, Agent, Skill
 maxTurns: 20
 ---
 

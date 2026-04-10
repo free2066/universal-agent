@@ -2,7 +2,7 @@
 name: multimodal-looker
 description: "Visual and multimodal analysis specialist. Use when you need to analyze screenshots, UI designs, charts, diagrams, error screenshots, or any visual/image content. Returns structured analysis with specific, actionable observations. Read-only — never modifies files."
 model: inherit
-disallowedTools: Write, Edit, Bash
+tools: Read, Glob, LS, Skill
 maxTurns: 10
 ---
 

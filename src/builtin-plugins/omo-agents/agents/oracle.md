@@ -2,7 +2,7 @@
 name: oracle
 description: "Read-only high-IQ consultant for architecture decisions, security analysis, and complex multi-system tradeoffs. Use when facing unfamiliar design patterns, cross-cutting concerns, or when you need expert-level analysis. Oracle NEVER writes or edits code — only provides analysis and recommendations."
 model: inherit
-disallowedTools: Write, Edit, Bash, TodoWrite
+tools: Read, Grep, Glob, Bash, LS, WebFetch, WebSearch, Skill
 maxTurns: 20
 ---
 

@@ -54,6 +54,7 @@ import type { AgentDefinition } from './loadAgentsDir.js';
 import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
 import { runAgent } from './runAgent.js';
+import { resumeAgentBackground } from './resumeAgent.js';
 import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorMessage, renderToolUseMessage, renderToolUseProgressMessage, renderToolUseRejectedMessage, renderToolUseTag, userFacingName, userFacingNameBackgroundColor } from './UI.js';
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -85,7 +86,8 @@ const baseInputSchema = lazySchema(() => z.object({
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
   model: z.enum(['sonnet', 'opus', 'haiku']).optional().describe("Optional model override for this agent. Takes precedence over the agent definition's model frontmatter. If omitted, uses the agent definition's model, or inherits from the parent."),
-  run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
+  run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.'),
+  task_id: z.string().optional().describe('Resume a previously launched background agent by its agent ID. When provided, resumes that agent with the new prompt instead of spawning a new one. Saves context by continuing where the agent left off. Obtain the ID from a prior async_launched response agentId field.')
 }));
 
 // Full schema combining base + multi-agent params + isolation
@@ -136,6 +138,7 @@ type AgentToolInput = z.infer<ReturnType<typeof baseInputSchema>> & {
   mode?: z.infer<ReturnType<typeof permissionModeSchema>>;
   isolation?: 'worktree' | 'remote';
   cwd?: string;
+  task_id?: string;
 };
 
 // Output schema - multi-agent spawned schema added dynamically at runtime when enabled
@@ -247,10 +250,33 @@ export const AgentTool = buildTool({
     team_name,
     mode: spawnMode,
     isolation,
-    cwd
+    cwd,
+    task_id
   }: AgentToolInput, toolUseContext, canUseTool, assistantMessage, onProgress?) {
     const startTime = Date.now();
     const model = isCoordinatorMode() ? undefined : modelParam;
+
+    // If task_id is provided, resume the existing background agent instead of spawning new
+    if (task_id) {
+      const result = await resumeAgentBackground({
+        agentId: task_id,
+        prompt,
+        toolUseContext,
+        canUseTool,
+        invokingRequestId: assistantMessage?.requestId,
+      });
+      return {
+        data: {
+          isAsync: true as const,
+          status: 'async_launched' as const,
+          agentId: result.agentId,
+          description: result.description,
+          prompt,
+          outputFile: result.outputFile,
+          canReadOutputFile: true
+        }
+      };
+    }
 
     // Get app state for permission mode and agent filtering
     const appState = toolUseContext.getAppState();

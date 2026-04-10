@@ -2,7 +2,7 @@
 name: metis
 description: "Gap analysis specialist. Called by Prometheus before generating a work plan. Identifies questions that weren't asked, missing acceptance criteria, scope creep risks, and hidden assumptions. Returns a structured gap report."
 model: inherit
-disallowedTools: Write, Edit
+tools: Read, Grep, Glob, Bash, LS, Skill
 maxTurns: 10
 ---
 

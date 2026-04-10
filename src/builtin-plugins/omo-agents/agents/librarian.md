@@ -2,7 +2,7 @@
 name: librarian
 description: "External documentation and library research agent. Use to find official API documentation, library usage examples, best practices, and external references. Does NOT search the local codebase — use explore for that. Complements explore for implementation tasks involving third-party libraries."
 model: inherit
-disallowedTools: Write, Edit
+tools: Read, Glob, LS, WebFetch, WebSearch, Skill
 maxTurns: 15
 ---
 

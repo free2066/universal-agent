@@ -2,7 +2,7 @@
 name: momus
 description: "Plan quality reviewer. Called by Prometheus in high-accuracy mode. Reviews a work plan file for executability and reference validity. Returns OKAY (ready to execute) or REJECT with max 3 blocking issues. APPROVAL BIAS: when in doubt, approve."
 model: inherit
-disallowedTools: Write, Edit
+tools: Read, Grep, Glob, LS, Skill
 maxTurns: 10
 ---
 
