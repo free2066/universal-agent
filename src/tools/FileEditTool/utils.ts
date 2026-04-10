@@ -909,15 +909,144 @@ function indentationFlexibleFind(fileContent: string, search: string): string | 
 }
 
 /**
+ * Strategy 6: Escape-normalized matching (opencode: EscapeNormalizedReplacer)
+ * Unescape common escape sequences (\n, \t, \r) in oldString before comparing.
+ * Handles cases where AI generates escaped strings instead of literal newlines.
+ */
+function escapeNormalizedFind(fileContent: string, search: string): string | null {
+  const unescaped = search
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\r/g, '\r')
+  // Only proceed if something actually changed (avoids redundant search)
+  if (unescaped === search) return null
+  const idx = fileContent.indexOf(unescaped)
+  return idx !== -1 ? unescaped : null
+}
+
+/**
+ * Strategy 7: Trimmed-boundary matching (opencode: TrimmedBoundaryReplacer)
+ * Trim leading/trailing whitespace from oldString, then search.
+ * Handles cases where AI adds extra blank lines around the target block.
+ */
+function trimmedBoundaryFind(fileContent: string, search: string): string | null {
+  const trimmed = search.trim()
+  if (trimmed === search) return null // Already tried by exact match upstream
+  const fileLines = fileContent.split('\n')
+  const searchLines = trimmed.split('\n')
+  const len = searchLines.length
+  for (let i = 0; i <= fileLines.length - len; i++) {
+    const candidate = fileLines.slice(i, i + len).join('\n')
+    if (candidate === trimmed) return candidate
+  }
+  return null
+}
+
+/**
+ * Strategy 8: Context-aware matching (opencode: ContextAwareReplacer)
+ * Uses first and last lines as anchors. Accepts if ≥50% of middle lines match
+ * (by trimmed comparison). Useful when AI paraphrases comments or adds minor edits.
+ */
+function contextAwareFind(fileContent: string, search: string): string | null {
+  const searchLines = search.split('\n')
+  if (searchLines.length < 3) return null // Need at least 3 lines for anchor logic
+
+  const firstLine = searchLines[0]!.trim()
+  const lastLine = searchLines[searchLines.length - 1]!.trim()
+  const middleSearch = searchLines.slice(1, -1).map(l => l.trim())
+
+  const fileLines = fileContent.split('\n')
+  const len = searchLines.length
+
+  let bestScore = -1
+  let bestMatch: string | null = null
+
+  for (let i = 0; i <= fileLines.length - len; i++) {
+    if (
+      fileLines[i]!.trim() !== firstLine ||
+      fileLines[i + len - 1]!.trim() !== lastLine
+    ) {
+      continue
+    }
+    // Check middle lines
+    const middleFile = fileLines.slice(i + 1, i + len - 1).map(l => l.trim())
+    const matchCount = middleSearch.filter((line, j) => line === middleFile[j]).length
+    const score = middleSearch.length === 0 ? 1 : matchCount / middleSearch.length
+
+    if (score >= 0.5 && score > bestScore) {
+      bestScore = score
+      bestMatch = fileLines.slice(i, i + len).join('\n')
+    }
+  }
+  return bestMatch
+}
+
+/**
+ * Strategy 9: Multi-occurrence matching (opencode: MultiOccurrenceReplacer)
+ * When the search string appears multiple times, returns the first occurrence.
+ * Combined with trimming to maximize hit rate. Callers should use replaceAll
+ * only when this fires on truly identical duplicate blocks.
+ */
+function multiOccurrenceFind(fileContent: string, search: string): string | null {
+  const trimmed = search.trim()
+  // Count occurrences
+  let count = 0
+  let idx = fileContent.indexOf(trimmed)
+  while (idx !== -1) {
+    count++
+    idx = fileContent.indexOf(trimmed, idx + 1)
+  }
+  // Only return if at least 2 occurrences exist (single occurrence handled upstream)
+  if (count >= 2) {
+    const firstIdx = fileContent.indexOf(trimmed)
+    return firstIdx !== -1 ? trimmed : null
+  }
+  return null
+}
+
+/**
+ * Strategy 8.5: Syntax-aware matching (lightweight tree-sitter substitute)
+ * When oldString starts with a declaration (function/class/const/def/func),
+ * locates the symbol in the file first, then searches within that block.
+ * Avoids false positives in large files with similar code patterns.
+ */
+function syntaxAwareFind(fileContent: string, search: string): string | null {
+  const firstLine = search.split('\n')[0]!.trim()
+
+  // Detect declaration keywords
+  const declMatch = firstLine.match(
+    /^(export\s+)?(default\s+)?(async\s+)?(function|class|const|let|var|def|func|type|interface)\s+(\w+)/,
+  )
+  if (!declMatch) return null
+
+  // Find where this declaration starts in file
+  const blockStart = fileContent.indexOf(firstLine)
+  if (blockStart === -1) return null
+
+  // Search within a reasonable window (2x the search length)
+  const window = fileContent.substring(blockStart, blockStart + search.length * 2)
+  const idx = window.indexOf(search.trim())
+  if (idx !== -1) return search.trim()
+
+  // Fallback: try indentation-flexible within the window
+  return indentationFlexibleFind(window, search)
+}
+
+/**
  * Attempt to find the actual oldString in the file using multiple fallback strategies.
  * Returns the exact matching substring from fileContent, or null if no strategy succeeds.
  *
- * Strategy order (per opencode's approach):
+ * Strategy order (aligned with opencode's 9-level approach):
  * 1. Exact match (already handled upstream via findActualString)
  * 2. Per-line trim
  * 3. Block anchor + Levenshtein
  * 4. Whitespace normalized
  * 5. Indentation flexible
+ * 6. Escape normalized (unescape \\n, \\t, \\r)
+ * 7. Trimmed boundary
+ * 8. Context-aware (first/last anchors + ≥50% middle match)
+ * 8.5. Syntax-aware (declaration-anchored search)
+ * 9. Multi-occurrence (multiple identical blocks)
  */
 export function findFuzzyOldString(
   fileContent: string,
@@ -938,6 +1067,26 @@ export function findFuzzyOldString(
   // Strategy 5: Indentation flexible
   const indentResult = indentationFlexibleFind(fileContent, oldString)
   if (indentResult !== null) return indentResult
+
+  // Strategy 6: Escape normalized
+  const escapeResult = escapeNormalizedFind(fileContent, oldString)
+  if (escapeResult !== null) return escapeResult
+
+  // Strategy 7: Trimmed boundary
+  const boundaryResult = trimmedBoundaryFind(fileContent, oldString)
+  if (boundaryResult !== null) return boundaryResult
+
+  // Strategy 8: Context-aware (first/last line anchors + ≥50% middle)
+  const contextResult = contextAwareFind(fileContent, oldString)
+  if (contextResult !== null) return contextResult
+
+  // Strategy 8.5: Syntax-aware (declaration-based anchor)
+  const syntaxResult = syntaxAwareFind(fileContent, oldString)
+  if (syntaxResult !== null) return syntaxResult
+
+  // Strategy 9: Multi-occurrence (multiple identical blocks)
+  const multiResult = multiOccurrenceFind(fileContent, oldString)
+  if (multiResult !== null) return multiResult
 
   return null
 }

@@ -7,6 +7,7 @@ import { diagnosticTracker } from '../../services/diagnosticTracking.js'
 import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnosticRegistry.js'
 import { getLspServerManager } from '../../services/lsp/manager.js'
 import { collectLSPDiagnosticsForFile } from '../../services/lsp/collectDiagnostics.js'
+import { getSnapshotService } from '../../services/snapshot/index.js'
 import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
 import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
 import {
@@ -307,6 +308,8 @@ export const FileWriteTool = buildTool({
     // the old file's line endings (or sampled the repo via ripgrep for new
     // files), which silently corrupted e.g. bash scripts with \r on Linux when
     // overwriting a CRLF file or when binaries in cwd poisoned the repo sample.
+    // R2: Track snapshot before writing (pre-write state captured for /undo)
+    getSnapshotService().track().catch(() => {})
     writeTextContent(fullFilePath, content, enc, 'LF')
 
     // Feature 11: Auto-format after write (best-effort, silently ignored on failure)

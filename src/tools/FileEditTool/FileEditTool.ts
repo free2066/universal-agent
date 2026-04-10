@@ -6,6 +6,7 @@ import { diagnosticTracker } from '../../services/diagnosticTracking.js'
 import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnosticRegistry.js'
 import { getLspServerManager } from '../../services/lsp/manager.js'
 import { collectLSPDiagnosticsForFile } from '../../services/lsp/collectDiagnostics.js'
+import { getSnapshotService } from '../../services/snapshot/index.js'
 import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
 import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
 import {
@@ -502,6 +503,8 @@ export const FileEditTool = buildTool({
     })
 
     // 5. Write to disk
+    // R2: Track snapshot before writing (pre-edit state captured for /undo)
+    getSnapshotService().track().catch(() => {})
     writeTextContent(absoluteFilePath, updatedFile, encoding, endings)
 
     // Feature 11: Auto-format after edit (best-effort, silently ignored on failure)
