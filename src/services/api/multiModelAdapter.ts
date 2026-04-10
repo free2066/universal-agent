@@ -255,24 +255,24 @@ function buildStreamResult(
 }
 
 /**
- * G6: Build a REAL streaming result that emits SSE events as tokens arrive.
+ * Build a REAL streaming result that emits SSE events as tokens arrive.
  *
- * Instead of waiting for the full response before emitting events (batch mode),
- * this function starts emitting text deltas in real-time as the underlying
- * LLM client's streamChat onChunk callback fires.
+ * Uses a rolling Promise mechanism to avoid the race condition in the old
+ * chunkDoneResolvers array approach:
  *
- * For tool_calls responses we fall back to batch mode (tool calls must arrive complete).
+ * - Each onChunk call resolves the *current* notifyPromise and immediately
+ *   creates a new one. The Generator always awaits the latest notifyPromise,
+ *   so it can never miss a notification regardless of call order.
+ * - Empty chunks (from reasoning_content phases in GLM-5/MiMo) advance the
+ *   Generator without emitting any SSE output (filtered by `if (chunk)`).
  *
- * Architecture:
- * - streamChat() is called with an onChunk callback that pushes tokens into a queue
- * - An async generator reads from the queue and yields SSE events
- * - The queue uses a Promise-based notify mechanism to avoid busy-waiting
+ * For tool_calls the text content is already accumulated in chunkQueue; tool
+ * blocks are emitted after the stream completes.
  */
 function buildRealStreamResult(
   streamChatPromise: Promise<any>,
   chunkQueue: string[],
-  notifyChunk: () => void,
-  chunkDoneResolvers: Array<() => void>,
+  getNotifyPromise: () => Promise<void>,
   model: string,
   inputTokensFn: () => number,
   outputTokensFn: () => number,
@@ -316,10 +316,8 @@ function buildRealStreamResult(
     while (!done || chunkIndex < chunkQueue.length) {
       if (chunkIndex >= chunkQueue.length) {
         if (done) break
-        // Wait for more chunks or completion
-        await new Promise<void>((resolve) => {
-          chunkDoneResolvers.push(resolve)
-        })
+        // Wait for next chunk notification (rolling Promise — never misses a signal)
+        await getNotifyPromise()
         continue
       }
 
@@ -502,18 +500,67 @@ export class MultiModelAnthropicAdapter {
     let chatResponse: any
     try {
       if (this.llmClient.streamChat && params.stream) {
-        // Batch mode: wait for full response, then emit SSE via buildStreamResult.
-        // Real streaming was reverted because models that emit only reasoning_content
-        // (GLM-5, MiMo) during the thinking phase never trigger onChunk, causing the
-        // chunkDoneResolvers Promise to hang indefinitely (stream stall).
-        chatResponse = await this.llmClient.streamChat(chatOptions, () => {})
-        if (process.env.UA_DEBUG_LOG) {
-          try {
-            const r = chatResponse
-            require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
-              `[UA:multiModel] streamChat(batch) OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
-          } catch {}
+        // Real streaming with rolling Promise mechanism.
+        //
+        // Each onChunk call: resolve the *current* notifyPromise, then immediately
+        // create a new one. The Generator always awaits the latest notifyPromise via
+        // getNotifyPromise(), so it can never miss a notification regardless of whether
+        // onChunk fires before or after the Generator reaches its await.
+        //
+        // Empty chunks (e.g. from reasoning_content in GLM-5/MiMo thinking phase)
+        // advance the Generator without emitting SSE output (filtered by `if (chunk)`).
+        const chunkQueue: string[] = []
+        let outputLen = 0
+
+        let notifyResolve: (() => void) | null = null
+        let notifyPromise = new Promise<void>(r => { notifyResolve = r })
+
+        const onChunk = (chunk: string) => {
+          chunkQueue.push(chunk)
+          outputLen += chunk.length
+          const r = notifyResolve
+          // Create next Promise before resolving current, so Generator's next await
+          // gets a fresh Promise (not the already-resolved one)
+          notifyPromise = new Promise<void>(res => { notifyResolve = res })
+          r?.()
         }
+
+        const inputLen = messages.reduce((s: number, m: any) => s + JSON.stringify(m).length, 0)
+        const inputTokensFn = () => Math.ceil(inputLen / 4)
+        const outputTokensFn = () => Math.ceil(outputLen / 4)
+
+        const streamChatPromise = this.llmClient.streamChat(chatOptions, onChunk).then(
+          (r: any) => {
+            chatResponse = r
+            // Wake up Generator one final time so it can drain the queue and exit
+            notifyResolve?.()
+            if (process.env.UA_DEBUG_LOG) {
+              try {
+                require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
+                  `[UA:multiModel] realStream OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
+              } catch {}
+            }
+            return r
+          },
+          (e: any) => {
+            notifyResolve?.()
+            throw e
+          },
+        )
+
+        return Promise.resolve({
+          chatResponse: null,
+          inputTokens: Math.ceil(inputLen / 4),
+          outputTokens: 0,
+          _realStream: buildRealStreamResult(
+            streamChatPromise,
+            chunkQueue,
+            () => notifyPromise,
+            this.modelName,
+            inputTokensFn,
+            outputTokensFn,
+          ),
+        })
       } else {
         chatResponse = await this.llmClient.chat(chatOptions)
         if (process.env.UA_DEBUG_LOG) {
@@ -584,6 +631,9 @@ export class MultiModelAnthropicAdapter {
         create(params: any, options?: any) {
           if (params.stream) {
             const promise = self._callModel(params, options).then((result) => {
+              // Real stream path
+              if (result._realStream) return result._realStream
+              // Batch fallback (non-streamChat clients)
               return buildStreamResult(result.chatResponse, self.modelName, result.inputTokens, result.outputTokens)
             })
             // Return a thenable that also exposes .withResponse()
