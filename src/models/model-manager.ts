@@ -355,7 +355,9 @@ export class ModelManager {
       ? (cacheReadTokens / 1_000_000) * (profile?.costPer1mCacheRead ?? (profile?.costPer1kInput ?? 0) * 0.1 * 1000)
       : 0;
     // Web search billed per-request (default $0.01 each)
-    const costWebSearch = webSearchRequests * (profile?.costPerWebSearch ?? 0.01);
+    // P2: free-tier models (zero input+output cost) should not accrue web search fees
+    const isFreeModel = (profile?.costPer1kInput ?? 0) === 0 && (profile?.costPer1kOutput ?? 0) === 0
+    const costWebSearch = isFreeModel ? 0 : webSearchRequests * (profile?.costPerWebSearch ?? 0.01);
 
     const costUSD = costIn + costOut + costCacheW + costCacheR + costWebSearch;
     this.sessionCost += costUSD;

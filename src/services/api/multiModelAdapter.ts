@@ -92,10 +92,12 @@ function convertAnthropicMessagesToUA(params: any): any[] {
 function extractTextContent(content: any): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
+  // P3: join with '' not '\n' — Anthropic text blocks are semantically flat;
+  // using '\n' can break JSON content or introduce spurious whitespace.
   return content
     .filter((b: any) => b.type === 'text')
     .map((b: any) => b.text || '')
-    .join('\n')
+    .join('')
 }
 
 function extractToolUses(content: any): any[] {
