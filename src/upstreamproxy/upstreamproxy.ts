@@ -28,6 +28,8 @@ import { isEnvTruthy } from '../utils/envUtils.js'
 import { isENOENT } from '../utils/errors.js'
 import { startUpstreamProxyRelay } from './relay.js'
 
+const PEM_CERT_PATTERN = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g
+
 export const SESSION_TOKEN_PATH = '/run/ccr/session_token'
 const SYSTEM_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt'
 
@@ -251,6 +253,15 @@ function setNonDumpable(): void {
   }
 }
 
+function isValidPemBundle(value: string): boolean {
+  const matches = value.match(PEM_CERT_PATTERN)
+  if (!matches || matches.length === 0) {
+    return false
+  }
+  const stripped = value.replace(PEM_CERT_PATTERN, '').trim()
+  return stripped.length === 0
+}
+
 async function downloadCaBundle(
   baseUrl: string,
   systemCaPath: string,
@@ -271,6 +282,12 @@ async function downloadCaBundle(
       return false
     }
     const ccrCa = await resp.text()
+    if (!isValidPemBundle(ccrCa)) {
+      logForDebugging('[upstreamproxy] invalid CA bundle response; proxy disabled', {
+        level: 'warn',
+      })
+      return false
+    }
     const systemCa = await readFile(systemCaPath, 'utf8').catch(() => '')
     await mkdir(join(outPath, '..'), { recursive: true })
     await writeFile(outPath, systemCa + '\n' + ccrCa, 'utf8')

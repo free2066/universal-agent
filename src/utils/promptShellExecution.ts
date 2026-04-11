@@ -55,6 +55,10 @@ const BLOCK_PATTERN = /```!\s*\n?([\s\S]*?)\n?```/g
 // eslint-disable-next-line custom-rules/no-lookbehind-regex -- gated by text.includes('!`') below (PR#22986)
 const INLINE_PATTERN = /(?<=^|\s)!`([^`]+)`/gm
 
+export function hasInlineShellCommands(text: string): boolean {
+  return text.includes('```!') || text.includes('!`')
+}
+
 /**
  * Parses prompt text and executes any embedded shell commands.
  * Supports two syntaxes:

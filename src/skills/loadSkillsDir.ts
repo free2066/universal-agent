@@ -23,6 +23,7 @@ import {
   parseArgumentNames,
   substituteArguments,
 } from '../utils/argumentSubstitution.js'
+import { containsPathTraversal } from '../utils/path.js'
 import { logForDebugging } from '../utils/debug.js'
 import {
   EFFORT_LEVELS,
@@ -264,6 +265,10 @@ export function parseSkillFrontmatterFields(
   }
 }
 
+function hasInlineShellCommands(content: string): boolean {
+  return content.includes('```!') || content.includes('!`')
+}
+
 /**
  * Creates a skill command from parsed data
  */
@@ -314,6 +319,19 @@ export function createSkillCommand({
   effort: EffortValue | undefined
   shell: FrontmatterShell | undefined
 }): Command {
+  const effectiveHooks =
+    source === 'projectSettings' &&
+    hasInlineShellCommands(markdownContent) &&
+    hooks !== undefined
+      ? undefined
+      : hooks
+
+  if (effectiveHooks === undefined && hooks !== undefined) {
+    logForDebugging(
+      `Ignoring hooks for project skill '${skillName}' because it contains inline shell commands`,
+    )
+  }
+
   return {
     type: 'prompt',
     name: skillName,
@@ -339,18 +357,20 @@ export function createSkillCommand({
     },
     source,
     loadedFrom,
-    hooks,
+    hooks: effectiveHooks,
     skillRoot: baseDir,
     async getPromptForCommand(args, toolUseContext) {
       let finalContent = baseDir
         ? `Base directory for this skill: ${baseDir}\n\n${markdownContent}`
         : markdownContent
 
+      const shouldShellEscapeArgs = hasInlineShellCommands(markdownContent)
       finalContent = substituteArguments(
         finalContent,
         args,
         true,
         argumentNames,
+        shouldShellEscapeArgs ? { shellEscape: true } : undefined,
       )
 
       // Replace ${CLAUDE_SKILL_DIR} with the skill's own directory so bash

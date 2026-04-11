@@ -20,8 +20,13 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-// Cache: "ext|cwd" -> formatter command or null (false = unavailable)
-const formatterCache = new Map<string, string | false>()
+type FormatterCommand = {
+  command: string
+  args: string[]
+}
+
+// Cache: "ext|cwd" -> formatter commands or null (false = unavailable)
+const formatterCache = new Map<string, FormatterCommand[] | false>()
 
 /** Find a file by walking up the directory tree */
 function findUp(filename: string, startDir: string): string | null {
@@ -63,8 +68,21 @@ function hasDep(cwd: string, dep: string): boolean {
   }
 }
 
+function prettierCommands(): FormatterCommand[] {
+  return [
+    {
+      command: 'npx',
+      args: ['--no-install', 'prettier', '--write', '$FILE'],
+    },
+    {
+      command: 'prettier',
+      args: ['--write', '$FILE'],
+    },
+  ]
+}
+
 /** Detect the formatter for a given file path */
-function detectFormatter(filePath: string): string | false {
+function detectFormatter(filePath: string): FormatterCommand[] | false {
   const ext = extname(filePath).toLowerCase()
   const dir = dirname(filePath)
   const cacheKey = `${ext}|${dir}`
@@ -73,140 +91,140 @@ function detectFormatter(filePath: string): string | false {
     return formatterCache.get(cacheKey)!
   }
 
-  let formatter: string | false = false
+  let formatter: FormatterCommand[] | false = false
 
   // JavaScript / TypeScript family
   if (['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts'].includes(ext)) {
     // Biome (faster, project-level config)
     if (findUp('biome.json', dir) || findUp('biome.jsonc', dir)) {
       if (commandExists('biome')) {
-        formatter = 'biome format --write $FILE'
+        formatter = [{ command: 'biome', args: ['format', '--write', '$FILE'] }]
       }
     }
     // Prettier (most common)
     if (!formatter && (hasDep(dir, 'prettier') || commandExists('prettier'))) {
       // Prefer local prettier via npx
-      formatter = 'npx --no-install prettier --write $FILE 2>/dev/null || prettier --write $FILE'
+      formatter = prettierCommands()
     }
   }
 
   // JSON / YAML / Markdown / HTML / CSS (also prettier)
   else if (['.json', '.jsonc', '.yaml', '.yml', '.md', '.mdx', '.html', '.css', '.scss', '.less'].includes(ext)) {
     if (hasDep(dir, 'prettier') || commandExists('prettier')) {
-      formatter = 'npx --no-install prettier --write $FILE 2>/dev/null || prettier --write $FILE'
+      formatter = prettierCommands()
     }
   }
 
   // Go
   else if (ext === '.go') {
     if (commandExists('gofmt')) {
-      formatter = 'gofmt -w $FILE'
+      formatter = [{ command: 'gofmt', args: ['-w', '$FILE'] }]
     }
   }
 
   // Rust
   else if (ext === '.rs') {
     if (commandExists('rustfmt')) {
-      formatter = 'rustfmt $FILE'
+      formatter = [{ command: 'rustfmt', args: ['$FILE'] }]
     }
   }
 
   // Python (ruff preferred over black/autopep8)
   else if (ext === '.py' || ext === '.pyw') {
     if (commandExists('ruff')) {
-      formatter = 'ruff format $FILE'
+      formatter = [{ command: 'ruff', args: ['format', '$FILE'] }]
     } else if (commandExists('black')) {
-      formatter = 'black $FILE'
+      formatter = [{ command: 'black', args: ['$FILE'] }]
     }
   }
 
   // Elixir
   else if (['.ex', '.exs', '.heex', '.leex'].includes(ext)) {
     if (commandExists('mix')) {
-      formatter = 'mix format $FILE'
+      formatter = [{ command: 'mix', args: ['format', '$FILE'] }]
     }
   }
 
   // Ruby
   else if (ext === '.rb') {
     if (commandExists('standardrb')) {
-      formatter = 'standardrb --fix $FILE'
+      formatter = [{ command: 'standardrb', args: ['--fix', '$FILE'] }]
     } else if (commandExists('rubocop')) {
-      formatter = 'rubocop -a $FILE'
+      formatter = [{ command: 'rubocop', args: ['-a', '$FILE'] }]
     }
   }
 
   // Zig
   else if (ext === '.zig') {
     if (commandExists('zig')) {
-      formatter = 'zig fmt $FILE'
+      formatter = [{ command: 'zig', args: ['fmt', '$FILE'] }]
     }
   }
 
   // C / C++
   else if (['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(ext)) {
     if (findUp('.clang-format', dir) && commandExists('clang-format')) {
-      formatter = 'clang-format -i $FILE'
+      formatter = [{ command: 'clang-format', args: ['-i', '$FILE'] }]
     }
   }
 
   // Terraform
   else if (ext === '.tf' || ext === '.tfvars') {
     if (commandExists('terraform')) {
-      formatter = 'terraform fmt $FILE'
+      formatter = [{ command: 'terraform', args: ['fmt', '$FILE'] }]
     }
   }
 
   // Shell
   else if (['.sh', '.bash', '.zsh'].includes(ext)) {
     if (commandExists('shfmt')) {
-      formatter = 'shfmt -w $FILE'
+      formatter = [{ command: 'shfmt', args: ['-w', '$FILE'] }]
     }
   }
 
   // Dart
   else if (ext === '.dart') {
     if (commandExists('dart')) {
-      formatter = 'dart format $FILE'
+      formatter = [{ command: 'dart', args: ['format', '$FILE'] }]
     }
   }
 
   // Kotlin
   else if (ext === '.kt' || ext === '.kts') {
     if (commandExists('ktlint')) {
-      formatter = 'ktlint --format $FILE'
+      formatter = [{ command: 'ktlint', args: ['--format', '$FILE'] }]
     }
   }
 
   // Nix (nixfmt)
   else if (ext === '.nix') {
     if (commandExists('nixfmt')) {
-      formatter = 'nixfmt $FILE'
+      formatter = [{ command: 'nixfmt', args: ['$FILE'] }]
     }
   }
 
   // Gleam
   else if (ext === '.gleam') {
     if (commandExists('gleam')) {
-      formatter = 'gleam format $FILE'
+      formatter = [{ command: 'gleam', args: ['format', '$FILE'] }]
     }
   }
 
   // OCaml (ocamlformat)
   else if (ext === '.ml' || ext === '.mli') {
     if (commandExists('ocamlformat')) {
-      formatter = 'ocamlformat -i $FILE'
+      formatter = [{ command: 'ocamlformat', args: ['-i', '$FILE'] }]
     }
   }
 
   // Haskell (ormolu preferred, then fourmolu)
   else if (ext === '.hs' || ext === '.lhs') {
     if (commandExists('ormolu')) {
-      formatter = 'ormolu -i $FILE'
+      formatter = [{ command: 'ormolu', args: ['-i', '$FILE'] }]
     } else if (commandExists('fourmolu')) {
-      formatter = 'fourmolu -i $FILE'
+      formatter = [{ command: 'fourmolu', args: ['-i', '$FILE'] }]
     } else if (commandExists('hindent')) {
-      formatter = 'hindent $FILE'
+      formatter = [{ command: 'hindent', args: ['$FILE'] }]
     }
   }
 
@@ -215,55 +233,55 @@ function detectFormatter(filePath: string): string | false {
     // Laravel Pint (project-local)
     const pintBin = join(dir, 'vendor', 'bin', 'pint')
     if (existsSync(pintBin)) {
-      formatter = `${pintBin} $FILE`
+      formatter = [{ command: pintBin, args: ['$FILE'] }]
     } else if (commandExists('pint')) {
-      formatter = 'pint $FILE'
+      formatter = [{ command: 'pint', args: ['$FILE'] }]
     }
   }
 
   // Swift (swift-format)
   else if (ext === '.swift') {
     if (commandExists('swift-format')) {
-      formatter = 'swift-format -i $FILE'
+      formatter = [{ command: 'swift-format', args: ['-i', '$FILE'] }]
     } else if (commandExists('swiftformat')) {
-      formatter = 'swiftformat $FILE'
+      formatter = [{ command: 'swiftformat', args: ['$FILE'] }]
     }
   }
 
   // Scala (scalafmt)
   else if (ext === '.scala' || ext === '.sbt' || ext === '.sc') {
     if (commandExists('scalafmt')) {
-      formatter = 'scalafmt $FILE'
+      formatter = [{ command: 'scalafmt', args: ['$FILE'] }]
     }
   }
 
   // Lua (stylua)
   else if (ext === '.lua') {
     if (commandExists('stylua')) {
-      formatter = 'stylua $FILE'
+      formatter = [{ command: 'stylua', args: ['$FILE'] }]
     }
   }
 
   // TOML (taplo)
   else if (ext === '.toml') {
     if (commandExists('taplo')) {
-      formatter = 'taplo format $FILE'
+      formatter = [{ command: 'taplo', args: ['format', '$FILE'] }]
     }
   }
 
   // SQL (pg_format or sqlfluff)
   else if (ext === '.sql') {
     if (commandExists('pg_format')) {
-      formatter = 'pg_format -i $FILE'
+      formatter = [{ command: 'pg_format', args: ['-i', '$FILE'] }]
     } else if (commandExists('sqlfluff')) {
-      formatter = 'sqlfluff format $FILE'
+      formatter = [{ command: 'sqlfluff', args: ['format', '$FILE'] }]
     }
   }
 
   // Zig (also .zon files)
   else if (ext === '.zon') {
     if (commandExists('zig')) {
-      formatter = 'zig fmt $FILE'
+      formatter = [{ command: 'zig', args: ['fmt', '$FILE'] }]
     }
   }
 
@@ -278,18 +296,35 @@ function detectFormatter(filePath: string): string | false {
  * @param filePath Absolute path to the file to format
  * @param timeoutMs Maximum time to wait for formatter (default: 8 seconds)
  */
+async function runFormatter(
+  formatter: FormatterCommand,
+  filePath: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const args = formatter.args.map(arg =>
+      arg === '$FILE' ? filePath : arg,
+    )
+    await execFileAsync(formatter.command, args, {
+      timeout: timeoutMs,
+      cwd: dirname(filePath),
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function formatFile(filePath: string, timeoutMs = 8000): Promise<void> {
   try {
     const formatter = detectFormatter(filePath)
     if (!formatter) return
 
-    // Replace $FILE placeholder with the actual path (quoted for safety)
-    const command = formatter.replace('$FILE', `"${filePath.replace(/"/g, '\\"')}"`)
-
-    await execFileAsync('/bin/sh', ['-c', command], {
-      timeout: timeoutMs,
-      cwd: dirname(filePath),
-    })
+    for (const candidate of formatter) {
+      if (await runFormatter(candidate, filePath, timeoutMs)) {
+        return
+      }
+    }
   } catch {
     // Silently ignore all formatting errors — formatting is best-effort
   }

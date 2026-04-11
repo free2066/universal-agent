@@ -30,7 +30,7 @@ import {
   writeFile,
 } from 'fs/promises'
 import { homedir } from 'os'
-import { basename, delimiter, dirname, join, resolve } from 'path'
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'path'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -56,6 +56,7 @@ import {
   writeFileLines,
 } from '../shellConfig.js'
 import { sleep } from '../sleep.js'
+import { containsPathTraversal } from '../path.js'
 import {
   getUserBinDir,
   getXDGCacheHome,
@@ -151,7 +152,30 @@ async function isPossibleClaudeBinary(filePath: string): Promise<boolean> {
   }
 }
 
+function assertSafeVersionPathSegment(version: string): string {
+  if (!version || isAbsolute(version) || containsPathTraversal(version)) {
+    throw new Error(`Invalid version string: ${version}`)
+  }
+  if (!/^[0-9A-Za-z][0-9A-Za-z.-]*$/.test(version)) {
+    throw new Error(`Invalid version string: ${version}`)
+  }
+  return version
+}
+
+function assertPathWithinBase(basePath: string, targetPath: string): void {
+  const resolvedBase = resolve(basePath)
+  const resolvedTarget = resolve(targetPath)
+  if (
+    resolvedTarget !== resolvedBase &&
+    !resolvedTarget.startsWith(`${resolvedBase}/`) &&
+    !resolvedTarget.startsWith(`${resolvedBase}\\`)
+  ) {
+    throw new Error(`Path escaped base directory: ${targetPath}`)
+  }
+}
+
 async function getVersionPaths(version: string) {
+  const safeVersion = assertSafeVersionPathSegment(version)
   const dirs = getBaseDirectories()
 
   // Create directories, but not the executable path (which is a file)
@@ -162,7 +186,7 @@ async function getVersionPaths(version: string) {
   const executableParentDir = dirname(dirs.executable)
   await mkdir(executableParentDir, { recursive: true })
 
-  const installPath = join(dirs.versions, version)
+  const installPath = join(dirs.versions, safeVersion)
 
   // Create an empty file if it doesn't exist
   try {
@@ -172,7 +196,7 @@ async function getVersionPaths(version: string) {
   }
 
   return {
-    stagingPath: join(dirs.staging, version),
+    stagingPath: join(dirs.staging, safeVersion),
     installPath,
   }
 }

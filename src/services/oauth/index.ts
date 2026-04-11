@@ -23,6 +23,7 @@ export class OAuthService {
   private codeVerifier: string
   private authCodeListener: AuthCodeListener | null = null
   private port: number | null = null
+  private expectedState: string | null = null
   private manualAuthCodeResolver: ((authorizationCode: string) => void) | null =
     null
 
@@ -139,16 +140,19 @@ export class OAuthService {
     return new Promise((resolve, reject) => {
       // Set up manual auth code resolver
       this.manualAuthCodeResolver = resolve
+      this.expectedState = state
 
       // Start automatic flow
       this.authCodeListener
         ?.waitForAuthorization(state, onReady)
         .then(authorizationCode => {
           this.manualAuthCodeResolver = null
+          this.expectedState = null
           resolve(authorizationCode)
         })
         .catch(error => {
           this.manualAuthCodeResolver = null
+          this.expectedState = null
           reject(error)
         })
     })
@@ -159,12 +163,17 @@ export class OAuthService {
     authorizationCode: string
     state: string
   }): void {
-    if (this.manualAuthCodeResolver) {
-      this.manualAuthCodeResolver(params.authorizationCode)
-      this.manualAuthCodeResolver = null
-      // Close the auth code listener since manual input was used
-      this.authCodeListener?.close()
+    if (!this.manualAuthCodeResolver) {
+      return
     }
+    if (!this.expectedState || params.state !== this.expectedState) {
+      return
+    }
+    this.manualAuthCodeResolver(params.authorizationCode)
+    this.manualAuthCodeResolver = null
+    this.expectedState = null
+    // Close the auth code listener since manual input was used
+    this.authCodeListener?.close()
   }
 
   private formatTokens(
@@ -195,5 +204,6 @@ export class OAuthService {
   cleanup(): void {
     this.authCodeListener?.close()
     this.manualAuthCodeResolver = null
+    this.expectedState = null
   }
 }

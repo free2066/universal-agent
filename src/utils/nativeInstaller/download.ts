@@ -11,7 +11,7 @@ import { feature } from 'bun:bundle'
 import axios from 'axios'
 import { createHash } from 'crypto'
 import { chmod, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { isAbsolute, join, resolve } from 'path'
 import { logEvent } from 'src/services/analytics/index.js'
 import type { ReleaseChannel } from '../config.js'
 import { logForDebugging } from '../debug.js'
@@ -110,11 +110,36 @@ export async function getLatestVersionFromBinaryRepo(
   }
 }
 
+function assertSafeVersionString(version: string): string {
+  if (!version || isAbsolute(version)) {
+    throw new Error(`Invalid version string: ${version}`)
+  }
+  if (version.includes('/') || version.includes('\\') || version.includes('..')) {
+    throw new Error(`Invalid version string: ${version}`)
+  }
+  if (!/^[0-9A-Za-z][0-9A-Za-z.-]*$/.test(version)) {
+    throw new Error(`Invalid version string: ${version}`)
+  }
+  return version
+}
+
+function assertPathWithinBase(basePath: string, targetPath: string): void {
+  const resolvedBase = resolve(basePath)
+  const resolvedTarget = resolve(targetPath)
+  if (
+    resolvedTarget !== resolvedBase &&
+    !resolvedTarget.startsWith(`${resolvedBase}/`) &&
+    !resolvedTarget.startsWith(`${resolvedBase}\\`)
+  ) {
+    throw new Error(`Path escaped base directory: ${targetPath}`)
+  }
+}
+
 export async function getLatestVersion(
   channelOrVersion: string,
 ): Promise<string> {
   // Direct version - match internal format too (e.g. 1.0.30-dev.shaf4937ce)
-  if (/^v?\d+\.\d+\.\d+(-\S+)?$/.test(channelOrVersion)) {
+  if (/^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(channelOrVersion)) {
     const normalized = channelOrVersion.startsWith('v')
       ? channelOrVersion.slice(1)
       : channelOrVersion
@@ -154,6 +179,8 @@ export async function downloadVersionFromArtifactory(
   stagingPath: string,
 ) {
   const fs = getFsImplementation()
+  const safeVersion = assertSafeVersionString(version)
+  assertPathWithinBase(resolve(stagingPath, '..'), stagingPath)
 
   // If we get here, we own the lock and can delete a partial download
   await fs.rm(stagingPath, { recursive: true, force: true })
@@ -164,7 +191,7 @@ export async function downloadVersionFromArtifactory(
 
   // Fetch integrity hash for the platform-specific package
   logForDebugging(
-    `Fetching integrity hash for ${platformPackageName}@${version}`,
+    `Fetching integrity hash for ${platformPackageName}@${safeVersion}`,
   )
   const {
     stdout: integrityOutput,
@@ -174,7 +201,7 @@ export async function downloadVersionFromArtifactory(
     'npm',
     [
       'view',
-      `${platformPackageName}@${version}`,
+      `${platformPackageName}@${safeVersion}`,
       'dist.integrity',
       '--registry',
       ARTIFACTORY_REGISTRY_URL,
@@ -192,7 +219,7 @@ export async function downloadVersionFromArtifactory(
   const integrity = integrityOutput.trim()
   if (!integrity) {
     throw new Error(
-      `Failed to fetch integrity hash for ${platformPackageName}@${version}`,
+      `Failed to fetch integrity hash for ${platformPackageName}@${safeVersion}`,
     )
   }
 
@@ -220,17 +247,17 @@ export async function downloadVersionFromArtifactory(
         name: 'claude-native-installer',
         version: '0.0.1',
         dependencies: {
-          [MACRO.NATIVE_PACKAGE_URL!]: version,
+          [MACRO.NATIVE_PACKAGE_URL!]: safeVersion,
         },
       },
       [`node_modules/${MACRO.NATIVE_PACKAGE_URL}`]: {
-        version: version,
+        version: safeVersion,
         optionalDependencies: {
-          [platformPackageName]: version,
+          [platformPackageName]: safeVersion,
         },
       },
       [`node_modules/${platformPackageName}`]: {
-        version: version,
+        version: safeVersion,
         integrity: integrity,
       },
     },
@@ -265,7 +292,7 @@ export async function downloadVersionFromArtifactory(
   }
 
   logForDebugging(
-    `Successfully downloaded and verified ${MACRO.NATIVE_PACKAGE_URL}@${version}`,
+    `Successfully downloaded and verified ${MACRO.NATIVE_PACKAGE_URL}@${safeVersion}`,
   )
 }
 
@@ -390,6 +417,8 @@ export async function downloadVersionFromBinaryRepo(
   },
 ) {
   const fs = getFsImplementation()
+  const safeVersion = assertSafeVersionString(version)
+  assertPathWithinBase(resolve(stagingPath, '..'), stagingPath)
 
   // If we get here, we own the lock and can delete a partial download
   await fs.rm(stagingPath, { recursive: true, force: true })
@@ -405,7 +434,7 @@ export async function downloadVersionFromBinaryRepo(
   let manifest
   try {
     const manifestResponse = await axios.get(
-      `${baseUrl}/${version}/manifest.json`,
+      `${baseUrl}/${safeVersion}/manifest.json`,
       {
         timeout: 10000,
         responseType: 'json',
@@ -428,7 +457,7 @@ export async function downloadVersionFromBinaryRepo(
     })
     logError(
       new Error(
-        `Failed to fetch manifest from ${baseUrl}/${version}/manifest.json: ${errorMessage}`,
+        `Failed to fetch manifest from ${baseUrl}/${safeVersion}/manifest.json: ${errorMessage}`,
       ),
     )
     throw error
@@ -439,7 +468,7 @@ export async function downloadVersionFromBinaryRepo(
   if (!platformInfo) {
     logEvent('tengu_binary_platform_not_found', {})
     throw new Error(
-      `Platform ${platform} not found in manifest for version ${version}`,
+      `Platform ${platform} not found in manifest for version ${safeVersion}`,
     )
   }
 
@@ -447,7 +476,7 @@ export async function downloadVersionFromBinaryRepo(
 
   // Both GCS and generic bucket use identical layout: ${baseUrl}/${version}/${platform}/${binaryName}
   const binaryName = getBinaryName(platform)
-  const binaryUrl = `${baseUrl}/${version}/${platform}/${binaryName}`
+  const binaryUrl = `${baseUrl}/${safeVersion}/${platform}/${binaryName}`
 
   // Write to staging
   await fs.mkdir(stagingPath)
@@ -494,6 +523,7 @@ export async function downloadVersion(
   // never exist in compiled binaries. Same gcloud-token pattern as
   // remoteSkillLoader.ts:175-195.
   if (feature('ALLOW_TEST_VERSIONS') && /^99\.99\./.test(version)) {
+    assertSafeVersionString(version)
     const { stdout } = await execFileNoThrowWithCwd('gcloud', [
       'auth',
       'print-access-token',

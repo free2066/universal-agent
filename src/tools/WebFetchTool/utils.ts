@@ -127,6 +127,27 @@ const MAX_REDIRECTS = 10
 
 // Truncate to not spend too many tokens
 export const MAX_MARKDOWN_LENGTH = 100_000
+const PRIVATE_HOST_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^0\.0\.0\.0$/,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^::1$/i,
+  /^fc[0-9a-f]{2}:/i,
+  /^fd[0-9a-f]{2}:/i,
+  /^fe80:/i,
+]
+
+function isPrivateHostname(hostname: string): boolean {
+  return PRIVATE_HOST_PATTERNS.some(pattern => pattern.test(hostname))
+}
+
+function isAllowedProtocol(protocol: string): boolean {
+  return protocol === 'http:' || protocol === 'https:'
+}
 
 export function isPreapprovedUrl(url: string): boolean {
   try {
@@ -149,7 +170,9 @@ export function validateURL(url: string): boolean {
     return false
   }
 
-  // We don't need to check protocol here, as we'll upgrade http to https when making the request
+  if (!isAllowedProtocol(parsed.protocol)) {
+    return false
+  }
 
   // As long as we aren't supporting aiming to cookies or internal domains,
   // we should block URLs with usernames/passwords too, even though these
@@ -162,6 +185,10 @@ export function validateURL(url: string): boolean {
   // by checking that the hostname is publicly resolvable
   const hostname = parsed.hostname
   const parts = hostname.split('.')
+  if (isPrivateHostname(hostname)) {
+    return false
+  }
+
   if (parts.length < 2) {
     return false
   }
@@ -295,7 +322,7 @@ export async function getWithPermittedRedirects(
       // Resolve relative URLs against the original URL
       const redirectUrl = new URL(redirectLocation, url).toString()
 
-      if (redirectChecker(url, redirectUrl)) {
+      if (redirectChecker(url, redirectUrl) && validateURL(redirectUrl)) {
         // Recursively follow the permitted redirect
         return getWithPermittedRedirects(
           redirectUrl,
@@ -373,6 +400,13 @@ export async function getURLMarkdownContent(
   try {
     parsedUrl = new URL(url)
 
+    if (!isAllowedProtocol(parsedUrl.protocol)) {
+      throw new Error('Invalid URL protocol')
+    }
+    if (isPrivateHostname(parsedUrl.hostname)) {
+      throw new Error('Refusing to fetch private or link-local addresses')
+    }
+
     // Upgrade http to https if needed
     if (parsedUrl.protocol === 'http:') {
       parsedUrl.protocol = 'https:'
@@ -412,7 +446,7 @@ export async function getURLMarkdownContent(
       // Expected user-facing failures - re-throw without logging as internal error
       throw e
     }
-    logError(e)
+    throw e
   }
 
   const response = await getWithPermittedRedirects(

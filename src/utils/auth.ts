@@ -462,6 +462,10 @@ let _apiKeyHelperInflight: {
 } | null = null
 let _apiKeyHelperEpoch = 0
 
+function getSafeCommandFailureMessage(commandName: string): string {
+  return `${commandName} failed. Check your local configuration and rerun with debug logging if needed.`
+}
+
 export function getApiKeyHelperElapsedMs(): number {
   const startedAt = _apiKeyHelperInflight?.startedAt
   return startedAt ? Date.now() - startedAt : 0
@@ -511,11 +515,10 @@ async function _runAndCache(
       _apiKeyHelperCache = { value, timestamp: Date.now() }
     }
     return value
-  } catch (e) {
-    if (epoch !== _apiKeyHelperEpoch) return ' '
-    const detail = e instanceof Error ? e.message : String(e)
+  } catch (_error) {
+    const detail = errorMessage(_error)
     // biome-ignore lint/suspicious/noConsole: user-configured script failed; must be visible without --debug
-    console.error(chalk.red(`apiKeyHelper failed: ${detail}`))
+    console.error(chalk.red(getSafeCommandFailureMessage('apiKeyHelper')))
     logForDebugging(`Error getting API key from apiKeyHelper: ${detail}`, {
       level: 'error',
     })
@@ -770,17 +773,16 @@ async function getAwsCredsFromCredentialExport(): Promise<{
         secretAccessKey: awsOutput.Credentials.SecretAccessKey,
         sessionToken: awsOutput.Credentials.SessionToken,
       }
-    } catch (e) {
-      const message = chalk.red(
-        'Error getting AWS credentials from awsCredentialExport (in settings or ~/.claude.json):',
+    } catch (error) {
+      const detail = errorMessage(error)
+      // biome-ignore lint/suspicious/noConsole:: intentional console output
+      console.error(
+        chalk.red(getSafeCommandFailureMessage('awsCredentialExport')),
       )
-      if (e instanceof Error) {
-        // biome-ignore lint/suspicious/noConsole:: intentional console output
-        console.error(message, e.message)
-      } else {
-        // biome-ignore lint/suspicious/noConsole:: intentional console output
-        console.error(message, e)
-      }
+      logForDebugging(
+        `Error getting AWS credentials from awsCredentialExport: ${detail}`,
+        { level: 'error' },
+      )
       return null
     }
   }
@@ -1845,10 +1847,14 @@ export function getOtelHeadersFromHelper(): Record<string, string> {
   } catch (error) {
     logError(
       new Error(
-        `Error getting OpenTelemetry headers from otelHeadersHelper (in settings): ${errorMessage(error)}`,
+        'Error getting OpenTelemetry headers from otelHeadersHelper (in settings). Check debug logs for details.',
       ),
     )
-    throw error
+    logForDebugging(
+      `Error getting OpenTelemetry headers from otelHeadersHelper: ${errorMessage(error)}`,
+      { level: 'error' },
+    )
+    throw new Error('otelHeadersHelper failed')
   }
 }
 

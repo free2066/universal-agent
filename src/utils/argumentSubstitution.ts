@@ -12,6 +12,13 @@
 
 import { tryParseShellCommand } from './bash/shellQuote.js'
 
+function escapeArgumentForPromptShell(arg: string): string {
+  if (arg.length === 0) {
+    return "''"
+  }
+  return `'${arg.replace(/'/g, `'"'"'`)}'`
+}
+
 /**
  * Parse an arguments string into an array of individual arguments.
  * Uses shell-quote for proper shell argument parsing including quoted strings.
@@ -96,6 +103,7 @@ export function substituteArguments(
   args: string | undefined,
   appendIfNoPlaceholder = true,
   argumentNames: string[] = [],
+  options?: { shellEscape?: boolean },
 ): string {
   // undefined/null means no args provided - return content unchanged
   // empty string is a valid input that should replace placeholders with empty
@@ -105,6 +113,10 @@ export function substituteArguments(
 
   const parsedArgs = parseArguments(args)
   const originalContent = content
+  const replacement = (value: string | undefined): string => {
+    const resolved = value ?? ''
+    return options?.shellEscape ? escapeArgumentForPromptShell(resolved) : resolved
+  }
 
   // Replace named arguments (e.g., $foo, $bar) with their values
   // Named arguments map to positions: argumentNames[0] -> parsedArgs[0], etc.
@@ -116,29 +128,30 @@ export function substituteArguments(
     // Also ensure we match word boundaries to avoid partial matches
     content = content.replace(
       new RegExp(`\\$${name}(?![\\[\\w])`, 'g'),
-      parsedArgs[i] ?? '',
+      replacement(parsedArgs[i]),
     )
   }
 
   // Replace indexed arguments ($ARGUMENTS[0], $ARGUMENTS[1], etc.)
   content = content.replace(/\$ARGUMENTS\[(\d+)\]/g, (_, indexStr: string) => {
     const index = parseInt(indexStr, 10)
-    return parsedArgs[index] ?? ''
+    return replacement(parsedArgs[index])
   })
 
   // Replace shorthand indexed arguments ($0, $1, etc.)
   content = content.replace(/\$(\d+)(?!\w)/g, (_, indexStr: string) => {
     const index = parseInt(indexStr, 10)
-    return parsedArgs[index] ?? ''
+    return replacement(parsedArgs[index])
   })
 
   // Replace $ARGUMENTS with the full arguments string
-  content = content.replaceAll('$ARGUMENTS', args)
+  content = content.replaceAll('$ARGUMENTS', replacement(args))
 
   // If no placeholders were found and appendIfNoPlaceholder is true, append
   // But only if args is non-empty (empty string means command invoked with no args)
   if (content === originalContent && appendIfNoPlaceholder && args) {
-    content = content + `\n\nARGUMENTS: ${args}`
+    const appendedArgs = options?.shellEscape ? replacement(args) : args
+    content = content + `\n\nARGUMENTS: ${appendedArgs}`
   }
 
   return content
