@@ -237,7 +237,7 @@ async function loadLogList(path: string): Promise<LogOption[]> {
     logError(new Error(`No logs found at ${path}`))
     return []
   }
-  const logData = await Promise.all(
+  const logData = await Promise.allSettled(
     files.map(async (file, i) => {
       const fullPath = join(path, file.name)
       const content = await readFile(fullPath, { encoding: 'utf8' })
@@ -276,8 +276,9 @@ async function loadLogList(path: string): Promise<LogOption[]> {
       }
     }),
   )
+  const fulfilled = logData.flatMap(r => r.status === 'fulfilled' ? [r.value] : [])
 
-  return sortLogs(logData.filter(_ => _ !== null)).map((_, i) => ({
+  return sortLogs(fulfilled.filter(_ => _ !== null)).map((_, i) => ({
     ..._,
     value: i,
   }))
@@ -285,6 +286,9 @@ async function loadLogList(path: string): Promise<LogOption[]> {
 
 function parseISOString(s: string): Date {
   const b = s.split(/\D+/)
+  if (b.length < 7) {
+    return new Date(s)
+  }
   return new Date(
     Date.UTC(
       parseInt(b[0]!, 10),

@@ -405,7 +405,8 @@ function maskModelCodename(baseName: string): string {
   return [masked, ...rest].join('-')
 }
 
-// UA: module-level cache for UA_EXTRA_MODELS to avoid hot-path JSON.parse on every render
+// UA: module-level cache for UA_EXTRA_MODELS to avoid hot-path JSON.parse on every render.
+// Intentionally never invalidated: env vars are read once at startup and treated as immutable.
 let _uaExtraModelsCache: Array<{ name: string; displayName: string }> | null | undefined = undefined
 function getUAExtraModels(): Array<{ name: string; displayName: string }> | null {
   if (_uaExtraModelsCache !== undefined) return _uaExtraModelsCache

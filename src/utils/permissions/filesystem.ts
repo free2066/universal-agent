@@ -89,7 +89,7 @@ export const DANGEROUS_DIRECTORIES = [
  * @returns The lowercase path for safe comparison
  */
 export function normalizeCaseForComparison(path: string): string {
-  return path.toLowerCase()
+  return getPlatform() === 'linux' ? path : path.toLowerCase()
 }
 
 /**

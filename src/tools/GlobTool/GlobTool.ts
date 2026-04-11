@@ -23,6 +23,8 @@ import {
   userFacingName,
 } from './UI.js'
 
+const GLOB_DEFAULT_MAX_RESULTS = 100
+
 const inputSchema = lazySchema(() =>
   z.strictObject({
     pattern: z.string().describe('The glob pattern to match files against'),
@@ -47,7 +49,7 @@ const outputSchema = lazySchema(() =>
       .describe('Array of file paths that match the pattern'),
     truncated: z
       .boolean()
-      .describe('Whether results were truncated (limited to 100 files)'),
+      .describe(`Whether results were truncated (limited to ${GLOB_DEFAULT_MAX_RESULTS} files)`),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -154,7 +156,7 @@ export const GlobTool = buildTool({
   async call(input, { abortController, getAppState, globLimits }) {
     const start = Date.now()
     const appState = getAppState()
-    const limit = globLimits?.maxResults ?? 100
+    const limit = globLimits?.maxResults ?? GLOB_DEFAULT_MAX_RESULTS
     const { files, truncated } = await glob(
       input.pattern,
       GlobTool.getPath(input),
