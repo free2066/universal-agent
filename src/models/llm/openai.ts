@@ -249,7 +249,10 @@ export class DeepSeekClient extends OpenAIClient {
   override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     const isReasoner = this.model.includes('reasoner') || this.model.includes('r1');
     if (isReasoner && options.thinkingLevel) {
-      return withInferenceTimeout(this.model, async (signal) => {
+      return withInferenceTimeout(this.model, async (inferSignal) => {
+        const signal = options.signal
+          ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([inferSignal, options.signal]) : inferSignal)
+          : inferSignal;
         const messages = this.convertMessages(options);
         const stream = (await this.client.chat.completions.create(
           {
@@ -258,6 +261,7 @@ export class DeepSeekClient extends OpenAIClient {
             stream: true,
           } as OpenAI.ChatCompletionCreateParamsStreaming,
           { signal },
+
         )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
         let textContent = '';
         const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
@@ -328,7 +332,10 @@ export class QwenClient extends OpenAIClient {
 
   override async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     if (this.isThinkingCapable() && options.thinkingLevel) {
-      return withInferenceTimeout(this.model, async (signal) => {
+      return withInferenceTimeout(this.model, async (inferSignal) => {
+        const signal = options.signal
+          ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([inferSignal, options.signal]) : inferSignal)
+          : inferSignal;
         const messages = this.convertMessages(options);
         const stream = (await this.client.chat.completions.create(
           {

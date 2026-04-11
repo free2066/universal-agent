@@ -30,13 +30,28 @@ const RECURRING_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 const DELAY_VERY_SLOW_OPERATIONS_THAT_HAPPEN_EVERY_SESSION = 10 * 60 * 1000
 
 export function startBackgroundHousekeeping(): void {
-  void initMagicDocs().catch(e => logForDebugging(`[housekeeping] initMagicDocs failed: ${e}`))
-  void initSkillImprovement().catch(e => logForDebugging(`[housekeeping] initSkillImprovement failed: ${e}`))
+  try {
+    initMagicDocs()
+  } catch (e) {
+    logForDebugging(`[housekeeping] initMagicDocs failed: ${e}`)
+  }
+  
+  try {
+    initSkillImprovement()
+  } catch (e) {
+    logForDebugging(`[housekeeping] initSkillImprovement failed: ${e}`)
+  }
+  
   if (feature('EXTRACT_MEMORIES')) {
     extractMemoriesModule?.initExtractMemories()
   }
   initAutoDream()
-  void autoUpdateMarketplacesAndPluginsInBackground().catch(e => logForDebugging(`[housekeeping] pluginAutoupdate failed: ${e}`))
+  
+  try {
+    autoUpdateMarketplacesAndPluginsInBackground()
+  } catch (e) {
+    logForDebugging(`[housekeeping] pluginAutoupdate failed: ${e}`)
+  }
   if (feature('LODESTONE') && getIsInteractive()) {
     void registerProtocolModule?.ensureDeepLinkProtocolRegistered()
   }
