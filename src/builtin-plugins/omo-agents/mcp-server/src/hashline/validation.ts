@@ -102,9 +102,9 @@ export function validateLineRefs(lines: string[], refs: string[]): void {
     let parsed: LineRef
     try {
       parsed = parseLineRef(ref)
-    } catch {
-      // Re-throw parse errors immediately
-      throw new Error(`Invalid LINE#ID "${ref}": ${String(ref)}`)
+    } catch (err) {
+      // Re-throw parse errors immediately — preserve original message for better LLM debugging
+      throw new Error(`Invalid LINE#ID "${ref}": ${(err as Error).message}`)
     }
 
     const { line, hash } = parsed

@@ -114,14 +114,12 @@ export function getContextWindowForModel(
   // UA: 从 UA_EXTRA_MODELS 读取自定义模型的 contextLength / inputLimit
   // UA_EXTRA_MODELS 是 bootstrap 阶段从 ~/.uagent/models.json 注入的
   // 格式: [{ name, displayName, contextLength, inputLimit? }]
+  // Use module-level cached parse (getUAExtraCtxModels) instead of JSON.parse on every call.
+  // Also: only use exact name match — split('/').pop() can mis-match openrouter model slugs.
   try {
-    const uaExtra = process.env.UA_EXTRA_MODELS
-    if (uaExtra) {
-      const extraProfiles: Array<{ name: string; displayName?: string; contextLength?: number; inputLimit?: number }> =
-        JSON.parse(uaExtra)
-      const match = extraProfiles.find(
-        p => p.name === model || p.name === model.split('/').pop(),
-      )
+    const extraProfiles = getUAExtraCtxModels()
+    if (extraProfiles) {
+      const match = extraProfiles.find(p => p.name === model)
       if (match) {
         // P2: prefer explicit inputLimit; fall back to contextLength
         const limit = match.inputLimit ?? match.contextLength

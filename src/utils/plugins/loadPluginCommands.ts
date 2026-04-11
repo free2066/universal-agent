@@ -680,9 +680,10 @@ export const getPluginCommands = memoize(async (): Promise<Command[]> => {
   // Inspired by oh-my-claudecode / oh-my-openagent direct-install UX.
   const commandNameSet = new Set(allCommands.map(c => c.name))
   const aliases: Command[] = []
-  for (const plugin of enabled) {
+    for (let _pluginIdx = 0; _pluginIdx < enabled.length; _pluginIdx++) {
+    const plugin = enabled[_pluginIdx]!
     if (plugin.manifest?.namespace !== false) continue
-    for (const cmd of perPluginCommands[enabled.indexOf(plugin)] ?? []) {
+    for (const cmd of perPluginCommands[_pluginIdx] ?? []) {
       // cmd.name is "pluginName:cmdName" or "ns:sub:cmd" — strip everything before the last ":" to get bare name
       const colonIdx = cmd.name.lastIndexOf(':')
       if (colonIdx < 0) continue

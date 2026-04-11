@@ -88,7 +88,9 @@ export function loadTaskRouterConfig(): TaskRouterConfig | null {
     _cachedConfig = parsed
     return parsed
   } catch (err) {
-    // Malformed config — disable routing gracefully
+    // Malformed config — disable routing gracefully, but warn so users know
+    // their budget caps (dailyCostLimitUSD etc.) are NOT active.
+    process.stderr.write(`[task-router] WARNING: Failed to parse config at ${configPath}: ${String(err)}\n`)
     _cachedConfig = null
     return null
   }

@@ -670,7 +670,18 @@ export const AgentTool = buildTool({
     // import from tools.ts (which would create a circular dependency).
     const workerPermissionContext = {
       ...appState.toolPermissionContext,
-      mode: selectedAgent.permissionMode ?? 'acceptEdits'
+      // ── UA: parent mode priority guard (mirror of resumeAgent.ts effectivePermMode logic)
+      // When parent is bypassPermissions or acceptEdits, child inherits parent mode;
+      // otherwise agent's own permissionMode (if set) takes effect.
+      mode: (() => {
+        const parentMode = appState.toolPermissionContext.mode
+        if (selectedAgent.permissionMode &&
+            parentMode !== 'bypassPermissions' &&
+            parentMode !== 'acceptEdits') {
+          return selectedAgent.permissionMode
+        }
+        return parentMode
+      })()
     };
     const workerTools = assembleToolPool(workerPermissionContext, appState.mcp.tools);
 

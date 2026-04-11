@@ -216,6 +216,12 @@ export function applyHashlineEditsWithReport(
         const startLine = parseLineRef(edit.pos).line
         if (edit.end) {
           const endLine = parseLineRef(edit.end).line
+          // Guard: end must be >= start; reject inverted ranges to prevent silent inserts
+          if (endLine < startLine) {
+            throw new Error(
+              `replace edit: end "${edit.end}" (line ${endLine}) must be >= pos "${edit.pos}" (line ${startLine})`,
+            )
+          }
           // Check noop: range matches newLines exactly
           const existing = lines.slice(startLine - 1, endLine)
           if (arraysEqual(existing, newLines)) {

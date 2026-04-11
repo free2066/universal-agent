@@ -21002,8 +21002,8 @@ function validateLineRefs(lines, refs) {
     let parsed;
     try {
       parsed = parseLineRef(ref);
-    } catch {
-      throw new Error(`Invalid LINE#ID "${ref}": ${String(ref)}`);
+    } catch (err) {
+      throw new Error(`Invalid LINE#ID "${ref}": ${err.message}`);
     }
     const { line, hash: hash2 } = parsed;
     if (line < 1 || line > lines.length) {
@@ -21149,6 +21149,11 @@ function applyHashlineEditsWithReport(content, edits) {
         const startLine = parseLineRef(edit.pos).line;
         if (edit.end) {
           const endLine = parseLineRef(edit.end).line;
+          if (endLine < startLine) {
+            throw new Error(
+              `replace edit: end "${edit.end}" (line ${endLine}) must be >= pos "${edit.pos}" (line ${startLine})`
+            );
+          }
           const existing = lines.slice(startLine - 1, endLine);
           if (arraysEqual(existing, newLines)) {
             noopEdits.push(edit);

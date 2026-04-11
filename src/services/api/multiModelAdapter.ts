@@ -670,11 +670,22 @@ export class MultiModelAnthropicAdapter {
         : undefined
 
       if (nextModel) {
-        uaLogAsync(`[UA:fallback] ⚠️ ${this.modelName} failed → trying fallback: ${nextModel}`)
-        process.stderr.write(`[UA:fallback] Switching to fallback model: ${nextModel}\n`)
-        triedModels.add(nextModel)
-        const fallbackAdapter = new MultiModelAnthropicAdapter(nextModel)
-        return fallbackAdapter._callModel(params, { ...options, _triedModels: triedModels }, 0)
+        // ── Fallback depth guard: prevent runaway A→B→A cycles when Set is broken
+        const MAX_FALLBACK_DEPTH = 5
+        if ((options?._fallbackDepth ?? 0) >= MAX_FALLBACK_DEPTH) {
+          uaLogAsync(`[UA:fallback] ⚠️ fallback depth exceeded (${MAX_FALLBACK_DEPTH}) — giving up`)
+          process.stderr.write(`[UA:fallback] Max fallback depth (${MAX_FALLBACK_DEPTH}) exceeded, aborting\n`)
+        } else {
+          uaLogAsync(`[UA:fallback] ⚠️ ${this.modelName} failed → trying fallback: ${nextModel}`)
+          process.stderr.write(`[UA:fallback] Switching to fallback model: ${nextModel}\n`)
+          triedModels.add(nextModel)
+          const fallbackAdapter = new MultiModelAnthropicAdapter(nextModel)
+          return fallbackAdapter._callModel(
+            params,
+            { ...options, _triedModels: triedModels, _fallbackDepth: (options?._fallbackDepth ?? 0) + 1 },
+            0,
+          )
+        }
       }
       // ── /UA Fallback Chain ─────────────────────────────────────────────────
 
