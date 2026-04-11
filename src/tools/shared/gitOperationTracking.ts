@@ -13,6 +13,7 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from '../../services/analytics/index.js'
+import { logForDebugging } from '../../utils/debug.js'
 
 /**
  * Build a regex that matches `git <subcmd>` while tolerating git's global
