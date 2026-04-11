@@ -57,6 +57,7 @@ export function startAgentSummarization(
   let summaryAbortController: AbortController | null = null
   let timeoutId: ReturnType<typeof setTimeout> | null = null
   let stopped = false
+  let started = false
   let previousSummary: string | null = null
 
   async function runSummary(): Promise<void> {
@@ -158,6 +159,13 @@ export function startAgentSummarization(
   function scheduleNext(): void {
     if (stopped) return
     timeoutId = setTimeout(runSummary, SUMMARY_INTERVAL_MS)
+    timeoutId.unref?.()
+  }
+
+  function start(): void {
+    if (started || stopped) return
+    started = true
+    scheduleNext()
   }
 
   function stop(): void {
@@ -174,7 +182,7 @@ export function startAgentSummarization(
   }
 
   // Start the first timer
-  scheduleNext()
+  start()
 
   return { stop }
 }

@@ -61,14 +61,37 @@ export function createLSPServerManager(): LSPServerManager {
   // Private state managed via closures
   const servers: Map<string, LSPServerInstance> = new Map()
   const extensionMap: Map<string, string[]> = new Map()
-  // Track which files have been opened on which servers (URI -> server name)
-  const openedFiles: Map<string, string> = new Map()
+  type OpenedFileState = {
+    serverName: string
+    serverStartTime: number | undefined
+  }
 
-  /**
-   * Initialize the manager by loading all configured LSP servers.
-   *
-   * @throws {Error} If configuration loading fails
-   */
+  // Track which files have been opened on which server session (URI -> state)
+  const openedFiles: Map<string, OpenedFileState> = new Map()
+  // Track LSP document versions per server+URI so didChange notifications
+  // advance monotonically instead of reusing version 1 forever.
+  const documentVersions: Map<string, number> = new Map()
+
+  function getDocumentKey(serverName: string, fileUri: string): string {
+    return `${serverName}:${fileUri}`
+  }
+
+  function getServerStartTime(server: LSPServerInstance): number | undefined {
+    return server.startTime?.getTime()
+  }
+
+  function isFileOpenOnCurrentServer(
+    fileUri: string,
+    server: LSPServerInstance,
+  ): boolean {
+    const opened = openedFiles.get(fileUri)
+    return (
+      opened?.serverName === server.name &&
+      opened.serverStartTime === getServerStartTime(server)
+    )
+  }
+
+
   async function initialize(): Promise<void> {
     let serverConfigs: Record<string, ScopedLspServerConfig>
 
@@ -167,6 +190,7 @@ export function createLSPServerManager(): LSPServerManager {
     servers.clear()
     extensionMap.clear()
     openedFiles.clear()
+    documentVersions.clear()
 
     const errors = results
       .map((r, i) =>
@@ -219,7 +243,7 @@ export function createLSPServerManager(): LSPServerManager {
     const server = getServerForFile(filePath)
     if (!server) return undefined
 
-    if (server.state === 'stopped' || server.state === 'error') {
+    if (server.state !== 'running') {
       try {
         await server.start()
       } catch (error) {
@@ -275,7 +299,7 @@ export function createLSPServerManager(): LSPServerManager {
     const fileUri = pathToFileURL(path.resolve(filePath)).href
 
     // Skip if already opened on this server
-    if (openedFiles.get(fileUri) === server.name) {
+    if (isFileOpenOnCurrentServer(fileUri, server)) {
       logForDebugging(
         `LSP: File already open, skipping didOpen for ${filePath}`,
       )
@@ -286,17 +310,24 @@ export function createLSPServerManager(): LSPServerManager {
     const ext = path.extname(filePath).toLowerCase()
     const languageId = server.config.extensionToLanguage[ext] || 'plaintext'
 
+    const documentKey = getDocumentKey(server.name, fileUri)
+
     try {
+      const version = 1
       await server.sendNotification('textDocument/didOpen', {
         textDocument: {
           uri: fileUri,
           languageId,
-          version: 1,
+          version,
           text: content,
         },
       })
       // Track that this file is now open on this server
-      openedFiles.set(fileUri, server.name)
+      openedFiles.set(fileUri, {
+        serverName: server.name,
+        serverStartTime: getServerStartTime(server),
+      })
+      documentVersions.set(documentKey, version)
       logForDebugging(
         `LSP: Sent didOpen for ${filePath} (languageId: ${languageId})`,
       )
@@ -320,18 +351,22 @@ export function createLSPServerManager(): LSPServerManager {
 
     // If file hasn't been opened on this server yet, open it first
     // LSP servers require didOpen before didChange
-    if (openedFiles.get(fileUri) !== server.name) {
+    if (!isFileOpenOnCurrentServer(fileUri, server)) {
       return openFile(filePath, content)
     }
 
+    const documentKey = getDocumentKey(server.name, fileUri)
+
     try {
+      const version = (documentVersions.get(documentKey) ?? 1) + 1
       await server.sendNotification('textDocument/didChange', {
         textDocument: {
           uri: fileUri,
-          version: 1,
+          version,
         },
         contentChanges: [{ text: content }],
       })
+      documentVersions.set(documentKey, version)
       logForDebugging(`LSP: Sent didChange for ${filePath}`)
     } catch (error) {
       const err = new Error(
@@ -389,6 +424,7 @@ export function createLSPServerManager(): LSPServerManager {
       })
       // Remove from tracking so file can be reopened later
       openedFiles.delete(fileUri)
+      documentVersions.delete(getDocumentKey(server.name, fileUri))
       logForDebugging(`LSP: Sent didClose for ${filePath}`)
     } catch (error) {
       const err = new Error(
@@ -402,7 +438,11 @@ export function createLSPServerManager(): LSPServerManager {
 
   function isFileOpen(filePath: string): boolean {
     const fileUri = pathToFileURL(path.resolve(filePath)).href
-    return openedFiles.has(fileUri)
+    const server = getServerForFile(filePath)
+    if (!server) {
+      return false
+    }
+    return isFileOpenOnCurrentServer(fileUri, server)
   }
 
   return {

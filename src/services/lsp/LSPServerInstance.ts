@@ -116,6 +116,7 @@ export function createLSPServerInstance(
   let lastError: Error | undefined
   let restartCount = 0
   let crashRecoveryCount = 0
+  let startPromise: Promise<void> | undefined
   // Propagate crash state so ensureServerStarted can restart on next use.
   // Without this, state stays 'running' after crash and the server is never
   // restarted (zombie state).
@@ -134,143 +135,163 @@ export function createLSPServerInstance(
    * @throws {Error} If server fails to start or initialize
    */
   async function start(): Promise<void> {
-    if (state === 'running' || state === 'starting') {
+    if (state === 'running') {
       return
     }
-
-    // Cap crash-recovery attempts so a persistently crashing server doesn't
-    // spawn unbounded child processes on every incoming request.
-    const maxRestarts = config.maxRestarts ?? 3
-    if (state === 'error' && crashRecoveryCount > maxRestarts) {
-      const error = new Error(
-        `LSP server '${name}' exceeded max crash recovery attempts (${maxRestarts})`,
-      )
-      lastError = error
-      logError(error)
-      throw error
+    if (startPromise) {
+      return startPromise
+    }
+    if (state === 'stopping') {
+      throw new Error(`LSP server '${name}' is stopping`)
     }
 
-    let initPromise: Promise<unknown> | undefined
-    try {
-      state = 'starting'
-      logForDebugging(`Starting LSP server instance: ${name}`)
+    startPromise = (async () => {
+      // Cap crash-recovery attempts so a persistently crashing server doesn't
+      // spawn unbounded child processes on every incoming request.
+      const maxRestarts = config.maxRestarts ?? 3
+      if (state === 'error' && crashRecoveryCount > maxRestarts) {
+        const error = new Error(
+          `LSP server '${name}' exceeded max crash recovery attempts (${maxRestarts})`,
+        )
+        lastError = error
+        logError(error)
+        throw error
+      }
 
-      // Start the client
-      await client.start(config.command, config.args || [], {
-        env: config.env,
-        cwd: config.workspaceFolder,
-      })
+      let initPromise: Promise<unknown> | undefined
+      try {
+        state = 'starting'
+        logForDebugging(`Starting LSP server instance: ${name}`)
 
-      // Initialize with workspace info
-      const workspaceFolder = config.workspaceFolder || getCwd()
-      const workspaceUri = pathToFileURL(workspaceFolder).href
+        // Start the client
+        await client.start(config.command, config.args || [], {
+          env: config.env,
+          cwd: config.workspaceFolder,
+        })
 
-      const initParams: InitializeParams = {
-        processId: process.pid,
+        // Initialize with workspace info
+        const workspaceFolder = config.workspaceFolder || getCwd()
+        const workspaceUri = pathToFileURL(workspaceFolder).href
 
-        // Pass server-specific initialization options from plugin config
-        // Required by vue-language-server, optional for others
-        // Provide empty object as default to avoid undefined errors in servers
-        // that expect this field to exist
-        initializationOptions: config.initializationOptions ?? {},
+        const initParams: InitializeParams = {
+          processId: process.pid,
 
-        // Modern approach (LSP 3.16+) - required for Pyright, gopls
-        workspaceFolders: [
-          {
-            uri: workspaceUri,
-            name: path.basename(workspaceFolder),
-          },
-        ],
+          // Pass server-specific initialization options from plugin config
+          // Required by vue-language-server, optional for others
+          // Provide empty object as default to avoid undefined errors in servers
+          // that expect this field to exist
+          initializationOptions: config.initializationOptions ?? {},
 
-        // Deprecated fields - some servers still need these for proper URI resolution
-        rootPath: workspaceFolder, // Deprecated in LSP 3.8 but needed by some servers
-        rootUri: workspaceUri, // Deprecated in LSP 3.16 but needed by typescript-language-server for goToDefinition
-
-        // Client capabilities - declare what features we support
-        capabilities: {
-          workspace: {
-            // Don't claim to support workspace/configuration since we don't implement it
-            // This prevents servers from requesting config we can't provide
-            configuration: false,
-            // Don't claim to support workspace folders changes since we don't handle
-            // workspace/didChangeWorkspaceFolders notifications
-            workspaceFolders: false,
-          },
-          textDocument: {
-            synchronization: {
-              dynamicRegistration: false,
-              willSave: false,
-              willSaveWaitUntil: false,
-              didSave: true,
+          // Modern approach (LSP 3.16+) - required for Pyright, gopls
+          workspaceFolders: [
+            {
+              uri: workspaceUri,
+              name: path.basename(workspaceFolder),
             },
-            publishDiagnostics: {
-              relatedInformation: true,
-              tagSupport: {
-                valueSet: [1, 2], // Unnecessary (1), Deprecated (2)
+          ],
+
+          // Deprecated fields - some servers still need these for proper URI resolution
+          rootPath: workspaceFolder, // Deprecated in LSP 3.8 but needed by some servers
+          rootUri: workspaceUri, // Deprecated in LSP 3.16 but needed by typescript-language-server for goToDefinition
+
+          // Client capabilities - declare what features we support
+          capabilities: {
+            workspace: {
+              // Don't claim to support workspace/configuration since we don't implement it
+              // This prevents servers from requesting config we can't provide
+              configuration: false,
+              // Don't claim to support workspace folders changes since we don't handle
+              // workspace/didChangeWorkspaceFolders notifications
+              workspaceFolders: false,
+            },
+            textDocument: {
+              synchronization: {
+                dynamicRegistration: false,
+                willSave: false,
+                willSaveWaitUntil: false,
+                didSave: true,
               },
-              versionSupport: false,
-              codeDescriptionSupport: true,
-              dataSupport: false,
+              publishDiagnostics: {
+                relatedInformation: true,
+                tagSupport: {
+                  valueSet: [1, 2], // Unnecessary (1), Deprecated (2)
+                },
+                versionSupport: false,
+                codeDescriptionSupport: true,
+                dataSupport: false,
+              },
+              hover: {
+                dynamicRegistration: false,
+                contentFormat: ['markdown', 'plaintext'],
+              },
+              definition: {
+                dynamicRegistration: false,
+                linkSupport: true,
+              },
+              references: {
+                dynamicRegistration: false,
+              },
+              documentSymbol: {
+                dynamicRegistration: false,
+                hierarchicalDocumentSymbolSupport: true,
+              },
+              callHierarchy: {
+                dynamicRegistration: false,
+              },
             },
-            hover: {
-              dynamicRegistration: false,
-              contentFormat: ['markdown', 'plaintext'],
-            },
-            definition: {
-              dynamicRegistration: false,
-              linkSupport: true,
-            },
-            references: {
-              dynamicRegistration: false,
-            },
-            documentSymbol: {
-              dynamicRegistration: false,
-              hierarchicalDocumentSymbolSupport: true,
-            },
-            callHierarchy: {
-              dynamicRegistration: false,
+            general: {
+              positionEncodings: ['utf-16'],
             },
           },
-          general: {
-            positionEncodings: ['utf-16'],
-          },
-        },
-      }
+        }
 
-      initPromise = client.initialize(initParams)
-      if (config.startupTimeout !== undefined) {
-        await withTimeout(
-          initPromise,
-          config.startupTimeout,
-          `LSP server '${name}' timed out after ${config.startupTimeout}ms during initialization`,
-        )
-      } else {
-        await initPromise
-      }
+        initPromise = client.initialize(initParams)
+        if (config.startupTimeout !== undefined) {
+          await withTimeout(
+            initPromise,
+            config.startupTimeout,
+            `LSP server '${name}' timed out after ${config.startupTimeout}ms during initialization`,
+          )
+        } else {
+          await initPromise
+        }
 
-      state = 'running'
-      startTime = new Date()
-      crashRecoveryCount = 0
-      logForDebugging(`LSP server instance started: ${name}`)
-    } catch (error) {
-      // Clean up the spawned child process on timeout/error
-      client.stop().catch(stopError => {
-        logForDebugging(
-          `LSP server '${name}' cleanup after failed start also failed: ${errorMessage(stopError)}`,
-          { level: 'warn' },
-        )
-      })
-      // Prevent unhandled rejection from abandoned initialize promise
-      initPromise?.catch(initError => {
-        logForDebugging(
-          `LSP server '${name}' initialize promise rejected after start failure: ${errorMessage(initError)}`,
-          { level: 'warn' },
-        )
-      })
-      state = 'error'
-      lastError = error as Error
-      logError(error)
-      throw error
+        state = 'running'
+        startTime = new Date()
+        crashRecoveryCount = 0
+        logForDebugging(`LSP server instance started: ${name}`)
+      } catch (error) {
+        // Prevent unhandled rejection from abandoned initialize promise before
+        // awaiting cleanup, since a timeout can make initialize reject later.
+        initPromise?.catch(initError => {
+          logForDebugging(
+            `LSP server '${name}' initialize promise rejected after start failure: ${errorMessage(initError)}`,
+            { level: 'warn' },
+          )
+        })
+
+        // Clean up the spawned child process before allowing a subsequent start
+        // to proceed, otherwise the old cleanup can tear down a freshly started
+        // client by mutating the shared LSPClient process/connection fields.
+        try {
+          await client.stop()
+        } catch (stopError) {
+          logForDebugging(
+            `LSP server '${name}' cleanup after failed start also failed: ${errorMessage(stopError)}`,
+            { level: 'warn' },
+          )
+        }
+        state = 'error'
+        lastError = error as Error
+        logError(error)
+        throw error
+      }
+    })()
+
+    try {
+      await startPromise
+    } finally {
+      startPromise = undefined
     }
   }
 

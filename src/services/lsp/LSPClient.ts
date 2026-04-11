@@ -66,12 +66,13 @@ export function createLSPClient(
     | ((code: number | null, signal: NodeJS.Signals | null) => void)
     | undefined
   let stdinErrorHandler: ((error: Error) => void) | undefined
-  // Queue handlers registered before connection ready (lazy initialization support)
-  const pendingHandlers: Array<{
+  // Persist handlers so they can be rebound after connection restarts.
+  // This also covers registration before the first connection is ready.
+  const notificationHandlers: Array<{
     method: string
     handler: (params: unknown) => void
   }> = []
-  const pendingRequestHandlers: Array<{
+  const requestHandlers: Array<{
     method: string
     handler: (params: unknown) => unknown | Promise<unknown>
   }> = []
@@ -235,23 +236,19 @@ export function createLSPClient(
             )
           })
 
-        // 4. Apply any queued notification handlers
-        for (const { method, handler } of pendingHandlers) {
+        // 4. Rebind registered notification handlers for this connection
+        for (const { method, handler } of notificationHandlers) {
           connection.onNotification(method, handler)
           logForDebugging(
-            `Applied queued notification handler for ${serverName}.${method}`,
+            `Bound notification handler for ${serverName}.${method}`,
           )
         }
-        pendingHandlers.length = 0 // Clear the queue
 
-        // 5. Apply any queued request handlers
-        for (const { method, handler } of pendingRequestHandlers) {
+        // 5. Rebind registered request handlers for this connection
+        for (const { method, handler } of requestHandlers) {
           connection.onRequest(method, handler)
-          logForDebugging(
-            `Applied queued request handler for ${serverName}.${method}`,
-          )
+          logForDebugging(`Bound request handler for ${serverName}.${method}`)
         }
-        pendingRequestHandlers.length = 0 // Clear the queue
 
         logForDebugging(`LSP client started for ${serverName}`)
       } catch (error) {
@@ -345,11 +342,11 @@ export function createLSPClient(
     },
 
     onNotification(method: string, handler: (params: unknown) => void): void {
+      notificationHandlers.push({ method, handler })
+
       if (!connection) {
-        // Queue handler for application when connection is ready (lazy initialization)
-        pendingHandlers.push({ method, handler })
         logForDebugging(
-          `Queued notification handler for ${serverName}.${method} (connection not ready)`,
+          `Registered notification handler for ${serverName}.${method} (connection not ready)`,
         )
         return
       }
@@ -357,20 +354,21 @@ export function createLSPClient(
       checkStartFailed()
 
       connection.onNotification(method, handler)
+      logForDebugging(`Bound notification handler for ${serverName}.${method}`)
     },
 
     onRequest<TParams, TResult>(
       method: string,
       handler: (params: TParams) => TResult | Promise<TResult>,
     ): void {
+      requestHandlers.push({
+        method,
+        handler: handler as (params: unknown) => unknown | Promise<unknown>,
+      })
+
       if (!connection) {
-        // Queue handler for application when connection is ready (lazy initialization)
-        pendingRequestHandlers.push({
-          method,
-          handler: handler as (params: unknown) => unknown | Promise<unknown>,
-        })
         logForDebugging(
-          `Queued request handler for ${serverName}.${method} (connection not ready)`,
+          `Registered request handler for ${serverName}.${method} (connection not ready)`,
         )
         return
       }
@@ -378,6 +376,7 @@ export function createLSPClient(
       checkStartFailed()
 
       connection.onRequest(method, handler)
+      logForDebugging(`Bound request handler for ${serverName}.${method}`)
     },
 
     async stop(): Promise<void> {
