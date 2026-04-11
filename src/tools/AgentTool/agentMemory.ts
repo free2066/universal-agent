@@ -6,6 +6,7 @@ import {
 } from '../../memdir/memdir.js'
 import { getMemoryBaseDir } from '../../memdir/paths.js'
 import { getCwd } from '../../utils/cwd.js'
+import { logForDebugging } from '../../utils/debug.js'
 import { findCanonicalGitRoot } from '../../utils/git.js'
 import { sanitizePath } from '../../utils/path.js'
 
@@ -162,7 +163,9 @@ export function loadAgentMemoryPrompt(
   // so it cannot be async). The spawned agent won't try to Write until after
   // a full API round-trip, by which time mkdir will have completed. Even if
   // it hasn't, FileWriteTool does its own mkdir of the parent directory.
-  void ensureMemoryDirExists(memoryDir)
+  void ensureMemoryDirExists(memoryDir).catch(err =>
+    logForDebugging(`[agentMemory] ensureMemoryDirExists failed for ${memoryDir}: ${err}`),
+  )
 
   const coworkExtraGuidelines =
     process.env.CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES

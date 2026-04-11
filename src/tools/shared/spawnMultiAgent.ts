@@ -826,7 +826,9 @@ function registerOutOfProcessTeammateTask(
     'abort',
     () => {
       if (isPaneBackend(backendType)) {
-        void getBackendByType(backendType).killPane(paneId, !insideTmux)
+        void getBackendByType(backendType).killPane(paneId, !insideTmux).catch(err =>
+          logForDebugging(`[spawnMultiAgent] killPane failed for paneId ${paneId}: ${err}`),
+        )
       }
     },
     { once: true },

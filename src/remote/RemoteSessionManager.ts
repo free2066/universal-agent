@@ -138,7 +138,10 @@ export class RemoteSessionManager {
       wsCallbacks,
     )
 
-    void this.websocket.connect()
+    void this.websocket.connect().catch(err => {
+      logError(err)
+      this.callbacks.onError?.(err instanceof Error ? err : new Error(String(err)))
+    })
   }
 
   /**
@@ -309,6 +312,10 @@ export class RemoteSessionManager {
    */
   disconnect(): void {
     logForDebugging('[RemoteSessionManager] Disconnecting')
+    // Notify all pending permission request waiters before clearing
+    for (const [requestId, req] of this.pendingPermissionRequests) {
+      this.callbacks.onPermissionCancelled?.(requestId, req.tool_use_id)
+    }
     this.websocket?.close()
     this.websocket = null
     this.pendingPermissionRequests.clear()

@@ -207,7 +207,7 @@ export async function initEnvLessBridgeCore(
       accessToken,
       orgUUID,
       cfg.http_timeout_ms,
-    )
+    ).catch(err => logForDebugging(`[remote-bridge] archiveSession failed: ${errorMessage(err)}`))
     return null
   }
   logForDebugging(
@@ -248,7 +248,7 @@ export async function initEnvLessBridgeCore(
       accessToken,
       orgUUID,
       cfg.http_timeout_ms,
-    )
+    ).catch(err => logForDebugging(`[remote-bridge] archiveSession failed: ${errorMessage(err)}`))
     return null
   }
   logForDebugging(

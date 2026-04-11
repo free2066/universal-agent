@@ -873,7 +873,9 @@ export async function initBridgeCore(
   // callbacks that run after assignment, so the reference is always valid.
   let doTeardownImpl: (() => Promise<void>) | null = null
   function triggerTeardown(): void {
-    void doTeardownImpl?.()
+    void doTeardownImpl?.()?.catch(err =>
+      logForDebugging(`[bridge:repl] triggerTeardown failed: ${errorMessage(err)}`, { level: 'error' }),
+    )
   }
 
   /**
@@ -963,7 +965,9 @@ export async function initBridgeCore(
       })
       onStateChange?.('failed', 'reconnection failed')
       triggerTeardown()
-    })
+    }).catch(err =>
+      logForDebugging(`[bridge:repl] reconnectEnvironmentWithSession failed: ${errorMessage(err)}`),
+    )
   }
 
   // Ant-only: SIGUSR2 → force doReconnect() for manual testing. Skips the
@@ -975,7 +979,9 @@ export async function initBridgeCore(
       logForDebugging(
         '[bridge:repl] SIGUSR2 received — forcing doReconnect() for testing',
       )
-      void reconnectEnvironmentWithSession()
+      void reconnectEnvironmentWithSession().catch(err =>
+        logForDebugging(`[bridge:repl] SIGUSR2 reconnect failed: ${errorMessage(err)}`),
+      )
     }
     process.on('SIGUSR2', sigusr2Handler)
   }
@@ -997,9 +1003,10 @@ export async function initBridgeCore(
       },
       forceReconnect: () => {
         logForDebugging('[bridge:debug] forceReconnect — injecting')
-        void reconnectEnvironmentWithSession()
+        void reconnectEnvironmentWithSession().catch(err =>
+          logForDebugging(`[bridge:repl] forceReconnect failed: ${errorMessage(err)}`),
+        )
       },
-      injectFault: injectBridgeFault,
       wakePollLoop,
       describe: () =>
         `env=${environmentId} session=${currentSessionId} transport=${transport?.getStateLabel() ?? 'null'} workId=${currentWorkId ?? 'null'}`,
@@ -1626,7 +1633,9 @@ export async function initBridgeCore(
     transport = null
     flushGate.drop()
     if (teardownTransport) {
-      void teardownTransport.write(makeResultMessage(currentSessionId))
+      void teardownTransport.write(makeResultMessage(currentSessionId)).catch(err =>
+        logForDebugging(`[bridge:repl] Teardown result write failed: ${errorMessage(err)}`),
+      )
     }
 
     const stopWorkP = currentWorkId

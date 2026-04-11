@@ -229,21 +229,21 @@ export function trackGitOperations(
       const prInfo = findPrInStdout(stdout)
       if (prInfo) {
         // Import is done dynamically to avoid circular dependency
-        void import('../../utils/sessionStorage.js').then(
-          ({ linkSessionToPR }) => {
-            void import('../../bootstrap/state.js').then(({ getSessionId }) => {
+        void import('../../utils/sessionStorage.js')
+          .then(({ linkSessionToPR }) =>
+            import('../../bootstrap/state.js').then(({ getSessionId }) => {
               const sessionId = getSessionId()
               if (sessionId) {
-                void linkSessionToPR(
+                return linkSessionToPR(
                   sessionId as `${string}-${string}-${string}-${string}-${string}`,
                   prInfo.prNumber,
                   prInfo.prUrl,
                   prInfo.prRepository,
                 )
               }
-            })
-          },
-        )
+            }),
+          )
+          .catch(err => logForDebugging(`[git] linkSessionToPR failed: ${err}`))
       }
     }
   }

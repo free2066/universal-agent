@@ -41,6 +41,7 @@ import { isOutputLineTruncated } from '../../utils/terminal.js';
 import { buildLargeToolResultMessage, ensureToolResultsDir, generatePreview, getToolResultPath, PREVIEW_SIZE_BYTES } from '../../utils/toolResultStorage.js';
 import { userFacingName as fileEditUserFacingName } from '../FileEditTool/UI.js';
 import { trackGitOperations } from '../shared/gitOperationTracking.js';
+import { logForDebugging } from '../../utils/debug.js';
 import { bashToolHasPermission, commandHasAnyCd, matchWildcardPattern, permissionRuleExtractPrefix } from './bashPermissions.js';
 import { interpretCommandResult } from './commandSemantics.js';
 import { getDefaultTimeoutMs, getMaxTimeoutMs, getSimplePrompt } from './prompt.js';
@@ -959,6 +960,14 @@ async function* runShellCommand({
       });
       if (backgroundFn) {
         backgroundFn(shellId);
+      }
+    }).catch(err => {
+      logForDebugging(`[BashTool] spawnBackgroundTask failed: ${err}`);
+      // Ensure progress resolve fires to prevent generator deadlock
+      const resolve = resolveProgress;
+      if (resolve) {
+        resolveProgress = null;
+        resolve();
       }
     });
   }

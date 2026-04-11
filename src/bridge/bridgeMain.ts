@@ -317,7 +317,7 @@ export async function runBridgeLoop(
   const pendingCleanups = new Set<Promise<unknown>>()
   function trackCleanup(p: Promise<unknown>): void {
     pendingCleanups.add(p)
-    void p.finally(() => pendingCleanups.delete(p))
+    p.catch(() => {}).finally(() => pendingCleanups.delete(p))
   }
   let connBackoff = 0
   let generalBackoff = 0
@@ -396,7 +396,9 @@ export async function runBridgeLoop(
     // turns — the CLI emitted its result but the process stays alive waiting
     // for the next user message.  Skip updating so the status line keeps
     // whatever state it had (Attached / session title).
-    const [sessionId, handle] = [...activeSessions.entries()].pop()!
+    const last = [...activeSessions.entries()].pop()
+    if (!last) return
+    const [sessionId, handle] = last
     const startTime = sessionStartTimes.get(sessionId)
     if (!startTime) return
 

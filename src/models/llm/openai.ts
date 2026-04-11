@@ -132,12 +132,15 @@ export class OpenAIClient implements LLMClient {
             if (!toolCallMap.has(tc.index)) {
               toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
             } else {
-              const entry = toolCallMap.get(tc.index)!;
-              if (tc.id) entry.id = tc.id;
-              if (tc.function?.name) entry.name = tc.function.name;
+              const entry = toolCallMap.get(tc.index);
+              if (entry) {
+                if (tc.id) entry.id = tc.id;
+                if (tc.function?.name) entry.name = tc.function.name;
+              }
             }
             if (tc.function?.arguments) {
-              toolCallMap.get(tc.index)!.args += tc.function.arguments;
+              const e = toolCallMap.get(tc.index);
+              if (e) e.args += tc.function.arguments;
             }
           }
         }
@@ -266,11 +269,16 @@ export class DeepSeekClient extends OpenAIClient {
               if (!toolCallMap.has(tc.index)) {
                 toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
               } else {
-                const entry = toolCallMap.get(tc.index)!;
-                if (tc.id) entry.id = tc.id;
-                if (tc.function?.name) entry.name = tc.function.name;
+                const entry = toolCallMap.get(tc.index);
+                if (entry) {
+                  if (tc.id) entry.id = tc.id;
+                  if (tc.function?.name) entry.name = tc.function.name;
+                }
               }
-              if (tc.function?.arguments) toolCallMap.get(tc.index)!.args += tc.function.arguments;
+              if (tc.function?.arguments) {
+                const e = toolCallMap.get(tc.index);
+                if (e) e.args += tc.function.arguments;
+              }
             }
           }
         }
@@ -341,11 +349,16 @@ export class QwenClient extends OpenAIClient {
               if (!toolCallMap.has(tc.index)) {
                 toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
               } else {
-                const entry = toolCallMap.get(tc.index)!;
-                if (tc.id) entry.id = tc.id;
-                if (tc.function?.name) entry.name = tc.function.name;
+                const entry = toolCallMap.get(tc.index);
+                if (entry) {
+                  if (tc.id) entry.id = tc.id;
+                  if (tc.function?.name) entry.name = tc.function.name;
+                }
               }
-              if (tc.function?.arguments) toolCallMap.get(tc.index)!.args += tc.function.arguments;
+              if (tc.function?.arguments) {
+                const e = toolCallMap.get(tc.index);
+                if (e) e.args += tc.function.arguments;
+              }
             }
           }
         }
@@ -494,9 +507,16 @@ export class OpenRouterClient implements LLMClient {
         const tcDeltas = (delta as { tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }).tool_calls;
         if (tcDeltas) {
           for (const tc of tcDeltas) {
-            if (!toolCallMap.has(tc.index)) toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
-            else { const e = toolCallMap.get(tc.index)!; if (tc.id) e.id = tc.id; if (tc.function?.name) e.name = tc.function.name; }
-            if (tc.function?.arguments) toolCallMap.get(tc.index)!.args += tc.function.arguments;
+            if (!toolCallMap.has(tc.index)) {
+              toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
+            } else {
+              const e = toolCallMap.get(tc.index);
+              if (e) { if (tc.id) e.id = tc.id; if (tc.function?.name) e.name = tc.function.name; }
+            }
+            if (tc.function?.arguments) {
+              const e = toolCallMap.get(tc.index);
+              if (e) e.args += tc.function.arguments;
+            }
           }
         }
       }

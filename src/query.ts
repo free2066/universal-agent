@@ -1006,7 +1006,7 @@ async function* queryLoop(
         systemContext,
         toolUseContext,
         querySource,
-      )
+      ).catch(logError)
     }
 
     // We need to handle a streaming abort before anything else.
@@ -1172,14 +1172,14 @@ async function* queryLoop(
         // on prompt-too-long creates a death spiral: error → hook blocking
         // → retry → error → … (the hook injects more tokens each cycle).
         yield lastMessage
-        void executeStopFailureHooks(lastMessage, toolUseContext)
+        void executeStopFailureHooks(lastMessage, toolUseContext).catch(logError)
         return { reason: isWithheldMedia ? 'image_error' : 'prompt_too_long' }
       } else if (feature('CONTEXT_COLLAPSE') && isWithheld413) {
         // reactiveCompact compiled out but contextCollapse withheld and
         // couldn't recover (staged queue empty/stale). Surface. Same
         // early-return rationale — don't fall through to stop hooks.
         yield lastMessage
-        void executeStopFailureHooks(lastMessage, toolUseContext)
+        void executeStopFailureHooks(lastMessage, toolUseContext).catch(logError)
         return { reason: 'prompt_too_long' }
       }
 
@@ -1261,7 +1261,7 @@ async function* queryLoop(
       // real response — hooks evaluating it create a death spiral:
       // error → hook blocking → retry → error → …
       if (lastMessage?.isApiErrorMessage) {
-        void executeStopFailureHooks(lastMessage, toolUseContext)
+        void executeStopFailureHooks(lastMessage, toolUseContext).catch(logError)
         return { reason: 'completed' }
       }
 
@@ -1308,7 +1308,7 @@ async function* queryLoop(
 
       if (feature('TOKEN_BUDGET')) {
         const decision = checkTokenBudget(
-          budgetTracker!,
+          budgetTracker ?? (() => { throw new Error('budgetTracker is null — TOKEN_BUDGET feature guard missed') })(),
           toolUseContext.agentId,
           getCurrentTurnTokenBudget(),
           getTurnOutputTokens(),
@@ -1686,9 +1686,9 @@ async function* queryLoop(
     if (feature('BG_SESSIONS')) {
       if (
         !toolUseContext.agentId &&
-        taskSummaryModule!.shouldGenerateTaskSummary()
+        taskSummaryModule?.shouldGenerateTaskSummary()
       ) {
-        taskSummaryModule!.maybeGenerateTaskSummary({
+        void taskSummaryModule?.maybeGenerateTaskSummary({
           systemPrompt,
           userContext,
           systemContext,
@@ -1698,7 +1698,7 @@ async function* queryLoop(
             ...assistantMessages,
             ...toolResults,
           ],
-        })
+        })?.catch(logError)
       }
     }
 

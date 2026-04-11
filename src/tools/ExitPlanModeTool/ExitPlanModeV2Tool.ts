@@ -257,7 +257,9 @@ export const ExitPlanModeV2Tool: Tool<InputSchema, Output> = buildTool({
     // in normalizeToolInput, pre-permission — it captured the old plan.
     if (inputPlan !== undefined && filePath) {
       await writeFile(filePath, inputPlan, 'utf-8').catch(e => logError(e))
-      void persistFileSnapshotIfRemote()
+      void persistFileSnapshotIfRemote().catch(err =>
+        logForDebugging(`[ExitPlanMode] persistFileSnapshotIfRemote failed: ${err}`),
+      )
     }
 
     // Check if this is a teammate that requires leader approval

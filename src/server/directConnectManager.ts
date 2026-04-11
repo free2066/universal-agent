@@ -70,7 +70,8 @@ export class DirectConnectSessionManager {
         let raw: unknown
         try {
           raw = jsonParse(line)
-        } catch {
+        } catch (err) {
+          logForDebugging(`[DirectConnect] Failed to parse message: ${err}`)
           continue
         }
 

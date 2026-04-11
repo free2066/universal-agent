@@ -218,6 +218,7 @@ export async function fetchCodeSessionsFromSessionsAPI(): Promise<
 
     const response = await axiosGetWithRetry<ListSessionsResponse>(url, {
       headers,
+      timeout: 15000,
     })
 
     if (response.status !== 200) {
@@ -446,6 +447,7 @@ export async function updateSessionTitle(
       {
         headers,
         validateStatus: status => status < 500,
+        timeout: 15000,
       },
     )
 

@@ -145,8 +145,9 @@ export class SessionsWebSocket {
         this.handleMessage(data)
       })
 
-      ws.addEventListener('error', () => {
-        const err = new Error('[SessionsWebSocket] WebSocket error')
+      ws.addEventListener('error', (event: Event) => {
+        const cause = (event as ErrorEvent).error ?? (event as ErrorEvent).message
+        const err = new Error(`[SessionsWebSocket] WebSocket error: ${String(cause ?? 'unknown')}`)
         logError(err)
         this.callbacks.onError?.(err)
       })

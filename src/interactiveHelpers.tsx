@@ -25,6 +25,7 @@ import { updateDeepLinkTerminalPreference } from './utils/deepLink/terminalPrefe
 import { isEnvTruthy, isRunningOnHomespace } from './utils/envUtils.js';
 import { type FpsMetrics, FpsTracker } from './utils/fpsTracker.js';
 import { updateGithubRepoPathMapping } from './utils/githubRepoPathMapping.js';
+import { logError } from './utils/log.js';
 import { applyConfigEnvironmentVariables } from './utils/managedEnv.js';
 import type { PermissionMode } from './utils/permissions/PermissionMode.js';
 import { getBaseRenderOptions } from './utils/renderOptions.js';
@@ -148,10 +149,10 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
     // Defense for login/logout: clears any prior client so the next init
     // picks up fresh auth headers.
     resetGrowthBook();
-    void initializeGrowthBook();
+    void initializeGrowthBook().catch(logError);
 
     // Now that trust is established, prefetch system context if it wasn't already
-    void getSystemContext();
+    void getSystemContext().catch(logError);
 
     // If settings are valid, check for any mcp.json servers that need approval
     const {
@@ -173,7 +174,7 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
 
   // Track current repo path for teleport directory switching (fire-and-forget)
   // This must happen AFTER trust to prevent untrusted directories from poisoning the mapping
-  void updateGithubRepoPathMapping();
+  void updateGithubRepoPathMapping().catch(() => {});
   if (feature('LODESTONE')) {
     updateDeepLinkTerminalPreference();
   }
@@ -188,7 +189,7 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
   // otelHeadersHelper (which requires trust to execute) are available.
   // Defer to next tick so the OTel dynamic import resolves after first render
   // instead of during the pre-render microtask queue.
-  setImmediate(() => initializeTelemetryAfterTrust());
+  setImmediate(() => { void initializeTelemetryAfterTrust().catch(logError); });
   if (await isQualifiedForGrove()) {
     const {
       GroveDialog

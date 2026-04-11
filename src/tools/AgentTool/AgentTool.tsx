@@ -858,7 +858,7 @@ export const AgentTool = buildTool({
         agentIdForCleanup: asyncAgentId,
         enableSummarization: isCoordinator || isForkSubagentEnabled() || getSdkAgentProgressSummariesEnabled(),
         getWorktreeResult: cleanupWorktreeIfNeeded
-      })));
+      }))).catch(err => logForDebugging(`[AgentTool] async agent lifecycle error: ${err}`, { level: 'error' }));
       const canReadOutputFile = toolUseContext.options.tools.some(t => toolMatchesName(t, FILE_READ_TOOL_NAME) || toolMatchesName(t, BASH_TOOL_NAME));
       return {
         data: {
@@ -1143,7 +1143,7 @@ export const AgentTool = buildTool({
                     // Note: worktree cleanup is done before enqueueAgentNotification
                     // in both try and catch paths so we can include worktree info
                   }
-                });
+                }).catch(err => logForDebugging(`[AgentTool] sync-to-background agent error: ${err}`, { level: 'error' }));
 
                 // Return async_launched result immediately
                 const canReadOutputFile = toolUseContext.options.tools.some(t => toolMatchesName(t, FILE_READ_TOOL_NAME) || toolMatchesName(t, BASH_TOOL_NAME));
