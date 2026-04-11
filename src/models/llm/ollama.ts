@@ -76,7 +76,9 @@ export class OllamaClient implements LLMClient {
     ];
     for (const msg of messages) {
       if (msg.role === 'tool') {
-        result.push({ role: 'assistant', content: `[Tool result]\n${msgText(msg.content)}` });
+        // LLM-9: tool results should be 'user' role (not 'assistant') for Ollama OpenAI-compat API.
+        // 'assistant' is semantically wrong \u2014 the tool result comes from the tool/user, not the model.
+        result.push({ role: 'user', content: `[Tool result]\n${msgText(msg.content)}` });
       } else if (msg.role === 'user' || msg.role === 'assistant') {
         result.push({ role: msg.role, content: msgText(msg.content) });
       }

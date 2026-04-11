@@ -203,9 +203,8 @@ export const getUserContext = memoize(
               const text = await res.text()
               // Cap at 50KB to prevent context window flooding
               if (text.length > UA_REMOTE_MAX_BYTES) {
-                logForDebugging(
+                logError(
                   `[UA_REMOTE_INSTRUCTIONS] ${url} response too large (${text.length} bytes > ${UA_REMOTE_MAX_BYTES}), truncating`,
-                  { level: 'warn' },
                 )
                 return text.slice(0, UA_REMOTE_MAX_BYTES)
               }

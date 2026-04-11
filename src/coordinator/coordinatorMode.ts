@@ -33,8 +33,15 @@ const INTERNAL_WORKER_TOOLS = new Set([
   SYNTHETIC_OUTPUT_TOOL_NAME,
 ])
 
+// CO-1: Module-level variable as the authoritative source for coordinator mode override.
+// Using process.env alone is a process-global write and is susceptible to race conditions
+// when multiple sessions operate concurrently in the same process.
+let _coordinatorModeOverride: boolean | null = null
+
 export function isCoordinatorMode(): boolean {
   if (feature('COORDINATOR_MODE')) {
+    // If an explicit in-process override has been set, use it (avoids process.env races)
+    if (_coordinatorModeOverride !== null) return _coordinatorModeOverride
     return isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE)
   }
   return false
@@ -61,7 +68,9 @@ export function matchSessionMode(
     return undefined
   }
 
-  // Flip the env var — isCoordinatorMode() reads it live, no caching
+  // CO-1: update module-level variable first (authoritative), then sync env var for
+  // backward compatibility with any external code that reads CLAUDE_CODE_COORDINATOR_MODE.
+  _coordinatorModeOverride = sessionIsCoordinator
   if (sessionIsCoordinator) {
     process.env.CLAUDE_CODE_COORDINATOR_MODE = '1'
   } else {

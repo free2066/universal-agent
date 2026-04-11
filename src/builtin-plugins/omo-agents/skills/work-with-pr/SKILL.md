@@ -173,12 +173,18 @@ PR_NUMBER=$(gh pr view --json number -q .number)
 
 ## Phase 3: Verification Loop
 
-This is the core of the skill. Two gates must ALL pass for the PR to be ready. The loop has no iteration cap — keep going until done. Gate ordering is intentional: CI is cheapest/fastest, review-work is most thorough.
+This is the core of the skill. Two gates must ALL pass for the PR to be ready. **Maximum 10 iterations** — if neither gate passes after 10 cycles, stop and report the persistent failure to the user rather than looping indefinitely. Gate ordering is intentional: CI is cheapest/fastest, review-work is most thorough.
 
 <verify_loop>
 
 ```
+iteration_count = 0
+max_iterations = 10
 while true:
+  iteration_count += 1
+  if iteration_count > max_iterations:
+    STOP and report: "Verify loop exceeded 10 iterations. Last failures: [summary]. Please investigate manually."
+    break
   1. Wait for CI          → Gate A
   2. If CI fails          → read logs, fix, commit, push, continue
   3. Run review-work      → Gate B

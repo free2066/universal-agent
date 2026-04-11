@@ -31,68 +31,95 @@ export class GeminiClient implements LLMClient {
 
   constructor(model: string) {
     this.model = model;
-    this.apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
+    // P3: friendly error when API key is missing (instead of sending empty key=)
+    const apiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        '[GeminiClient] Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set. ' +
+        'Get a free key at https://aistudio.google.com/apikey',
+      );
+    }
+    this.apiKey = apiKey;
     this.baseURL = process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta';
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    const body = this.buildRequest(options);
-    const url = `${this.baseURL}/models/${this.model}:generateContent?key=${this.apiKey}`;
+    // LLM-5: use withInferenceTimeout and merge options.signal to honor Ctrl+C and global timeout
+    return withInferenceTimeout(this.model, async (inferSignal) => {
+      const body = this.buildRequest(options);
+      // LLM-8: pass API key via header, not URL query string, to prevent key leaking into logs
+      const url = `${this.baseURL}/models/${this.model}:generateContent`;
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120000),
+      // Merge inference timeout signal with caller's AbortSignal (user Ctrl+C)
+      const signal = options.signal
+        ? (typeof AbortSignal.any === 'function'
+            ? AbortSignal.any([inferSignal, options.signal])
+            : inferSignal)
+        : inferSignal;
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify(body),
+        signal,
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Gemini error ${res.status}: ${text}`);
+      }
+
+      const data = await res.json() as GeminiResponse;
+      return this.parseResponse(data);
     });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Gemini error ${res.status}: ${text}`);
-    }
-
-    const data = await res.json() as GeminiResponse;
-    return this.parseResponse(data);
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
     return withInferenceTimeout(this.model, async (signal) => {
       const body = this.buildRequest(options);
-      const url = `${this.baseURL}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+      // LLM-8: pass API key via header, not URL query string, to prevent key leaking into logs
+      const url = `${this.baseURL}/models/${this.model}:streamGenerateContent?alt=sse`;
 
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
         body: JSON.stringify(body),
         signal,
       });
 
       if (!res.ok) throw new Error(`Gemini stream error: ${res.status}`);
 
-      const reader = res.body!.getReader();
+      // LLM-7: check body exists before asserting non-null
+      if (!res.body) throw new Error(`[Gemini] Response body is null for model ${this.model}`);
+      const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let textContent = '';
       const toolCallsAccum: GeminiPart[] = [];
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const lines = decoder.decode(value, { stream: true }).split('\n');
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const chunk = JSON.parse(line.slice(6)) as GeminiResponse;
-            const parts = chunk.candidates?.[0]?.content?.parts ?? [];
-            for (const part of parts) {
-              if (part.text) { onChunk(part.text); textContent += part.text; }
-              if (part.functionCall) toolCallsAccum.push(part);
-            }
-          } catch (err) {
-            if (line.length > 16) {
-              process.stderr.write(`[llm-client:gemini] Failed to parse SSE chunk (${line.length} chars): ${String(err)}\n`);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const lines = decoder.decode(value, { stream: true }).split('\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const chunk = JSON.parse(line.slice(6)) as GeminiResponse;
+              const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+              for (const part of parts) {
+                if (part.text) { onChunk(part.text); textContent += part.text; }
+                if (part.functionCall) toolCallsAccum.push(part);
+              }
+            } catch (err) {
+              if (line.length > 16) {
+                process.stderr.write(`[llm-client:gemini] Failed to parse SSE chunk (${line.length} chars): ${String(err)}\n`);
+              }
             }
           }
         }
+      } finally {
+        // LLM-7: always release the reader to free the underlying connection
+        reader.cancel().catch(() => {});
       }
 
       if (toolCallsAccum.length > 0) {

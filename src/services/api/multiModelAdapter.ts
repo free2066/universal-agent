@@ -10,8 +10,30 @@
  */
 
 import { randomUUID } from 'crypto'
+import { appendFile } from 'fs/promises'
+import { resolve as pathResolve, normalize as pathNormalize } from 'path'
 import { createLLMClient } from '../../models/llm/factory.js'
 import { getModelPromptRules } from '../modelPrompt/index.js'
+
+// MA-6: Validate UA_DEBUG_LOG path once at module load to prevent path traversal.
+// Reject /proc, /sys, /etc and other dangerous system directories.
+const _UA_LOG_PATH: string | null = (() => {
+  const p = process.env.UA_DEBUG_LOG
+  if (!p) return null
+  try {
+    const resolved = pathResolve(pathNormalize(p))
+    const dangerous = ['/proc', '/sys', '/etc', '/dev', '/boot', '/root']
+    if (dangerous.some(d => resolved === d || resolved.startsWith(d + '/'))) return null
+    return resolved
+  } catch { return null }
+})()
+
+/** Async, non-blocking debug log helper. Silently swallows write errors. */
+function uaLogAsync(msg: string): void {
+  if (!_UA_LOG_PATH) return
+  const line = `[${new Date().toISOString()}] ${msg}\n`
+  appendFile(_UA_LOG_PATH, line).catch(() => {})
+}
 
 /** Convert Anthropic BetaMessageStreamParams → UA ChatOptions messages array (NO system) */
 function convertAnthropicMessagesToUA(params: any): any[] {
@@ -23,8 +45,15 @@ function convertAnthropicMessagesToUA(params: any): any[] {
   // Conversation messages (user + assistant + tool_result only)
   for (const msg of params.messages || []) {
     if (msg.role === 'user') {
+      // MA-7: a user message may contain BOTH text AND tool_result blocks.
+      // Process both — emit text first, then tool results.
       const toolResults = extractToolResults(msg.content)
+      const textContent = extractTextContent(msg.content)
+      // Only push text if it exists and there are no tool results that already
+      // represent the user turn (avoids duplicate user messages in most cases).
+      // But if there's ALSO text alongside tool_results, we must keep it.
       if (toolResults.length > 0) {
+        if (textContent) messages.push({ role: 'user', content: textContent })
         for (const tr of toolResults) {
           const resultContent = Array.isArray(tr.content)
             ? tr.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
@@ -36,8 +65,7 @@ function convertAnthropicMessagesToUA(params: any): any[] {
           })
         }
       } else {
-        const content = extractTextContent(msg.content)
-        if (content) messages.push({ role: 'user', content })
+        if (textContent) messages.push({ role: 'user', content: textContent })
       }
     } else if (msg.role === 'assistant') {
       const textContent = extractTextContent(msg.content)
@@ -227,16 +255,17 @@ function buildStreamResult(
   const fakeRequestId = `ua-${randomUUID()}`
   const finalMessage = convertResponseToAnthropicMessage(response, model, inputTokens, outputTokens)
 
-  // Create a re-usable generator factory (can only iterate once, but CC only iterates once)
-  const makeStream = () => createFakeStream(response, model, inputTokens, outputTokens)
+  // MA-8: keep a single generator instance so Symbol.asyncIterator always returns the
+  // SAME iterator — prevents duplicate SSE events if CC iterates the stream more than once.
+  const streamInstance = makeStream()
 
   // Create a fake Response object with minimal interface CC needs
   const fakeResponse = new Response(null, { status: 200 })
 
   // The stream data object — an AsyncIterable with extra methods
-  const data = Object.assign(makeStream(), {
+  const data = Object.assign(streamInstance, {
     finalMessage: () => Promise.resolve(finalMessage),
-    [Symbol.asyncIterator]: makeStream,
+    [Symbol.asyncIterator]: () => streamInstance,
     withResponse: () => ({ data, response: fakeResponse, request_id: fakeRequestId }),
   })
 
@@ -244,7 +273,8 @@ function buildStreamResult(
   // and also has .withResponse() for when CC calls create(...).withResponse()
   const result = Object.assign(
     {
-      then: (resolve: any, _reject: any) => Promise.resolve(data).then(resolve),
+      // MA-1: pass reject through so downstream Promise chains receive errors
+      then: (resolve: any, reject: any) => Promise.resolve(data).then(resolve, reject),
       withResponse: () =>
         Promise.resolve({ data, response: fakeResponse, request_id: fakeRequestId }),
     },
@@ -355,7 +385,7 @@ function buildRealStreamResult(
         yield {
           type: 'content_block_start',
           index: i + 1,
-          content_block: { type: 'tool_use', id: toolId, name: tc.name, input: {} },
+          content_block: { type: 'tool_use', id: toolId, name: normalizeToolName(tc.name), input: {} },
         }
         yield {
           type: 'content_block_delta',
@@ -379,18 +409,20 @@ function buildRealStreamResult(
       }
     }
 
-    yield { type: 'message_stop' }
-
-    // Patch the final message into the stream data (CC reads it via .finalMessage())
+    // MA-3: patch _storedFinalMessage BEFORE yielding message_stop.
+    // CC calls finalMessage() immediately after seeing message_stop; if we patch
+    // after the yield the generator hasn't resumed yet and finalMessage() returns
+    // an empty content array.
     const finalContent: any[] = []
-    const textContent = finalResponse?.content || chunkQueue.join('')
+    // MA-9: streaming mode — always use chunkQueue as the authoritative text source
+    const textContent = chunkQueue.join('') || finalResponse?.content || ''
     if (textContent) finalContent.push({ type: 'text', text: textContent })
     if (finalResponse?.type === 'tool_calls') {
       for (const tc of finalResponse.toolCalls || []) {
         finalContent.push({
           type: 'tool_use',
           id: tc.id || `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
-          name: tc.name,
+          name: normalizeToolName(tc.name),
           input: tc.arguments || {},
         })
       }
@@ -401,6 +433,8 @@ function buildRealStreamResult(
       _storedFinalMessage.usage.output_tokens = outputTokens
       _storedFinalMessage.stop_reason = finalResponse?.type === 'tool_calls' ? 'tool_use' : 'end_turn'
     }
+
+    yield { type: 'message_stop' }
   }
 
   // Placeholder for final message (filled in after stream completes)
@@ -415,15 +449,19 @@ function buildRealStreamResult(
     usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
   }
 
-  const data = Object.assign(makeStream(), {
+  // MA-8: keep a single generator instance in the real stream too
+  const realStreamInstance = makeStream()
+
+  const data = Object.assign(realStreamInstance, {
     finalMessage: () => Promise.resolve(_storedFinalMessage),
-    [Symbol.asyncIterator]: makeStream,
+    [Symbol.asyncIterator]: () => realStreamInstance,
     withResponse: () => ({ data, response: fakeResponse, request_id: fakeRequestId }),
   })
 
   const result = Object.assign(
     {
-      then: (resolve: any, _reject: any) => Promise.resolve(data).then(resolve),
+      // MA-1: pass reject through so downstream Promise chains receive errors
+      then: (resolve: any, reject: any) => Promise.resolve(data).then(resolve, reject),
       withResponse: () =>
         Promise.resolve({ data, response: fakeResponse, request_id: fakeRequestId }),
     },
@@ -491,11 +529,8 @@ export class MultiModelAnthropicAdapter {
       signal: options?.signal,
     }
 
-    // Write to UA debug log
-    const logLine = `[UA:multiModel] model=${this.modelName} msgs=${messages.length} tools=${tools.length} stream=${!!params.stream} sys=${systemPrompt.length}chars\n`
-    if (process.env.UA_DEBUG_LOG) {
-      try { require('fs').appendFileSync(process.env.UA_DEBUG_LOG, logLine) } catch {}
-    }
+    // Write to UA debug log (MA-6: use async helper, not inline appendFileSync)
+    uaLogAsync(`[UA:multiModel] model=${this.modelName} msgs=${messages.length} tools=${tools.length} stream=${!!params.stream} sys=${systemPrompt.length}chars`)
 
     let chatResponse: any
     try {
@@ -538,17 +573,15 @@ export class MultiModelAnthropicAdapter {
             (r: any) => {
               chatResponse = r
               notifyResolve?.()
-              if (process.env.UA_DEBUG_LOG) {
-                try {
-                  require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
-                    `[UA:multiModel] realStream OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
-                } catch {}
-              }
+              uaLogAsync(`[UA:multiModel] realStream OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}`)
               return r
             },
             async (e: any) => {
               const is429 = e?.status === 429 || String(e?.message || '').includes('429')
-              if (is429 && attempt < RETRY_DELAYS_STREAM.length) {
+              // MA-5: only retry BEFORE any tokens were sent to CC.
+              // If chunkQueue has content, CC already consumed those tokens; retrying
+              // would send duplicate events and corrupt the response.
+              if (is429 && attempt < RETRY_DELAYS_STREAM.length && chunkQueue.length === 0) {
                 const delay = RETRY_DELAYS_STREAM[attempt]
                 process.stderr.write(`[UA:429] stream rate limited, retry ${attempt + 1}/${RETRY_DELAYS_STREAM.length} in ${delay / 1000}s...\n`)
                 // Reset queue for the fresh attempt
@@ -586,13 +619,8 @@ export class MultiModelAnthropicAdapter {
         })
       } else {
         chatResponse = await this.llmClient.chat(chatOptions)
-        if (process.env.UA_DEBUG_LOG) {
-          try {
-            const r = chatResponse
-            require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
-              `[UA:multiModel] chat OK: type=${r?.type} content=${(r?.content || '').slice(0, 80)}\n`)
-          } catch {}
-        }
+        const r = chatResponse
+        uaLogAsync(`[UA:multiModel] chat OK: type=${r?.type} content=${(r?.content || '').slice(0, 80)}`)
       }
     } catch (err: any) {
       // ── 429 Rate-limit auto-retry ──────────────────────────────────────────
@@ -611,27 +639,27 @@ export class MultiModelAnthropicAdapter {
       }
       // ── /429 auto-retry ────────────────────────────────────────────────────
 
-      // Log error details — 详细记录便于排查
-      const uaLogFile = process.env.UA_DEBUG_LOG
-      const uaLog = uaLogFile
-        ? (msg: string) => { try { require('fs').appendFileSync(uaLogFile, `[${new Date().toISOString()}] ${msg}\n`) } catch {} }
-        : undefined
-      if (uaLog) {
-        uaLog(`[UA:multiModel] ❌ ERROR calling ${this.modelName}`)
-        uaLog(`[UA:multiModel]   message: ${err?.message ?? err}`)
-        uaLog(`[UA:multiModel]   code: ${err?.code ?? 'n/a'}  status: ${err?.status ?? 'n/a'}`)
-        uaLog(`[UA:multiModel]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}`)
-        uaLog(`[UA:multiModel]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ ***' + process.env.WQ_API_KEY.slice(-4) : '✗ NOT SET'}`)
-        uaLog(`[UA:multiModel]   stack: ${(err?.stack ?? '').split('\n').slice(0, 3).join(' | ')}`)
-      }
+      // Log error details — 详细记录便于排查 (MA-6: use module-level uaLogAsync)
+      uaLogAsync(`[UA:multiModel] ❌ ERROR calling ${this.modelName}`)
+      uaLogAsync(`[UA:multiModel]   message: ${err?.message ?? err}`)
+      uaLogAsync(`[UA:multiModel]   code: ${err?.code ?? 'n/a'}  status: ${err?.status ?? 'n/a'}`)
+      uaLogAsync(`[UA:multiModel]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}`)
+      // MA-2: never log key material
+      uaLogAsync(`[UA:multiModel]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ set' : '✗ NOT SET'}`)
+      uaLogAsync(`[UA:multiModel]   stack: ${(err?.stack ?? '').split('\n').slice(0, 3).join(' | ')}`)
       process.stderr.write(`[UA:multiModel] ERROR: ${this.modelName}: ${err?.message || err}\n`)
 
       // ── UA Fallback Chain ──────────────────────────────────────────────────
       // 如果 models.json 配置了 fallback 数组，当前模型失败时自动切换到下一个
       // Guard against cycles: only pick a model that appears AFTER the current
       // one in the chain and hasn't been tried yet in this call tree.
+      // MA-4: validate fallback chain structure to prevent prototype pollution
       const fallbackChain: string[] = (() => {
-        try { return JSON.parse(process.env.UA_FALLBACK_CHAIN || '[]') } catch { return [] }
+        try {
+          const parsed = JSON.parse(process.env.UA_FALLBACK_CHAIN || '[]')
+          if (!Array.isArray(parsed)) return []
+          return parsed.filter((m: unknown) => typeof m === 'string' && m.length > 0)
+        } catch { return [] }
       })()
       const triedModels: Set<string> = options?._triedModels instanceof Set
         ? options._triedModels
@@ -642,7 +670,7 @@ export class MultiModelAnthropicAdapter {
         : undefined
 
       if (nextModel) {
-        uaLog?.(`[UA:fallback] ⚠️ ${this.modelName} failed → trying fallback: ${nextModel}`)
+        uaLogAsync(`[UA:fallback] ⚠️ ${this.modelName} failed → trying fallback: ${nextModel}`)
         process.stderr.write(`[UA:fallback] Switching to fallback model: ${nextModel}\n`)
         triedModels.add(nextModel)
         const fallbackAdapter = new MultiModelAnthropicAdapter(nextModel)

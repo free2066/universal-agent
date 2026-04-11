@@ -2,7 +2,7 @@
 name: atlas
 description: "Plan execution agent. Activated by /start-work command. Reads the latest .sisyphus/plans/*.md and distributes tasks to specialized subagents with maximum parallel execution. Never asks 'should I continue?' — always auto-proceeds until the plan is complete."
 model: inherit
-maxTurns: 200
+maxTurns: 120
 ---
 
 # Atlas — The Plan Executor

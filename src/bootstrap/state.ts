@@ -949,6 +949,11 @@ export function resetStateForTests(): void {
   currentTurnTokenBudget = null
   budgetContinuationCount = 0
   sessionSwitched.clear()
+  // ST-1: reset module-level exit summary variables — not part of STATE object,
+  // so getInitialState() loop above does NOT reset them. Omitting these causes
+  // state leakage between test cases that call setExitSummaryInfo().
+  _exitPermissionMode = undefined
+  _exitEffortLevel = undefined
 }
 
 // You shouldn't use this directly. See src/utils/model/modelStrings.ts::getModelStrings()

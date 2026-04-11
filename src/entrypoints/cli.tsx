@@ -18,25 +18,36 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     // Prevents "Detected a custom API key" dialog on every startup
     try {
       const claudeConfigPath = resolve(require('os').homedir(), '.claude.json')
-      const UA_KEY_NORMALIZED = 'ti-model-placeholder' // last 20 chars of 'ua-multi-model-placeholder'
-      let claudeConfig: any = {}
-      if (existsSync(claudeConfigPath)) {
-        claudeConfig = JSON.parse(readFileSync(claudeConfigPath, 'utf8'))
+      // CLI-3: keep UA_PLACEHOLDER_KEY as single source of truth
+      // UA_KEY_NORMALIZED = last 20 chars of placeholder (what CC stores in customApiKeyResponses)
+      const UA_PLACEHOLDER_KEY = 'ua-multi-model-placeholder'
+      const UA_KEY_NORMALIZED = UA_PLACEHOLDER_KEY.slice(-20) // 'lti-model-placeholder'
+      // CLI-2: guard against JSON parse failure — never write if we can't safely read
+      if (!existsSync(claudeConfigPath)) throw new Error('not-exist')
+      let claudeConfig: any
+      try {
+        const raw = readFileSync(claudeConfigPath, 'utf8')
+        claudeConfig = JSON.parse(raw)
+      } catch {
+        // JSON parse failure or file unreadable — skip entirely, do not write
+        claudeConfig = null
       }
-      const responses = claudeConfig.customApiKeyResponses ?? {}
-      const approved: string[] = responses.approved ?? []
-      const rejected: string[] = responses.rejected ?? []
-      // 无论 onboarding 是否完成，始终确保 approved 列表正确
-      // 这样选完主题（onboarding 完成）后就不会再弹 API key 确认框
-      const needsApiKeyFix =
-        !approved.includes(UA_KEY_NORMALIZED) ||
-        rejected.includes(UA_KEY_NORMALIZED)
-      if (needsApiKeyFix) {
-        claudeConfig.customApiKeyResponses = {
-          approved: [...new Set([...approved, UA_KEY_NORMALIZED])],
-          rejected: rejected.filter((k: string) => k !== UA_KEY_NORMALIZED),
+      if (claudeConfig !== null && typeof claudeConfig === 'object') {
+        const responses = claudeConfig.customApiKeyResponses ?? {}
+        const approved: string[] = responses.approved ?? []
+        const rejected: string[] = responses.rejected ?? []
+        // 无论 onboarding 是否完成，始终确保 approved 列表正确
+        // 这样选完主题（onboarding 完成）后就不会再弹 API key 确认框
+        const needsApiKeyFix =
+          !approved.includes(UA_KEY_NORMALIZED) ||
+          rejected.includes(UA_KEY_NORMALIZED)
+        if (needsApiKeyFix) {
+          claudeConfig.customApiKeyResponses = {
+            approved: [...new Set([...approved, UA_KEY_NORMALIZED])],
+            rejected: rejected.filter((k: string) => k !== UA_KEY_NORMALIZED),
+          }
+          writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2))
         }
-        writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2))
       }
     } catch (_) {}
 
@@ -109,6 +120,9 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       process.env.UA_FALLBACK_CHAIN = JSON.stringify(config.fallback)
     }
 
+    // CLI-5: safe key mask — never expose full key even if key.length <= 4
+    const safeMask = (key: string) => key.length <= 4 ? '***' : `***${key.slice(-4)}`
+
     // ── Setup UA debug log ────────────────────────────────────────────────────
     const uaLogFile = resolve(require('os').homedir(), '.claude', 'debug', 'ua-debug.log')
     const uaLog = (msg: string) => {
@@ -125,7 +139,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
     // ── Step 1 result
     uaLog(`[step1] .env file: ${existsSync(resolve(uagentDir, '.env')) ? 'found' : 'NOT FOUND'}`)
-    uaLog(`[step1] WQ_API_KEY from .env: ${process.env.WQ_API_KEY ? '***' + process.env.WQ_API_KEY.slice(-4) : 'not set'}`)
+    uaLog(`[step1] WQ_API_KEY from .env: ${process.env.WQ_API_KEY ? safeMask(process.env.WQ_API_KEY) : 'not set'}`)
     uaLog(`[step1] OPENAI_BASE_URL from .env: ${process.env.OPENAI_BASE_URL ?? 'not set'}`)
 
     // ── Step 2 result
@@ -148,7 +162,6 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       if (!process.env.ANTHROPIC_API_KEY) {
         process.env.ANTHROPIC_API_KEY = 'ua-multi-model-placeholder'
       }
-      uaLog(`[step3] ANTHROPIC_API_KEY: placeholder set`)
 
       // Load per-profile credentials if the profile has them and .env didn't set them
       const profiles: any[] = config.profiles || []
@@ -166,13 +179,13 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
         if (provider === 'gemini' || activeModel.startsWith('gemini')) {
           if (apiKey && !process.env.GEMINI_API_KEY) {
             process.env.GEMINI_API_KEY = apiKey
-            uaLog(`[step3] GEMINI_API_KEY set from profile (***${apiKey.slice(-4)})`)
+            uaLog(`[step3] GEMINI_API_KEY set from profile (${safeMask(apiKey)})`)
           }
         } else {
           // OpenAI-compat (ep-*, gpt-*, deepseek, etc.)
           if (apiKey && !process.env.WQ_API_KEY) {
             process.env.WQ_API_KEY = apiKey
-            uaLog(`[step3] WQ_API_KEY set from profile (***${apiKey.slice(-4)})`)
+            uaLog(`[step3] WQ_API_KEY set from profile (${safeMask(apiKey)})`)
           }
           if (apiKey && !process.env.OPENAI_API_KEY) {
             process.env.OPENAI_API_KEY = apiKey
@@ -251,28 +264,29 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
     // Ensure ripgrep is available. When running as a Node.js-executed JS bundle
     // (not a Bun standalone executable), the embedded rg is unavailable and the
-    // vendor/ directory does not exist. On macOS, auto-install via brew (async,
-    // non-blocking) so Grep tool works correctly. On Linux, only warn.
+    // vendor/ directory does not exist. Use `which rg` as a fallback to cover
+    // paths not in the static whitelist (e.g. ~/.local/bin/rg, /snap/bin/rg).
+    // CLI-6: do NOT auto-install via brew — this installs software without user consent.
     try {
-      const { existsSync: _ex } = require('fs')
-      const rgPaths = ['/opt/homebrew/bin/rg', '/usr/local/bin/rg', '/usr/bin/rg']
-      const rgExists = rgPaths.some((p: string) => _ex(p))
+      const { existsSync: _ex, execSync: _execSync } = require('fs'), { execSync } = require('child_process')
+      const rgPaths = ['/opt/homebrew/bin/rg', '/usr/local/bin/rg', '/usr/bin/rg', '/snap/bin/rg',
+        `${process.env.HOME ?? ''}/.local/bin/rg`, `${process.env.HOME ?? ''}/.cargo/bin/rg`]
+      const rgExists = rgPaths.some((p: string) => {
+        try { return require('fs').existsSync(p) } catch { return false }
+      }) || (() => {
+        try { execSync('which rg', { encoding: 'utf8', stdio: 'pipe' }); return true } catch { return false }
+      })()
       if (!rgExists) {
         uaLog(`[ripgrep] rg not found`)
+        process.stderr.write('[uagent] Warning: ripgrep (rg) not found. Please install it:\n')
         if (process.platform === 'darwin') {
-          // Run brew install in the background — do NOT block the main thread.
-          const { exec } = require('child_process')
-          process.stderr.write('[uagent] ripgrep not found, installing via brew (background)...\n')
-          exec('brew install ripgrep', { timeout: 120_000 }, (err: any) => {
-            if (err) uaLog(`[ripgrep] brew install failed: ${err.message}`)
-            else uaLog(`[ripgrep] brew install ripgrep succeeded`)
-          })
+          process.stderr.write('  brew install ripgrep\n')
         } else {
-          process.stderr.write('[uagent] Warning: ripgrep (rg) not found. Install it manually.\n')
-          uaLog(`[ripgrep] non-macOS platform, skipping brew install`)
+          process.stderr.write('  apt install ripgrep  # or: cargo install ripgrep\n')
         }
+        uaLog(`[ripgrep] suggested manual install to user`)
       } else {
-        uaLog(`[ripgrep] rg found at ${rgPaths.find((p: string) => _ex(p))}`)
+        uaLog(`[ripgrep] rg found`)
       }
     } catch { /* non-fatal */ }
 
@@ -430,6 +444,20 @@ async function main(): Promise<void> {
     if (!existsSync(pkgJson)) {
       process.stderr.write(`[uagent update] Cannot find package.json at ${pkgJson}\n`)
       process.stderr.write(`[uagent update] Please update manually: cd <uagent-dir> && git pull && bun run build && npm link --force\n`)
+      process.exit(1)
+    }
+
+    // CLI-1: Verify this is actually the uagent project before running git/build/npm.
+    // Prevents path traversal from running commands in system directories.
+    try {
+      const pkg = JSON.parse(require('fs').readFileSync(pkgJson, 'utf8'))
+      if (pkg.name !== 'universal-agent' && pkg.name !== 'uagent') {
+        process.stderr.write(`[uagent update] Unexpected package name "${pkg.name}" at ${pkgRoot}\n`)
+        process.stderr.write(`[uagent update] Expected "universal-agent". Aborting to prevent running in wrong directory.\n`)
+        process.exit(1)
+      }
+    } catch (e: any) {
+      process.stderr.write(`[uagent update] Cannot read or parse ${pkgJson}: ${e?.message}\n`)
       process.exit(1)
     }
 

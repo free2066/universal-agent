@@ -83,11 +83,11 @@ export class UsageTracker {
   private loadLimits(): UsageLimits {
     const defaults: UsageLimits = {
       dailyTokenLimit: process.env.UAGENT_DAILY_TOKEN_LIMIT
-        ? parseInt(process.env.UAGENT_DAILY_TOKEN_LIMIT) : undefined,
+        ? parseInt(process.env.UAGENT_DAILY_TOKEN_LIMIT, 10) : undefined,
       dailyCostLimitUSD: process.env.UAGENT_DAILY_COST_LIMIT
         ? parseFloat(process.env.UAGENT_DAILY_COST_LIMIT) : undefined,
-      warnAtPercent: parseInt(process.env.UAGENT_LIMIT_WARN_PCT || '80'),
-      blockAtPercent: parseInt(process.env.UAGENT_LIMIT_BLOCK_PCT || '100'),
+      warnAtPercent: parseInt(process.env.UAGENT_LIMIT_WARN_PCT || '80', 10),
+      blockAtPercent: parseInt(process.env.UAGENT_LIMIT_BLOCK_PCT || '100', 10),
     };
 
     if (existsSync(LIMITS_FILE)) {

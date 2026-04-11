@@ -165,9 +165,14 @@ export class OpenAIClient implements LLMClient {
 
     for (const msg of options.messages) {
       if (msg.role === 'tool') {
+        // LLM-10: toolCallId is optional; skip with a warning rather than passing undefined
+        if (!msg.toolCallId) {
+          process.stderr.write(`[llm-client:openai] Skipping tool message with missing toolCallId (content: ${String(msg.content).slice(0, 60)})\n`);
+          continue;
+        }
         messages.push({
           role: 'tool',
-          tool_call_id: msg.toolCallId!,
+          tool_call_id: msg.toolCallId,
           content: msgText(msg.content),
         });
       } else if (msg.role === 'assistant' && msg.toolCalls?.length) {
@@ -202,31 +207,34 @@ export class DeepSeekClient extends OpenAIClient {
   override async chat(options: ChatOptions): Promise<ChatResponse> {
     const isReasoner = this.model.includes('reasoner') || this.model.includes('r1');
     if (isReasoner && options.thinkingLevel) {
-      const messages = this.convertMessages(options);
-      const hasTools = (options.tools?.length ?? 0) > 0;
-      const response = (await this.client.chat.completions.create({
-        model: this.model,
-        messages,
-        ...(hasTools ? {
-          tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
-          tool_choice: 'auto' as const,
-        } : {}),
-      } as OpenAI.ChatCompletionCreateParamsNonStreaming)) as OpenAI.ChatCompletion;
-      const choice = response.choices[0];
-      if (!choice) throw new Error('No choices from DeepSeek');
-      const msg = choice.message;
-      if (msg.tool_calls?.length) {
-        return {
-          type: 'tool_calls',
-          content: typeof msg.content === 'string' ? msg.content || '' : '',
-          toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
-            id: tc.id,
-            name: tc.function.name,
-            arguments: safeParseJSON(tc.function.arguments, tc.function.name),
-          })),
-        };
-      }
-      return { type: 'text', content: typeof msg.content === 'string' ? msg.content || '' : '' };
+      // LLM-4: wrap reasoner branch in withInferenceTimeout to prevent indefinite hang
+      return withInferenceTimeout(this.model, async (signal) => {
+        const messages = this.convertMessages(options);
+        const hasTools = (options.tools?.length ?? 0) > 0;
+        const response = (await this.client.chat.completions.create({
+          model: this.model,
+          messages,
+          ...(hasTools ? {
+            tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
+            tool_choice: 'auto' as const,
+          } : {}),
+        } as OpenAI.ChatCompletionCreateParamsNonStreaming, { signal })) as OpenAI.ChatCompletion;
+        const choice = response.choices[0];
+        if (!choice) throw new Error('No choices from DeepSeek');
+        const msg = choice.message;
+        if (msg.tool_calls?.length) {
+          return {
+            type: 'tool_calls',
+            content: typeof msg.content === 'string' ? msg.content || '' : '',
+            toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
+              id: tc.id,
+              name: tc.function.name,
+              arguments: safeParseJSON(tc.function.arguments, tc.function.name),
+            })),
+          };
+        }
+        return { type: 'text', content: typeof msg.content === 'string' ? msg.content || '' : '' };
+      });
     }
     return super.chat(options);
   }
@@ -410,7 +418,15 @@ export class OpenRouterClient implements LLMClient {
 
   constructor(model: string) {
     this.model = model;
-    const apiKey = process.env.OPENROUTER_API_KEY || 'anonymous';
+    // LLM-2: OpenRouter no longer supports anonymous access (HTTP 401 without a key).
+    // Fail fast with a clear error rather than silently sending 'anonymous'.
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        '[OpenRouterClient] OPENROUTER_API_KEY is not set. ' +
+        'Get a free key at https://openrouter.ai/keys and set it in ~/.uagent/.env',
+      );
+    }
     this.client = new OpenAI({
       apiKey,
       baseURL: 'https://openrouter.ai/api/v1',
@@ -422,34 +438,37 @@ export class OpenRouterClient implements LLMClient {
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    const hasTools = (options.tools?.length ?? 0) > 0;
-    const messages = this._convertMessages(options);
-    const response = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      ...(hasTools ? {
-        tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
-        tool_choice: 'auto' as const,
-      } : {}),
-    });
+    // LLM-3: wrap in withInferenceTimeout to match streamChat and prevent indefinite hang
+    return withInferenceTimeout(this.model, async (signal) => {
+      const hasTools = (options.tools?.length ?? 0) > 0;
+      const messages = this._convertMessages(options);
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        ...(hasTools ? {
+          tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
+          tool_choice: 'auto' as const,
+        } : {}),
+      } as OpenAI.ChatCompletionCreateParamsNonStreaming, { signal });
 
     const choice = response.choices[0];
-    if (!choice) throw new Error('No choices returned from OpenRouter');
-    const msg = choice.message;
+      if (!choice) throw new Error('No choices returned from OpenRouter');
+      const msg = choice.message;
 
-    if (msg.tool_calls?.length) {
-      return {
-        type: 'tool_calls',
-        content: msg.content || '',
-        toolCalls: msg.tool_calls.map((tc) => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: safeParseJSON(tc.function.arguments, tc.function.name),
-        })),
-      };
-    }
+      if (msg.tool_calls?.length) {
+        return {
+          type: 'tool_calls',
+          content: msg.content || '',
+          toolCalls: msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            name: tc.function.name,
+            arguments: safeParseJSON(tc.function.arguments, tc.function.name),
+          })),
+        };
+      }
 
-    return { type: 'text', content: msg.content || '' };
+      return { type: 'text', content: msg.content || '' };
+    });
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {

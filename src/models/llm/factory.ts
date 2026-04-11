@@ -23,8 +23,8 @@ export function createLLMClient(model: string): LLMClient {
   // DeepSeek (uses OpenAI-compat API)
   if (model.startsWith('deepseek')) return new DeepSeekClient(model);
 
-  // Moonshot / Kimi
-  if (model.startsWith('kimi')) return new MoonshotClient(model);
+  // Moonshot / Kimi — LLM-1: also route moonshot-v1-* prefix
+  if (model.startsWith('kimi') || model.startsWith('moonshot')) return new MoonshotClient(model);
 
   // Alibaba Qwen / Tongyi
   if (model.startsWith('qwen') || model.startsWith('tongyi')) return new QwenClient(model);

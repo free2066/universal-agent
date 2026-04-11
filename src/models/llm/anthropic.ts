@@ -237,13 +237,24 @@ export class AnthropicClient implements LLMClient {
       const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
       const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
-      // A19: Combine inference timeout signal with caller's AbortSignal (user Ctrl+C)
-      // Use AbortSignal.any() if available (Node 20.3+), otherwise prefer caller signal
-      const combinedSignal = options.signal
-        ? (typeof AbortSignal.any === 'function'
-          ? AbortSignal.any([_signal, options.signal])
-          : options.signal)
-        : _signal;
+      // A19: Combine inference timeout signal with caller's AbortSignal (user Ctrl+C).
+      // LLM-6: when AbortSignal.any is unavailable (Node < 20.3), manually race the two
+      // signals so the inference timeout is never silently discarded.
+      let combinedSignal: AbortSignal;
+      if (options.signal) {
+        if (typeof AbortSignal.any === 'function') {
+          combinedSignal = AbortSignal.any([_signal, options.signal]);
+        } else {
+          // Manual race: first abort wins
+          const merged = new AbortController();
+          const onAbort = (reason: unknown) => { if (!merged.signal.aborted) merged.abort(reason); };
+          _signal.addEventListener('abort', () => onAbort(_signal.reason), { once: true });
+          options.signal.addEventListener('abort', () => onAbort(options.signal!.reason), { once: true });
+          combinedSignal = merged.signal;
+        }
+      } else {
+        combinedSignal = _signal;
+      }
 
       // A25: add prompt-caching beta header when cache_control is used
       const extraBetas: string[] = isPromptCachingEnabled() ? ['prompt-caching-2024-07-31'] : [];
@@ -370,14 +381,20 @@ export class AnthropicClient implements LLMClient {
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         while (i < messages.length && messages[i].role === 'tool') {
           const toolMsg = messages[i];
+          // LLM-10: toolCallId is optional; skip with warning if missing
+          if (!toolMsg.toolCallId) {
+            process.stderr.write(`[llm-client:anthropic] Skipping tool message with missing toolCallId\n`);
+            i++;
+            continue;
+          }
           toolResults.push({
             type: 'tool_result',
-            tool_use_id: toolMsg.toolCallId!,
+            tool_use_id: toolMsg.toolCallId,
             content: msgText(toolMsg.content),
           });
           i++;
         }
-        result.push({ role: 'user', content: toolResults });
+        if (toolResults.length > 0) result.push({ role: 'user', content: toolResults });
       } else {
         i++;
       }
