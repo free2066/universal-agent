@@ -637,8 +637,17 @@ function byteLengthUtf8(s: string): number {
     if (c < 0x80) b++
     else if (c < 0x800) b += 2
     else if (c >= 0xd800 && c <= 0xdbff) {
-      b += 4
-      i++
+      if (i + 1 < s.length) {
+        const next = s.charCodeAt(i + 1)
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          b += 4
+          i++
+        } else {
+          b += 3
+        }
+      } else {
+        b += 3
+      }
     } else b += 3
   }
   return b
@@ -1899,6 +1908,7 @@ function scanHeredocBodies(P: ParseState): void {
       }
       // Check if this line is the delimiter
       if (
+        delimLen > 0 &&
         P.L.src.startsWith(hd.delim, checkI) &&
         (checkI + delimLen >= P.L.len ||
           P.L.src[checkI + delimLen] === '\n' ||

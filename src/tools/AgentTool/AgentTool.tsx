@@ -490,17 +490,15 @@ export const AgentTool = buildTool({
       }
 
       // Get servers that actually have tools (meaning they're connected AND authenticated)
-      const serversWithTools: string[] = [];
+      const serversWithToolsSet = new Set<string>();
       for (const tool of currentAppState.mcp.tools) {
         if (tool.name?.startsWith('mcp__')) {
           // Extract server name from tool name (format: mcp__serverName__toolName)
-          const parts = tool.name.split('__');
-          const serverName = parts[1];
-          if (serverName && !serversWithTools.includes(serverName)) {
-            serversWithTools.push(serverName);
-          }
+          const serverName = tool.name.split('__')[1];
+          if (serverName) serversWithToolsSet.add(serverName);
         }
       }
+      const serversWithTools = Array.from(serversWithToolsSet);
       if (!hasRequiredMcpServers(selectedAgent, serversWithTools)) {
         const missing = requiredMcpServers.filter(pattern => !serversWithTools.some(server => server.toLowerCase().includes(pattern.toLowerCase())));
         throw new Error(`Agent '${selectedAgent.agentType}' requires MCP servers matching: ${missing.join(', ')}. ` + `MCP servers with tools: ${serversWithTools.length > 0 ? serversWithTools.join(', ') : 'none'}. ` + `Use /mcp to configure and authenticate the required MCP servers.`);

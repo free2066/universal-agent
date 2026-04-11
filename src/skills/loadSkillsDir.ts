@@ -772,7 +772,7 @@ export const getSkillDirCommands = memoize(
       allSkillsWithPaths.map(({ skill, filePath }) =>
         skill.type === 'prompt'
           ? getFileIdentity(filePath)
-          : Promise.resolve(null),
+          : null,
       ),
     )
 

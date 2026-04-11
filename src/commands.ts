@@ -361,44 +361,32 @@ async function getSkills(cwd: string): Promise<{
   bundledSkills: Command[]
   builtinPluginSkills: Command[]
 }> {
-  try {
-    const [skillDirCommands, pluginSkills] = await Promise.all([
-      getSkillDirCommands(cwd).catch(err => {
-        logError(toError(err))
-        logForDebugging(
-          'Skill directory commands failed to load, continuing without them',
-        )
-        return []
-      }),
-      getPluginSkills().catch(err => {
-        logError(toError(err))
-        logForDebugging('Plugin skills failed to load, continuing without them')
-        return []
-      }),
-    ])
-    // Bundled skills are registered synchronously at startup
-    const bundledSkills = getBundledSkills()
-    // Built-in plugin skills come from enabled built-in plugins
-    const builtinPluginSkills = getBuiltinPluginSkillCommands()
-    logForDebugging(
-      `getSkills returning: ${skillDirCommands.length} skill dir commands, ${pluginSkills.length} plugin skills, ${bundledSkills.length} bundled skills, ${builtinPluginSkills.length} builtin plugin skills`,
-    )
-    return {
-      skillDirCommands,
-      pluginSkills,
-      bundledSkills,
-      builtinPluginSkills,
-    }
-  } catch (err) {
-    // This should never happen since we catch at the Promise level, but defensive
-    logError(toError(err))
-    logForDebugging('Unexpected error in getSkills, returning empty')
-    return {
-      skillDirCommands: [],
-      pluginSkills: [],
-      bundledSkills: [],
-      builtinPluginSkills: [],
-    }
+  const [skillDirCommands, pluginSkills] = await Promise.all([
+    getSkillDirCommands(cwd).catch(err => {
+      logError(toError(err))
+      logForDebugging(
+        'Skill directory commands failed to load, continuing without them',
+      )
+      return []
+    }),
+    getPluginSkills().catch(err => {
+      logError(toError(err))
+      logForDebugging('Plugin skills failed to load, continuing without them')
+      return []
+    }),
+  ])
+  // Bundled skills are registered synchronously at startup
+  const bundledSkills = getBundledSkills()
+  // Built-in plugin skills come from enabled built-in plugins
+  const builtinPluginSkills = getBuiltinPluginSkillCommands()
+  logForDebugging(
+    `getSkills returning: ${skillDirCommands.length} skill dir commands, ${pluginSkills.length} plugin skills, ${bundledSkills.length} bundled skills, ${builtinPluginSkills.length} builtin plugin skills`,
+  )
+  return {
+    skillDirCommands,
+    pluginSkills,
+    bundledSkills,
+    builtinPluginSkills,
   }
 }
 

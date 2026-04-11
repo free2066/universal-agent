@@ -338,6 +338,7 @@ export async function copyDir(src: string, dest: string): Promise<void> {
         const targetRelativeToSrc = relative(resolvedSrc, resolvedTarget)
         const destTargetPath = join(dest, targetRelativeToSrc)
         const relativeLinkPath = relative(dirname(destPath), destTargetPath)
+          .replace(/\\/g, '/')
         await symlink(relativeLinkPath, destPath)
       } else {
         // Target is outside source tree - use absolute resolved path

@@ -409,10 +409,13 @@ export async function* withRetry<T>(
             (retryContext.thinkingConfig.type === 'enabled'
               ? retryContext.thinkingConfig.budgetTokens
               : 0) + 1
-          const adjustedMaxTokens = Math.max(
-            FLOOR_OUTPUT_TOKENS,
-            availableContext,
-            minRequired,
+          const adjustedMaxTokens = Math.min(
+            Math.max(
+              FLOOR_OUTPUT_TOKENS,
+              availableContext,
+              minRequired,
+            ),
+            contextLimit,
           )
           retryContext.maxTokensOverride = adjustedMaxTokens
 
