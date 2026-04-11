@@ -24,6 +24,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { logForDebugging } from '../../utils/debug.js'
 
 const execAsync = promisify(exec)
 
@@ -196,8 +197,11 @@ export class SnapshotService {
               const abs = path.join(this.workTree, rel)
               if (fs.existsSync(abs)) fs.unlinkSync(abs)
             }
-          } catch {
-            // Non-fatal per file
+          } catch (error) {
+            logForDebugging(
+              `[snapshot] revert failed for ${rel} at ${hash}: ${error instanceof Error ? error.message : String(error)}`,
+              { level: 'warn' },
+            )
           }
         }
       }
@@ -317,8 +321,11 @@ export class SnapshotService {
             patch = await this._run(
               this._git(`diff --cached --unified=3 -- "${file}"`),
             )
-          } catch {
-            // ignore
+          } catch (error) {
+            logForDebugging(
+              `[snapshot] diffFull patch generation failed for ${file}: ${error instanceof Error ? error.message : String(error)}`,
+              { level: 'warn' },
+            )
           }
 
           results.push({ file, patch, additions, deletions, status })
@@ -354,12 +361,18 @@ export class SnapshotService {
         try {
           const stat = fs.statSync(path.join(this.workTree, entry.name))
           if (stat.size > MAX_FILE_SIZE) lines.push(entry.name)
-        } catch {
-          // ignore
+        } catch (error) {
+          logForDebugging(
+            `[snapshot] exclusion stat failed for ${entry.name}: ${error instanceof Error ? error.message : String(error)}`,
+            { level: 'warn' },
+          )
         }
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      logForDebugging(
+        `[snapshot] exclusion scan failed: ${error instanceof Error ? error.message : String(error)}`,
+        { level: 'warn' },
+      )
     }
 
     fs.writeFileSync(excludeFile, lines.join('\n') + '\n')

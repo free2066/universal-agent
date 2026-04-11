@@ -161,6 +161,14 @@ function computeChecksum(
   return `sha256:${hash}`
 }
 
+function logPolicyLimitsFailOpen(message: string, error?: unknown): void {
+  const detail =
+    error === undefined
+      ? ''
+      : ` (${error instanceof Error ? error.message : String(error)})`
+  logForDebugging(`Policy limits: ${message}${detail}`, { level: 'warn' })
+}
+
 /**
  * Check if the current user is eligible for policy limits.
  *
@@ -398,11 +406,13 @@ function loadCachedRestrictions(): PolicyLimitsResponse['restrictions'] | null {
     const data = safeParseJSON(content, false)
     const parsed = PolicyLimitsResponseSchema().safeParse(data)
     if (!parsed.success) {
+      logPolicyLimitsFailOpen('Cached restrictions file is invalid; ignoring cache')
       return null
     }
 
     return parsed.data.restrictions
-  } catch {
+  } catch (error) {
+    logPolicyLimitsFailOpen('Failed to read cached restrictions; ignoring cache', error)
     return null
   }
 }
@@ -454,6 +464,9 @@ async function fetchAndLoadPolicyLimits(): Promise<
         sessionCache = cachedRestrictions
         return cachedRestrictions
       }
+      logPolicyLimitsFailOpen(
+        `Fetch failed with no cache available; continuing without restrictions: ${result.error}`,
+      )
       return null
     }
 
@@ -487,12 +500,13 @@ async function fetchAndLoadPolicyLimits(): Promise<
       }
     }
     return newRestrictions
-  } catch {
+  } catch (error) {
     if (cachedRestrictions) {
       logForDebugging('Policy limits: Using stale cache after error')
       sessionCache = cachedRestrictions
       return cachedRestrictions
     }
+    logPolicyLimitsFailOpen('Unexpected fetch/load failure; continuing without restrictions', error)
     return null
   }
 }
@@ -605,8 +619,10 @@ export async function clearPolicyLimitsCache(): Promise<void> {
 
   try {
     await unlink(getCachePath())
-  } catch {
-    // Ignore errors (including ENOENT when file doesn't exist)
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== 'ENOENT') {
+      logPolicyLimitsFailOpen('Failed to clear cached restrictions file', error)
+    }
   }
 }
 
@@ -627,8 +643,8 @@ async function pollPolicyLimits(): Promise<void> {
     if (newCache !== previousCache) {
       logForDebugging('Policy limits: Changed during background poll')
     }
-  } catch {
-    // Don't fail closed for background polling
+  } catch (error) {
+    logPolicyLimitsFailOpen('Background poll failed; keeping existing restrictions', error)
   }
 }
 

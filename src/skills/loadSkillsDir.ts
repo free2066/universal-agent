@@ -38,6 +38,7 @@ import {
 import { isENOENT, isFsInaccessible } from '../utils/errors.js'
 import {
   coerceDescriptionToString,
+  coerceFrontmatterString,
   type FrontmatterData,
   type FrontmatterShell,
   parseBooleanFrontmatter,
@@ -235,23 +236,45 @@ export function parseSkillFrontmatterFields(
     )
   }
 
+  const displayName = coerceFrontmatterString(
+    frontmatter.name,
+    'name',
+    resolvedName,
+  )
+  const argumentHint = coerceFrontmatterString(
+    frontmatter['argument-hint'],
+    'argument-hint',
+    resolvedName,
+  )
+  const whenToUse = coerceFrontmatterString(
+    frontmatter.when_to_use,
+    'when_to_use',
+    resolvedName,
+  )
+  const version = coerceFrontmatterString(
+    frontmatter.version,
+    'version',
+    resolvedName,
+  )
+  const agent = coerceFrontmatterString(
+    frontmatter.agent,
+    'agent',
+    resolvedName,
+  )
+
   return {
-    displayName:
-      frontmatter.name != null ? String(frontmatter.name) : undefined,
+    displayName,
     description,
     hasUserSpecifiedDescription: validatedDescription !== null,
     allowedTools: parseSlashCommandToolsFromFrontmatter(
       frontmatter['allowed-tools'],
     ),
-    argumentHint:
-      frontmatter['argument-hint'] != null
-        ? String(frontmatter['argument-hint'])
-        : undefined,
+    argumentHint,
     argumentNames: parseArgumentNames(
       frontmatter.arguments as string | string[] | undefined,
     ),
-    whenToUse: frontmatter.when_to_use as string | undefined,
-    version: frontmatter.version as string | undefined,
+    whenToUse,
+    version,
     model,
     disableModelInvocation: parseBooleanFrontmatter(
       frontmatter['disable-model-invocation'],
@@ -259,7 +282,7 @@ export function parseSkillFrontmatterFields(
     userInvocable,
     hooks: parseHooksFromFrontmatter(frontmatter, resolvedName),
     executionContext: frontmatter.context === 'fork' ? 'fork' : undefined,
-    agent: frontmatter.agent as string | undefined,
+    agent,
     effort,
     shell: parseShellFrontmatter(frontmatter.shell, resolvedName),
   }

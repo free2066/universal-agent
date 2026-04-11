@@ -5,7 +5,11 @@ import { getSystemPrompt } from '../../constants/prompts.js'
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { ToolUseContext } from '../../Tool.js'
-import { registerAsyncAgent } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import {
+  enqueueAgentNotification,
+  failAgentTask,
+  registerAsyncAgent,
+} from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { assembleToolPool } from '../../tools.js'
 import { asAgentId } from '../../types/ids.js'
 import { runWithAgentContext } from '../../utils/agentContext.js'
@@ -265,13 +269,22 @@ export async function resumeAgentBackground({
           resumedWorktreePath ? { worktreePath: resumedWorktreePath } : {},
       }),
     ),
-  // P1: catch unhandled rejection from outer runWithAgentContext/cwd setup,
-  // which is not covered by runAsyncAgentLifecycle's internal try/catch.
   ).catch(err => {
+    const msg = err instanceof Error ? err.message : String(err)
     logForDebugging(
-      `[resumeAgent] runWithAgentContext threw unexpectedly for agent ${agentBackgroundTask.agentId}: ${err}`,
+      `[resumeAgent] runWithAgentContext threw unexpectedly for agent ${agentBackgroundTask.agentId}: ${msg}`,
       { level: 'error' },
     )
+    failAgentTask(agentBackgroundTask.agentId, msg, rootSetAppState)
+    enqueueAgentNotification({
+      taskId: agentBackgroundTask.agentId,
+      description: uiDescription,
+      status: 'failed',
+      error: msg,
+      setAppState: rootSetAppState,
+      toolUseId: toolUseContext.toolUseId,
+      ...(resumedWorktreePath ? { worktreePath: resumedWorktreePath } : {}),
+    })
   })
 
   return {

@@ -20,6 +20,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import crypto from 'crypto'
+import { logForDebugging } from '../../utils/debug.js'
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Types
@@ -115,8 +116,11 @@ export class SyncEventBus {
       for (const h of handlers) {
         try {
           h(event as SyncEvent<unknown>)
-        } catch {
-          // Subscriber errors must not affect the publisher
+        } catch (error) {
+          logForDebugging(
+            `[SyncEventBus] subscriber failed for ${event.type} (${event.aggregateId}): ${error instanceof Error ? error.message : String(error)}`,
+            { level: 'warn' },
+          )
         }
       }
     }
@@ -186,7 +190,11 @@ export class SyncEventBus {
       }
 
       return events
-    } catch {
+    } catch (error) {
+      logForDebugging(
+        `[SyncEventBus] failed to replay events from ${file}: ${error instanceof Error ? error.message : String(error)}`,
+        { level: 'warn' },
+      )
       return []
     }
   }
@@ -203,8 +211,11 @@ export class SyncEventBus {
     try {
       fs.mkdirSync(EVENTS_DIR, { recursive: true })
       fs.appendFileSync(todayFile(), this.writeBuffer.join('\n') + '\n', 'utf-8')
-    } catch {
-      // Persistence failure is non-fatal
+    } catch (error) {
+      logForDebugging(
+        `[SyncEventBus] failed to persist ${this.writeBuffer.length} event(s): ${error instanceof Error ? error.message : String(error)}`,
+        { level: 'warn' },
+      )
     } finally {
       this.writeBuffer = []
     }

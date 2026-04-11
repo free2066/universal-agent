@@ -60,6 +60,12 @@ export function createLSPClient(
   let startFailed = false
   let startError: Error | undefined
   let isStopping = false // Track intentional shutdown to avoid spurious error logging
+  let stderrDataHandler: ((data: Buffer) => void) | undefined
+  let processErrorHandler: ((error: Error) => void) | undefined
+  let processExitHandler:
+    | ((code: number | null, signal: NodeJS.Signals | null) => void)
+    | undefined
+  let stdinErrorHandler: ((error: Error) => void) | undefined
   // Queue handlers registered before connection ready (lazy initialization support)
   const pendingHandlers: Array<{
     method: string
@@ -132,16 +138,17 @@ export function createLSPClient(
 
         // Capture stderr for server diagnostics and errors
         if (process.stderr) {
-          process.stderr.on('data', (data: Buffer) => {
+          stderrDataHandler = (data: Buffer) => {
             const output = data.toString().trim()
             if (output) {
               logForDebugging(`[LSP SERVER ${serverName}] ${output}`)
             }
-          })
+          }
+          process.stderr.on('data', stderrDataHandler)
         }
 
         // Handle process errors (after successful spawn, e.g., crash during operation)
-        process.on('error', error => {
+        processErrorHandler = (error: Error) => {
           if (!isStopping) {
             startFailed = true
             startError = error
@@ -151,9 +158,10 @@ export function createLSPClient(
               ),
             )
           }
-        })
+        }
+        process.on('error', processErrorHandler)
 
-        process.on('exit', (code, _signal) => {
+        processExitHandler = (code, _signal) => {
           if (code !== 0 && code !== null && !isStopping) {
             isInitialized = false
             startFailed = false
@@ -164,18 +172,20 @@ export function createLSPClient(
             logError(crashError)
             onCrash?.(crashError)
           }
-        })
+        }
+        process.on('exit', processExitHandler)
 
         // Handle stdin stream errors to prevent unhandled promise rejections
         // when the LSP server process exits before we finish writing
-        process.stdin.on('error', (error: Error) => {
+        stdinErrorHandler = (error: Error) => {
           if (!isStopping) {
             logForDebugging(
               `LSP server ${serverName} stdin error: ${error.message}`,
             )
           }
           // Error is logged but not thrown - the connection error handler will catch this
-        })
+        }
+        process.stdin.on('error', stdinErrorHandler)
 
         // 2. Create JSON-RPC connection
         const reader = new StreamMessageReader(process.stdout)
@@ -404,14 +414,21 @@ export function createLSPClient(
         }
 
         if (process) {
-          // Remove event listeners to prevent memory leaks
-          process.removeAllListeners('error')
-          process.removeAllListeners('exit')
-          if (process.stdin) {
-            process.stdin.removeAllListeners('error')
+          if (processErrorHandler) {
+            process.removeListener('error', processErrorHandler)
+            processErrorHandler = undefined
           }
-          if (process.stderr) {
-            process.stderr.removeAllListeners('data')
+          if (processExitHandler) {
+            process.removeListener('exit', processExitHandler)
+            processExitHandler = undefined
+          }
+          if (process.stdin && stdinErrorHandler) {
+            process.stdin.removeListener('error', stdinErrorHandler)
+            stdinErrorHandler = undefined
+          }
+          if (process.stderr && stderrDataHandler) {
+            process.stderr.removeListener('data', stderrDataHandler)
+            stderrDataHandler = undefined
           }
 
           try {

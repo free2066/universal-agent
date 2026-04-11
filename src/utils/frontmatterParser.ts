@@ -63,6 +63,11 @@ export type ParsedMarkdown = {
   content: string
 }
 
+type FrontmatterParseFailure = {
+  error: unknown
+  quotedAttempt: boolean
+}
+
 // Characters that require quoting in YAML values (when unquoted)
 // - { } are flow mapping indicators
 // - * is anchor/alias indicator
@@ -120,7 +125,7 @@ function quoteProblematicValues(frontmatterText: string): string {
   return result.join('\n')
 }
 
-export const FRONTMATTER_REGEX = /^---\s*\n([\s\S]*?)---\s*\n?/
+export const FRONTMATTER_REGEX = /^\uFEFF?---\s*\r?\n([\s\S]*?)---\s*(?:\r?\n|$)/
 
 /**
  * Parses markdown content to extract frontmatter and content
@@ -145,12 +150,13 @@ export function parseFrontmatter(
   const content = markdown.slice(match[0].length)
 
   let frontmatter: FrontmatterData = {}
+  let parseFailure: FrontmatterParseFailure | null = null
   try {
     const parsed = parseYaml(frontmatterText) as FrontmatterData | null
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       frontmatter = parsed
     }
-  } catch {
+  } catch (error) {
     // YAML parsing failed - try again after quoting problematic values
     try {
       const quotedText = quoteProblematicValues(frontmatterText)
@@ -159,12 +165,23 @@ export function parseFrontmatter(
         frontmatter = parsed
       }
     } catch (retryError) {
-      // Still failed - log for debugging so users can diagnose broken frontmatter
+      parseFailure = { error: retryError, quotedAttempt: true }
       const location = sourcePath ? ` in ${sourcePath}` : ''
       logForDebugging(
         `Failed to parse YAML frontmatter${location}: ${retryError instanceof Error ? retryError.message : retryError}`,
         { level: 'warn' },
       )
+    }
+
+    if (!parseFailure && Object.keys(frontmatter).length === 0) {
+      parseFailure = { error, quotedAttempt: false }
+    }
+  }
+
+  if (parseFailure) {
+    return {
+      frontmatter: {},
+      content: markdown,
     }
   }
 
@@ -263,6 +280,32 @@ function expandBraces(pattern: string): string[] {
   }
 
   return expanded
+}
+
+export function coerceFrontmatterString(
+  value: unknown,
+  fieldName: string,
+  source: string,
+): string | undefined {
+  if (value == null) {
+    return undefined
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed === '' ? undefined : trimmed
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    logForDebugging(
+      `Frontmatter '${fieldName}' in ${source} should be a string. Coercing ${typeof value} to string.`,
+      { level: 'warn' },
+    )
+    return String(value)
+  }
+  logForDebugging(
+    `Frontmatter '${fieldName}' in ${source} has unsupported type ${Array.isArray(value) ? 'array' : typeof value}. Ignoring value.`,
+    { level: 'warn' },
+  )
+  return undefined
 }
 
 /**

@@ -89,9 +89,22 @@ function parseToolListString(toolsValue: unknown): string[] | null {
   if (typeof toolsValue === 'string') {
     toolsArray = [toolsValue]
   } else if (Array.isArray(toolsValue)) {
+    const invalidEntries = toolsValue.filter(item => typeof item !== 'string')
+    if (invalidEntries.length > 0) {
+      logForDebugging(
+        `Frontmatter 'allowed-tools' contains ${invalidEntries.length} non-string entr${invalidEntries.length === 1 ? 'y' : 'ies'}; ignoring them.`,
+        { level: 'warn' },
+      )
+    }
     toolsArray = toolsValue.filter(
       (item): item is string => typeof item === 'string',
     )
+  } else {
+    logForDebugging(
+      `Frontmatter 'allowed-tools' has unsupported type ${typeof toolsValue}; expected string or string[]. Ignoring value.`,
+      { level: 'warn' },
+    )
+    return []
   }
 
   if (toolsArray.length === 0) {

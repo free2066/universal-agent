@@ -527,6 +527,9 @@ export const AgentTool = buildTool({
 
     // Resolve effective isolation mode (explicit param overrides agent def)
     const effectiveIsolation = isolation ?? selectedAgent.isolation;
+    if (cwd && effectiveIsolation === 'worktree') {
+      throw new Error('`cwd` cannot be used with `isolation: "worktree"` — choose one isolation strategy.');
+    }
 
     // Remote isolation: delegate to CCR. Gated ant-only — the guard enables
     // dead code elimination of the entire block for external builds.
@@ -858,7 +861,32 @@ export const AgentTool = buildTool({
         agentIdForCleanup: asyncAgentId,
         enableSummarization: isCoordinator || isForkSubagentEnabled() || getSdkAgentProgressSummariesEnabled(),
         getWorktreeResult: cleanupWorktreeIfNeeded
-      }))).catch(err => logForDebugging(`[AgentTool] async agent lifecycle error: ${err}`, { level: 'error' }));
+      }))).catch(err => {
+        const msg = errorMessage(err);
+        logForDebugging(`[AgentTool] async agent lifecycle error for ${asyncAgentId}: ${msg}`, { level: 'error' });
+        failAsyncAgent(agentBackgroundTask.agentId, msg, rootSetAppState);
+        void cleanupWorktreeIfNeeded().then(worktreeResult => {
+          enqueueAgentNotification({
+            taskId: agentBackgroundTask.agentId,
+            description,
+            status: 'failed',
+            error: msg,
+            setAppState: rootSetAppState,
+            toolUseId: toolUseContext.toolUseId,
+            ...worktreeResult
+          });
+        }).catch(cleanupError => {
+          logForDebugging(`[AgentTool] failed to clean up async agent worktree for ${asyncAgentId}: ${errorMessage(cleanupError)}`, { level: 'warn' });
+          enqueueAgentNotification({
+            taskId: agentBackgroundTask.agentId,
+            description,
+            status: 'failed',
+            error: msg,
+            setAppState: rootSetAppState,
+            toolUseId: toolUseContext.toolUseId
+          });
+        });
+      });
       const canReadOutputFile = toolUseContext.options.tools.some(t => toolMatchesName(t, FILE_READ_TOOL_NAME) || toolMatchesName(t, BASH_TOOL_NAME));
       return {
         data: {

@@ -254,9 +254,19 @@ export function createLSPServerInstance(
       logForDebugging(`LSP server instance started: ${name}`)
     } catch (error) {
       // Clean up the spawned child process on timeout/error
-      client.stop().catch(() => {})
+      client.stop().catch(stopError => {
+        logForDebugging(
+          `LSP server '${name}' cleanup after failed start also failed: ${errorMessage(stopError)}`,
+          { level: 'warn' },
+        )
+      })
       // Prevent unhandled rejection from abandoned initialize promise
-      initPromise?.catch(() => {})
+      initPromise?.catch(initError => {
+        logForDebugging(
+          `LSP server '${name}' initialize promise rejected after start failure: ${errorMessage(initError)}`,
+          { level: 'warn' },
+        )
+      })
       state = 'error'
       lastError = error as Error
       logError(error)
@@ -505,6 +515,7 @@ function withTimeout<T>(
   let timer: ReturnType<typeof setTimeout>
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout((rej, msg) => rej(new Error(msg)), ms, reject, message)
+    timer.unref?.()
   })
   return Promise.race([promise, timeoutPromise]).finally(() =>
     clearTimeout(timer!),

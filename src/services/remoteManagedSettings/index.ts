@@ -66,6 +66,14 @@ let loadingCompleteResolve: (() => void) | null = null
 // (e.g., in Agent SDK tests that don't go through main.tsx)
 const LOADING_PROMISE_TIMEOUT_MS = 30000 // 30 seconds
 
+function logRemoteSettingsFailOpen(message: string, error?: unknown): void {
+  const detail =
+    error === undefined
+      ? ''
+      : ` (${error instanceof Error ? error.message : String(error)})`
+  logForDebugging(`Remote settings: ${message}${detail}`, { level: 'warn' })
+}
+
 /**
  * Initialize the loading promise for remote managed settings
  * This should be called early (e.g., in init.ts) to allow other systems
@@ -405,8 +413,11 @@ export async function clearRemoteManagedSettingsCache(): Promise<void> {
   try {
     const path = getSettingsPath()
     await unlink(path)
-  } catch {
-    // Ignore errors when clearing file (ENOENT is expected)
+  } catch (error) {
+    const code = getErrnoCode(error)
+    if (code !== 'ENOENT') {
+      logRemoteSettingsFailOpen('Failed to clear cached settings file', error)
+    }
   }
 }
 
@@ -441,6 +452,9 @@ async function fetchAndLoadRemoteManagedSettings(): Promise<SettingsJson | null>
         setSessionCache(cachedSettings)
         return cachedSettings
       }
+      logRemoteSettingsFailOpen(
+        `Fetch failed with no cache available; continuing without remote settings: ${result.error}`,
+      )
       // No cache available - fail open, continue without remote settings
       return null
     }
@@ -492,7 +506,7 @@ async function fetchAndLoadRemoteManagedSettings(): Promise<SettingsJson | null>
       }
     }
     return newSettings
-  } catch {
+  } catch (error) {
     // On any error, use stale file if available (graceful degradation)
     if (cachedSettings) {
       logForDebugging('Remote settings: Using stale cache after error')
@@ -500,6 +514,10 @@ async function fetchAndLoadRemoteManagedSettings(): Promise<SettingsJson | null>
       return cachedSettings
     }
 
+    logRemoteSettingsFailOpen(
+      'Unexpected fetch/load failure; continuing without remote settings',
+      error,
+    )
     // No cache available - fail open, continue without remote settings
     return null
   }
@@ -603,8 +621,11 @@ async function pollRemoteSettings(): Promise<void> {
       logForDebugging('Remote settings: Changed during background poll')
       settingsChangeDetector.notifyChange('policySettings')
     }
-  } catch {
-    // Don't fail closed for background polling - just continue
+  } catch (error) {
+    logRemoteSettingsFailOpen(
+      'Background poll failed; keeping existing remote settings',
+      error,
+    )
   }
 }
 
