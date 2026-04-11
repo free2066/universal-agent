@@ -18,6 +18,7 @@ import path from 'path'
 import os from 'os'
 import crypto from 'crypto'
 import { minimatch } from 'minimatch'
+import { logForDebugging } from '../../utils/debug.js'
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Types
@@ -147,9 +148,22 @@ export class PermissionService {
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed?.rules)) {
         this.rules = parsed.rules as PermissionRule[]
+        return
       }
-    } catch {
-      // File missing or invalid JSON — start with empty rule set
+
+      logForDebugging(
+        `[PermissionService] Ignoring invalid rules payload in ${PERMISSIONS_FILE}`,
+        { level: 'warn' },
+      )
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        return
+      }
+
+      logForDebugging(
+        `[PermissionService] Failed to load rules from ${PERMISSIONS_FILE}: ${error instanceof Error ? error.message : String(error)}`,
+        { level: 'warn' },
+      )
     }
   }
 

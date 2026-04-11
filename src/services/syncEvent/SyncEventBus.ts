@@ -59,6 +59,7 @@ type Handler<T = unknown> = (event: SyncEvent<T>) => void
 
 /** Directory where JSONL event log files are stored */
 const EVENTS_DIR = path.join(os.homedir(), '.uagent', 'events')
+const MAX_BUFFERED_EVENTS_ON_FAILURE = 1000
 
 function todayFile(): string {
   const d = new Date()
@@ -211,13 +212,21 @@ export class SyncEventBus {
     try {
       fs.mkdirSync(EVENTS_DIR, { recursive: true })
       fs.appendFileSync(todayFile(), this.writeBuffer.join('\n') + '\n', 'utf-8')
+      this.writeBuffer = []
     } catch (error) {
       logForDebugging(
         `[SyncEventBus] failed to persist ${this.writeBuffer.length} event(s): ${error instanceof Error ? error.message : String(error)}`,
         { level: 'warn' },
       )
-    } finally {
-      this.writeBuffer = []
+
+      if (this.writeBuffer.length > MAX_BUFFERED_EVENTS_ON_FAILURE) {
+        const droppedCount = this.writeBuffer.length - MAX_BUFFERED_EVENTS_ON_FAILURE
+        this.writeBuffer = this.writeBuffer.slice(-MAX_BUFFERED_EVENTS_ON_FAILURE)
+        logForDebugging(
+          `[SyncEventBus] dropped ${droppedCount} buffered event(s) after repeated persist failures to cap memory usage`,
+          { level: 'warn' },
+        )
+      }
     }
   }
 

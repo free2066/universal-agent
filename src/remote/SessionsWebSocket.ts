@@ -88,6 +88,14 @@ export class SessionsWebSocket {
   private pingInterval: NodeJS.Timeout | null = null
   private reconnectTimer: NodeJS.Timeout | null = null
 
+  private handleReconnectError(error: unknown): void {
+    const err = error instanceof Error
+      ? error
+      : new Error(`[SessionsWebSocket] Reconnect failed: ${String(error)}`)
+    logError(err)
+    this.callbacks.onError?.(err)
+  }
+
   constructor(
     private readonly sessionId: string,
     private readonly orgUuid: string,
@@ -296,7 +304,9 @@ export class SessionsWebSocket {
     )
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      void this.connect()
+      void this.connect().catch(error => {
+        this.handleReconnectError(error)
+      })
     }, delay)
   }
 
@@ -400,7 +410,9 @@ export class SessionsWebSocket {
     // Small delay before reconnecting (stored in reconnectTimer so it can be cancelled)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
-      void this.connect()
+      void this.connect().catch(error => {
+        this.handleReconnectError(error)
+      })
     }, 500)
   }
 }

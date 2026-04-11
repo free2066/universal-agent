@@ -18,6 +18,7 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { logForDebugging } from '../../utils/debug.js'
 
 // ──────────────────────────────────────────────────────────
 //  Types
@@ -145,11 +146,26 @@ export class SessionDB {
     if (!fs.existsSync(filePath)) return []
 
     try {
-      return fs
-        .readFileSync(filePath, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map(line => JSON.parse(line) as StoredMessage)
+      const messages: StoredMessage[] = []
+      let invalidLineCount = 0
+
+      for (const line of fs.readFileSync(filePath, 'utf8').split('\n')) {
+        if (!line) continue
+        try {
+          messages.push(JSON.parse(line) as StoredMessage)
+        } catch {
+          invalidLineCount++
+        }
+      }
+
+      if (invalidLineCount > 0) {
+        logForDebugging(
+          `[SessionDB] Skipped ${invalidLineCount} invalid message line(s) while reading session ${sessionId}`,
+          { level: 'warn' },
+        )
+      }
+
+      return messages
     } catch {
       return []
     }
