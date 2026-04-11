@@ -218,7 +218,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
     uaLog(`[summary] ANTHROPIC_MODEL=${process.env.ANTHROPIC_MODEL}`)
     uaLog(`[summary] OPENAI_BASE_URL=${process.env.OPENAI_BASE_URL ?? 'NOT SET ⚠️'}`)
-    uaLog(`[summary] WQ_API_KEY=${process.env.WQ_API_KEY ? '✓ set (***' + process.env.WQ_API_KEY.slice(-4) + ')' : 'NOT SET ⚠️'}`)
+    uaLog(`[summary] WQ_API_KEY=${process.env.WQ_API_KEY ? '✓ set (' + safeMask(process.env.WQ_API_KEY) + ')' : 'NOT SET ⚠️'}`)
     uaLog(`[summary] GEMINI_API_KEY=${process.env.GEMINI_API_KEY ? '✓ set' : 'not set'}`)
     // UA Task Router: log routing config summary at startup (sync — reads cached config)
     try {

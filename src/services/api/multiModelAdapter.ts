@@ -257,7 +257,7 @@ function buildStreamResult(
 
   // MA-8: keep a single generator instance so Symbol.asyncIterator always returns the
   // SAME iterator — prevents duplicate SSE events if CC iterates the stream more than once.
-  const streamInstance = makeStream()
+  const streamInstance = createFakeStream(response, model, inputTokens, outputTokens)
 
   // Create a fake Response object with minimal interface CC needs
   const fakeResponse = new Response(null, { status: 200 })
