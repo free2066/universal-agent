@@ -31,6 +31,11 @@ function getEditLineNumber(edit: HashlineEdit): number {
       return edit.pos ? parseLineRef(edit.pos).line : Number.NEGATIVE_INFINITY
     case 'prepend':
       return edit.pos ? parseLineRef(edit.pos).line : Number.NEGATIVE_INFINITY
+    default: {
+      // P2: exhaustive check — guard against unknown op types at runtime
+      const _exhaustive: never = edit
+      throw new Error(`[hashline] Unknown edit op: ${(_exhaustive as { op?: string }).op ?? 'unknown'}`)
+    }
   }
 }
 

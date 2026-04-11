@@ -149,70 +149,78 @@ export class AnthropicClient implements LLMClient {
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    const rawMessages = this.convertMessages(options.messages);
-    // A25: insert prompt cache markers on messages and system prompt
-    const messages = insertPromptCacheMarker(rawMessages, {
-      skipCacheWrite: (options as ChatOptions & { skipCacheWrite?: boolean }).skipCacheWrite,
-    });
-    const cachedSystem = addSystemCacheControl(
-      options.systemPrompt as string | Anthropic.TextBlockParam[] | undefined,
-    );
+    // P0: wrap in withInferenceTimeout to prevent indefinite hang (matches streamChat behavior)
+    return withInferenceTimeout(this.model, async (signal) => {
+      const rawMessages = this.convertMessages(options.messages);
+      // A25: insert prompt cache markers on messages and system prompt
+      const messages = insertPromptCacheMarker(rawMessages, {
+        skipCacheWrite: (options as ChatOptions & { skipCacheWrite?: boolean }).skipCacheWrite,
+      });
+      const cachedSystem = addSystemCacheControl(
+        options.systemPrompt as string | Anthropic.TextBlockParam[] | undefined,
+      );
 
-    const hasTools = (options.tools?.length ?? 0) > 0;
-    const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
-    // Round 7: adaptive thinking level resolves based on model name
-    const thinking = resolveAdaptiveThinking(options.thinkingLevel, this.model);
-    const budgets: Record<string, number> = {
-      low: 1024, medium: 8000, high: 16000,
-      max: 32000, xhigh: 32000, maxOrXhigh: 32000,
-    };
-    const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
-    const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
+      const hasTools = (options.tools?.length ?? 0) > 0;
+      const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
+      // Round 7: adaptive thinking level resolves based on model name
+      const thinking = resolveAdaptiveThinking(options.thinkingLevel, this.model);
+      const budgets: Record<string, number> = {
+        low: 1024, medium: 8000, high: 16000,
+        max: 32000, xhigh: 32000, maxOrXhigh: 32000,
+      };
+      const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
+      const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
-    // A25: add prompt-caching beta header when cache_control is used
-    const extraBetas: string[] = isPromptCachingEnabled() ? ['prompt-caching-2024-07-31'] : [];
+      // A25: add prompt-caching beta header when cache_control is used
+      const extraBetas: string[] = isPromptCachingEnabled() ? ['prompt-caching-2024-07-31'] : [];
 
-    const msg = await this.client.messages.create({
-      model: this.model,
-      max_tokens: effectiveMax,
-      system: cachedSystem as string,
-      messages,
-      ...(budgetTokens ? {
-        thinking: { type: 'enabled', budget_tokens: budgetTokens },
-        betas: ['interleaved-thinking-2025-05-14', ...extraBetas],
-      } : (extraBetas.length > 0 ? { betas: extraBetas } : {})),
-      ...(hasTools ? {
-        tools: options.tools!.map((t) => ({
-          name: t.name,
-          description: t.description,
-          input_schema: t.parameters as Anthropic.Tool['input_schema'],
-        })),
-      } : {}),
-    } as Parameters<typeof this.client.messages.create>[0]) as Anthropic.Message;
+      // Merge inference timeout signal with caller's AbortSignal
+      const abortSignal = options.signal
+        ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, options.signal]) : signal)
+        : signal;
 
-    const toolUseBlocks = msg.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
-    const textBlocks    = msg.content.filter((b): b is Anthropic.TextBlock    => b.type === 'text');
+      const msg = await this.client.messages.create({
+        model: this.model,
+        max_tokens: effectiveMax,
+        system: cachedSystem as string,
+        messages,
+        ...(budgetTokens ? {
+          thinking: { type: 'enabled', budget_tokens: budgetTokens },
+          betas: ['interleaved-thinking-2025-05-14', ...extraBetas],
+        } : (extraBetas.length > 0 ? { betas: extraBetas } : {})),
+        ...(hasTools ? {
+          tools: options.tools!.map((t) => ({
+            name: t.name,
+            description: t.description,
+            input_schema: t.parameters as Anthropic.Tool['input_schema'],
+          })),
+        } : {}),
+      } as Parameters<typeof this.client.messages.create>[0], { signal: abortSignal }) as Anthropic.Message;
 
-    if (toolUseBlocks.length) {
+      const toolUseBlocks = msg.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+      const textBlocks    = msg.content.filter((b): b is Anthropic.TextBlock    => b.type === 'text');
+
+      if (toolUseBlocks.length) {
+        return {
+          type: 'tool_calls',
+          content: textBlocks.map((b) => b.text).join(''),
+          toolCalls: toolUseBlocks.map((b) => ({
+            id: b.id,
+            name: b.name,
+            arguments: b.input as Record<string, unknown>,
+          })),
+          // A25: expose cache stats from usage field
+          usage: _extractUsage(msg.usage),
+        };
+      }
+
       return {
-        type: 'tool_calls',
+        type: 'text',
         content: textBlocks.map((b) => b.text).join(''),
-        toolCalls: toolUseBlocks.map((b) => ({
-          id: b.id,
-          name: b.name,
-          arguments: b.input as Record<string, unknown>,
-        })),
         // A25: expose cache stats from usage field
         usage: _extractUsage(msg.usage),
       };
-    }
-
-    return {
-      type: 'text',
-      content: textBlocks.map((b) => b.text).join(''),
-      // A25: expose cache stats from usage field
-      usage: _extractUsage(msg.usage),
-    };
+    });
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {

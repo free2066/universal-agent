@@ -21,8 +21,15 @@ export function parseLineRef(ref: string): LineRef {
       `Invalid LINE#ID format: "${ref}". Expected format: "lineNumber#XX" where XX is two chars from ZPMQVRWSNKTXJBYH`,
     )
   }
+  // P2: guard against NaN and unsafe integers (e.g. 99999999999999999999#ZZ)
+  const lineNum = parseInt(match[1]!, 10)
+  if (!Number.isInteger(lineNum) || lineNum <= 0 || lineNum > 1_000_000) {
+    throw new Error(
+      `Invalid line number in LINE#ID "${ref}": ${match[1]} (must be 1–1000000)`,
+    )
+  }
   return {
-    line: parseInt(match[1]!, 10),
+    line: lineNum,
     hash: match[2]!,
   }
 }
@@ -60,11 +67,13 @@ export class HashlineMismatchError extends Error {
  * Build a context snippet showing ±2 lines around the target line.
  */
 function buildContext(lines: string[], lineNumber: number): string {
+  // P2: guard against empty file — avoid out-of-bounds access
+  if (lines.length === 0) return '  (empty file)'
   const start = Math.max(1, lineNumber - 2)
   const end = Math.min(lines.length, lineNumber + 2)
   const result: string[] = []
   for (let i = start; i <= end; i++) {
-    const content = lines[i - 1]!
+    const content = lines[i - 1] ?? ''
     const hash = computeLineHash(i, content)
     const marker = i === lineNumber ? '>>> ' : '    '
     result.push(`  ${marker}${i}#${hash}|${content}`)

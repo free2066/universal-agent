@@ -265,7 +265,14 @@ export async function resumeAgentBackground({
           resumedWorktreePath ? { worktreePath: resumedWorktreePath } : {},
       }),
     ),
-  )
+  // P1: catch unhandled rejection from outer runWithAgentContext/cwd setup,
+  // which is not covered by runAsyncAgentLifecycle's internal try/catch.
+  ).catch(err => {
+    logForDebugging(
+      `[resumeAgent] runWithAgentContext threw unexpectedly for agent ${agentBackgroundTask.agentId}: ${err}`,
+      { level: 'error' },
+    )
+  })
 
   return {
     agentId,

@@ -496,8 +496,10 @@ const getGrowthBookClient = memoize(
     const attributes = getUserAttributes()
     const clientKey = getGrowthBookClientKey()
     if (process.env.USER_TYPE === 'ant') {
+      // P2: truncate clientKey in log to prevent it from appearing in debug files
+      const maskedKey = clientKey ? `${clientKey.slice(0, 8)}...` : '(none)'
       logForDebugging(
-        `GrowthBook: Creating client with clientKey=${clientKey}, attributes: ${jsonStringify(attributes)}`,
+        `GrowthBook: Creating client with clientKey=${maskedKey}, attributes: ${jsonStringify(attributes)}`,
       )
     }
     const baseUrl =

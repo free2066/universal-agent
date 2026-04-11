@@ -20953,8 +20953,14 @@ function parseLineRef(ref) {
       `Invalid LINE#ID format: "${ref}". Expected format: "lineNumber#XX" where XX is two chars from ZPMQVRWSNKTXJBYH`
     );
   }
+  const lineNum = parseInt(match[1], 10);
+  if (!Number.isInteger(lineNum) || lineNum <= 0 || lineNum > 1e6) {
+    throw new Error(
+      `Invalid line number in LINE#ID "${ref}": ${match[1]} (must be 1\u20131000000)`
+    );
+  }
   return {
-    line: parseInt(match[1], 10),
+    line: lineNum,
     hash: match[2]
   };
 }
@@ -20983,11 +20989,13 @@ The file has likely changed since you last read it. Use hashline_read to get fre
   }
 };
 function buildContext(lines, lineNumber) {
+  if (lines.length === 0)
+    return "  (empty file)";
   const start = Math.max(1, lineNumber - 2);
   const end = Math.min(lines.length, lineNumber + 2);
   const result = [];
   for (let i = start; i <= end; i++) {
-    const content = lines[i - 1];
+    const content = lines[i - 1] ?? "";
     const hash2 = computeLineHash(i, content);
     const marker = i === lineNumber ? ">>> " : "    ";
     result.push(`  ${marker}${i}#${hash2}|${content}`);
@@ -21036,6 +21044,10 @@ function getEditLineNumber(edit) {
       return edit.pos ? parseLineRef(edit.pos).line : Number.NEGATIVE_INFINITY;
     case "prepend":
       return edit.pos ? parseLineRef(edit.pos).line : Number.NEGATIVE_INFINITY;
+    default: {
+      const _exhaustive = edit;
+      throw new Error(`[hashline] Unknown edit op: ${_exhaustive.op ?? "unknown"}`);
+    }
   }
 }
 function editKey(edit) {
@@ -21304,11 +21316,11 @@ RULES:
     required: ["filePath", "edits"]
   }
 };
-var WORKSPACE_ROOT = process.env.UA_WORKSPACE_ROOT || process.cwd();
+var WORKSPACE_ROOT = (0, import_node_path.resolve)(process.env.UA_WORKSPACE_ROOT || process.cwd());
 function validateFilePath(filePath) {
   const resolved = (0, import_node_path.resolve)(filePath);
   const rel = (0, import_node_path.relative)(WORKSPACE_ROOT, resolved);
-  if (rel.startsWith("..") || rel.startsWith("/")) {
+  if (rel.startsWith("..") || rel.startsWith("/") || (0, import_node_path.isAbsolute)(rel)) {
     throw new Error(
       `Access denied: "${filePath}" is outside the allowed workspace (${WORKSPACE_ROOT}). Only files under the workspace root are accessible via hashline tools.`
     );

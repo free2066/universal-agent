@@ -19,19 +19,25 @@ export class OllamaClient implements LLMClient {
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    const messages = this.convertMessages(options.messages, options.systemPrompt);
+    // P2: use withInferenceTimeout + respect options.signal for abort (Ctrl+C)
+    return withInferenceTimeout(this.model, async (inferSignal) => {
+      const messages = this.convertMessages(options.messages, options.systemPrompt);
+      const signal = options.signal
+        ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([inferSignal, options.signal]) : inferSignal)
+        : inferSignal;
 
-    const res = await fetch(`${this.baseURL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.model, messages, stream: false }),
-      signal: AbortSignal.timeout(120000),
+      const res = await fetch(`${this.baseURL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.model, messages, stream: false }),
+        signal,
+      });
+
+      if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
+      const data = await res.json() as { message?: { content?: string }; error?: string };
+      if (data.error) throw new Error(`Ollama error: ${data.error}`);
+      return { type: 'text', content: data.message?.content || '' };
     });
-
-    if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
-    const data = await res.json() as { message?: { content?: string }; error?: string };
-    if (data.error) throw new Error(`Ollama error: ${data.error}`);
-    return { type: 'text', content: data.message?.content || '' };
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
@@ -46,24 +52,30 @@ export class OllamaClient implements LLMClient {
       });
 
       if (!res.ok) throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
-      const reader = res.body!.getReader();
+      // P0: guard against null body; add finally to release reader on any exit path
+      if (!res.body) throw new Error(`[Ollama] streamChat: response body is null for model ${this.model}`);
+      const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let textContent = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean);
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line) as { message?: { content?: string } };
-            if (data.message?.content) { onChunk(data.message.content); textContent += data.message.content; }
-          } catch (err) {
-            if (line.length > 2) {
-              process.stderr.write(`[llm-client:ollama] Failed to parse chunk (${line.length} chars): ${String(err)}\n`);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean);
+          for (const line of lines) {
+            try {
+              const data = JSON.parse(line) as { message?: { content?: string } };
+              if (data.message?.content) { onChunk(data.message.content); textContent += data.message.content; }
+            } catch (err) {
+              if (line.length > 2) {
+                process.stderr.write(`[llm-client:ollama] Failed to parse chunk (${line.length} chars): ${String(err)}\n`);
+              }
             }
           }
         }
+      } finally {
+        reader.cancel().catch(() => {});
       }
 
       return { type: 'text', content: textContent };
