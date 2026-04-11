@@ -96,8 +96,9 @@ export class FileWatcherService extends EventEmitter {
         })
       }
 
-      this.watcher.on('error', () => {
-        // Silently swallow watcher errors — non-critical
+      this.watcher.on('error', (err: unknown) => {
+        // Log watcher errors (e.g. ENOSPC when inotify limit is reached) so they are diagnosable
+        process.stderr.write(`[FileWatcherService] watcher error: ${String(err)}\n`)
       })
 
       this._running = true
@@ -112,9 +113,13 @@ export class FileWatcherService extends EventEmitter {
    */
   async stop(): Promise<void> {
     if (this.watcher) {
-      await this.watcher.close().catch(() => {})
+      await this.watcher.close().catch((err: unknown) => {
+        process.stderr.write(`[FileWatcherService] watcher.close() failed: ${String(err)}\n`)
+      })
       this.watcher = null
     }
+    // Remove all external 'change' listeners to prevent memory leaks
+    this.removeAllListeners()
     this._running = false
   }
 

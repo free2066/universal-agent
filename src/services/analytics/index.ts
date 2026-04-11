@@ -111,11 +111,15 @@ export function attachAnalyticsSink(newSink: AnalyticsSink): void {
     }
 
     queueMicrotask(() => {
+      // Capture sink reference synchronously before the microtask runs to
+      // guard against it being replaced between now and task execution.
+      const s = sink
+      if (!s) return
       for (const event of queuedEvents) {
         if (event.async) {
-          void sink!.logEventAsync(event.eventName, event.metadata)
+          void s.logEventAsync(event.eventName, event.metadata)
         } else {
-          sink!.logEvent(event.eventName, event.metadata)
+          s.logEvent(event.eventName, event.metadata)
         }
       }
     })

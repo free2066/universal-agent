@@ -119,11 +119,15 @@ export function onChangeAppState({
       getGlobalConfig().showExpandedTodos !== showExpandedTodos ||
       getGlobalConfig().showSpinnerTree !== showSpinnerTree
     ) {
-      saveGlobalConfig(current => ({
-        ...current,
-        showExpandedTodos,
-        showSpinnerTree,
-      }))
+      try {
+        saveGlobalConfig(current => ({
+          ...current,
+          showExpandedTodos,
+          showSpinnerTree,
+        }))
+      } catch (error) {
+        logError(toError(error))
+      }
     }
   }
 
@@ -133,10 +137,14 @@ export function onChangeAppState({
     getGlobalConfig().verbose !== newState.verbose
   ) {
     const verbose = newState.verbose
-    saveGlobalConfig(current => ({
-      ...current,
-      verbose,
-    }))
+    try {
+      saveGlobalConfig(current => ({
+        ...current,
+        verbose,
+      }))
+    } catch (error) {
+      logError(toError(error))
+    }
   }
 
   // tungstenPanelVisible (ant-only tmux panel sticky toggle)
@@ -147,7 +155,11 @@ export function onChangeAppState({
       getGlobalConfig().tungstenPanelVisible !== newState.tungstenPanelVisible
     ) {
       const tungstenPanelVisible = newState.tungstenPanelVisible
-      saveGlobalConfig(current => ({ ...current, tungstenPanelVisible }))
+      try {
+        saveGlobalConfig(current => ({ ...current, tungstenPanelVisible }))
+      } catch (error) {
+        logError(toError(error))
+      }
     }
   }
 

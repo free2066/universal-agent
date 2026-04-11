@@ -22,8 +22,21 @@ export function createStore<T>(
       const next = updater(prev)
       if (Object.is(next, prev)) return
       state = next
-      onChange?.({ newState: next, oldState: prev })
-      for (const listener of listeners) listener()
+      // Isolate onChange and each listener so a throwing callback doesn't
+      // prevent the remaining listeners from being notified (which would
+      // leave React components with stale state).
+      try {
+        onChange?.({ newState: next, oldState: prev })
+      } catch (e) {
+        console.error('[store] onChange threw:', e)
+      }
+      for (const listener of listeners) {
+        try {
+          listener()
+        } catch (e) {
+          console.error('[store] listener threw:', e)
+        }
+      }
     },
 
     subscribe: (listener: Listener) => {

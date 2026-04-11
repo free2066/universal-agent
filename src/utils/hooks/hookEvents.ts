@@ -132,7 +132,7 @@ export function startHookProgressInterval(params: {
 
   let lastEmittedOutput = ''
   const interval = setInterval(() => {
-    void params.getOutput().then(({ stdout, stderr, output }) => {
+    params.getOutput().then(({ stdout, stderr, output }) => {
       if (output === lastEmittedOutput) return
       lastEmittedOutput = output
       emitHookProgress({
@@ -143,6 +143,9 @@ export function startHookProgressInterval(params: {
         stderr,
         output,
       })
+    }).catch(() => {
+      // Non-fatal: best-effort progress reporting; errors are silently ignored
+      // to avoid spamming stderr during hook execution.
     })
   }, params.intervalMs ?? 1000)
   interval.unref()

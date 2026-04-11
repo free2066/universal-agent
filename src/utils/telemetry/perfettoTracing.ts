@@ -311,15 +311,17 @@ export function initializePerfettoTracing(): void {
     })
 
     // Also register a beforeExit handler as a fallback
-    // This ensures the trace is written even if cleanup registry is not called
-    process.on('beforeExit', () => {
+    // This ensures the trace is written even if cleanup registry is not called.
+    // Use process.once to prevent listener accumulation if initializePerfettoTracing() is called multiple times.
+    process.once('beforeExit', () => {
       logForDebugging('[Perfetto] beforeExit handler invoked')
       void writePerfettoTrace()
     })
 
     // Register a synchronous exit handler as a last resort
-    // This is the final fallback to ensure trace is written before process exits
-    process.on('exit', () => {
+    // This is the final fallback to ensure trace is written before process exits.
+    // Use process.once to prevent listener accumulation.
+    process.once('exit', () => {
       if (!traceWritten) {
         logForDebugging(
           '[Perfetto] exit handler invoked, writing trace synchronously',

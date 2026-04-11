@@ -78,7 +78,11 @@ export class OpenAIClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
-    return withInferenceTimeout(this.model, async (signal) => {
+    return withInferenceTimeout(this.model, async (inferSignal) => {
+      // Merge inference timeout signal with caller's AbortSignal (e.g. user Ctrl+C)
+      const signal = options.signal
+        ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([inferSignal, options.signal]) : inferSignal)
+        : inferSignal;
       const messages = this.convertMessages(options);
       const hasTools = (options.tools?.length ?? 0) > 0;
       const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
@@ -485,7 +489,11 @@ export class OpenRouterClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
-    return withInferenceTimeout(this.model, async (signal) => {
+    return withInferenceTimeout(this.model, async (inferSignal) => {
+      // Merge inference timeout signal with caller's AbortSignal (e.g. user Ctrl+C)
+      const signal = options.signal
+        ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([inferSignal, options.signal]) : inferSignal)
+        : inferSignal;
       const hasTools = (options.tools?.length ?? 0) > 0;
       const messages = this._convertMessages(options);
       const stream = await this.client.chat.completions.create(
@@ -534,7 +542,12 @@ export class OpenRouterClient implements LLMClient {
     }
     for (const m of options.messages) {
       if (m.role === 'tool') {
-        msgs.push({ role: 'tool', content: msgText(m.content), tool_call_id: m.toolCallId ?? '' });
+        // Skip tool messages with missing toolCallId — an empty string causes API invalid_request_error
+        if (!m.toolCallId) {
+          process.stderr.write(`[llm-client:openrouter] Skipping tool message with missing toolCallId (content: ${String(m.content).slice(0, 60)})\n`);
+          continue;
+        }
+        msgs.push({ role: 'tool', content: msgText(m.content), tool_call_id: m.toolCallId });
       } else if (m.role === 'assistant' && m.toolCalls?.length) {
         msgs.push({
           role: 'assistant',

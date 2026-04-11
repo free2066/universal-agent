@@ -75,7 +75,13 @@ export class GeminiClient implements LLMClient {
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
-    return withInferenceTimeout(this.model, async (signal) => {
+    return withInferenceTimeout(this.model, async (inferSignal) => {
+      // Merge inference timeout signal with caller's AbortSignal (e.g. user Ctrl+C) — mirrors GeminiClient.chat
+      const signal = options.signal
+        ? (typeof AbortSignal.any === 'function'
+            ? AbortSignal.any([inferSignal, options.signal])
+            : inferSignal)
+        : inferSignal;
       const body = this.buildRequest(options);
       // LLM-8: pass API key via header, not URL query string, to prevent key leaking into logs
       const url = `${this.baseURL}/models/${this.model}:streamGenerateContent?alt=sse`;
@@ -87,7 +93,10 @@ export class GeminiClient implements LLMClient {
         signal,
       });
 
-      if (!res.ok) throw new Error(`Gemini stream error: ${res.status}`);
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Gemini stream error ${res.status}: ${text}`);
+      }
 
       // LLM-7: check body exists before asserting non-null
       if (!res.body) throw new Error(`[Gemini] Response body is null for model ${this.model}`);
@@ -224,6 +233,18 @@ export class GeminiClient implements LLMClient {
         return {
           role: 'user' as const,
           parts: [{ text: `[Tool result]\n${msgText(msg.content)}` }],
+        };
+      }
+      // Serialize assistant tool calls into Gemini functionCall parts so multi-turn
+      // tool-use history is preserved in context (without this, assistant tool call
+      // history is silently dropped, breaking multi-turn tool conversations).
+      if (msg.role === 'assistant' && msg.toolCalls?.length) {
+        return {
+          role: 'model' as const,
+          parts: [
+            ...(msg.content ? [{ text: msgText(msg.content) }] : []),
+            ...msg.toolCalls.map(tc => ({ functionCall: { name: tc.name, args: tc.arguments } })),
+          ],
         };
       }
       return { role: role as 'user' | 'model', parts: [{ text: msgText(msg.content) }] };

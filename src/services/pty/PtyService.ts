@@ -209,7 +209,8 @@ export class PtyService {
 
   /** Get a single pty by ID. */
   get(id: string): PtyInfo | undefined {
-    return this.ptys.get(id) ? { ...this.ptys.get(id)!.info } : undefined
+    const entry = this.ptys.get(id)
+    return entry ? { ...entry.info } : undefined
   }
 
   /**
@@ -239,13 +240,14 @@ export class PtyService {
     const entry = this.ptys.get(id)
     if (!entry) return
     if (entry.info.status === 'running') this.kill(id)
+    // Clean up all listeners on the emitter to prevent memory leaks
+    entry.emitter.removeAllListeners()
     this.ptys.delete(id)
   }
 
   /** Kill all running ptys (called at process exit). */
   killAll(): void {
-    for (const id of this.ptys.keys()) {
-      const e = this.ptys.get(id)!
+    for (const [id, e] of this.ptys.entries()) {
       if (e.info.status === 'running') this.kill(id)
     }
   }
@@ -256,7 +258,13 @@ export class PtyService {
 let _ptyService: PtyService | null = null
 
 export function getPtyService(): PtyService {
-  if (!_ptyService) _ptyService = new PtyService()
+  if (!_ptyService) {
+    _ptyService = new PtyService()
+    // Register cleanup so all ptys are killed when the process exits
+    import('../../utils/cleanupRegistry.js').then(({ registerCleanup }) => {
+      registerCleanup(async () => { _ptyService?.killAll() })
+    }).catch(() => {})
+  }
   return _ptyService
 }
 

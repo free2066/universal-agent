@@ -406,15 +406,12 @@ async function initializeBetaTracing(
   )
   setEventLogger(eventLogger)
 
-  // Setup flush handlers - flush both logs AND traces
-  process.on('beforeExit', async () => {
+  // Setup flush handlers - flush both logs AND traces.
+  // Use process.once to prevent listener accumulation if bootstrapTelemetry() is called multiple times.
+  // The 'exit' event is synchronous — async Promises are not awaited there, so flush must happen in 'beforeExit'.
+  process.once('beforeExit', async () => {
     await loggerProvider?.forceFlush()
     await tracerProvider?.forceFlush()
-  })
-
-  process.on('exit', () => {
-    void loggerProvider?.forceFlush()
-    void tracerProvider?.forceFlush()
   })
 }
 

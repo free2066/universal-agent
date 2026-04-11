@@ -304,11 +304,11 @@ export class AnthropicClient implements LLMClient {
             textContent += event.delta.text;
           } else if ((event.delta as { type: string; partial_json?: string }).type === 'input_json_delta') {
             const partialJson = (event.delta as { type: string; partial_json?: string }).partial_json ?? '';
-            if (currentToolUseIdx >= 0 && toolUseBlocks[currentToolUseIdx]) {
-              toolUseBlocks[currentToolUseIdx]!.inputJson += partialJson;
+            const tb = toolUseBlocks[currentToolUseIdx];
+            if (currentToolUseIdx >= 0 && tb) {
+              tb.inputJson += partialJson;
               // StreamingToolExecutor: eager tool call notification
               if (options.onToolCallDelta) {
-                const tb = toolUseBlocks[currentToolUseIdx]!;
                 options.onToolCallDelta(currentToolUseIdx, tb.name, partialJson, tb.id);
               }
             }

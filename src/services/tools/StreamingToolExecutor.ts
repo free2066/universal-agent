@@ -418,7 +418,8 @@ export class StreamingToolExecutor {
     for (const tool of this.tools) {
       // Always yield pending progress messages immediately, regardless of tool status
       while (tool.pendingProgress.length > 0) {
-        const progressMessage = tool.pendingProgress.shift()!
+        const progressMessage = tool.pendingProgress.shift()
+        if (!progressMessage) break
         yield { message: progressMessage, newContext: this.toolUseContext }
       }
 
@@ -471,8 +472,8 @@ export class StreamingToolExecutor {
         !this.hasPendingProgress()
       ) {
         const executingPromises = this.tools
-          .filter(t => t.status === 'executing' && t.promise)
-          .map(t => t.promise!)
+          .filter(t => t.status === 'executing' && t.promise != null)
+          .map(t => t.promise as Promise<void>)
 
         // Also wait for progress to become available
         const progressPromise = new Promise<void>(resolve => {

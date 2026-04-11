@@ -25,6 +25,7 @@ import {
   type FileHistorySnapshot,
 } from './fileHistory.js'
 import { logError } from './log.js'
+import { logForDebugging } from './debug.js'
 import {
   createAssistantMessage,
   createUserMessage,
@@ -548,7 +549,9 @@ export async function loadConversationForResume(
       }
 
       // Copy file history for resume
-      void copyFileHistoryForResume(log)
+      void copyFileHistoryForResume(log).catch(e =>
+        logForDebugging(`[conversationRecovery] copyFileHistoryForResume failed: ${e}`, { level: 'error' })
+      )
 
       messages = log.messages
       checkResumeConsistency(messages)

@@ -101,7 +101,8 @@ export function initializePolicyLimitsLoadingPromise(): void {
     loadingCompletePromise = new Promise(resolve => {
       loadingCompleteResolve = resolve
 
-      setTimeout(() => {
+      // .unref() ensures the timer won't prevent process exit if nothing else is running.
+      const _loadingTimeout = setTimeout(() => {
         if (loadingCompleteResolve) {
           logForDebugging(
             'Policy limits: Loading promise timed out, resolving anyway',
@@ -110,6 +111,7 @@ export function initializePolicyLimitsLoadingPromise(): void {
           loadingCompleteResolve = null
         }
       }, LOADING_PROMISE_TIMEOUT_MS)
+      _loadingTimeout.unref?.()
     })
   }
 }
