@@ -436,7 +436,7 @@ export function createCronScheduler(
       lockProbeTimer.unref?.()
     }
 
-    void load(true)
+    void load(true).catch(e => logForDebugging(`[cronScheduler] initial load failed: ${e}`, { level: 'error' }))
 
     const path = getCronFilePath(dir)
     watcher = chokidar.watch(path, {
@@ -445,8 +445,8 @@ export function createCronScheduler(
       awaitWriteFinish: { stabilityThreshold: FILE_STABILITY_MS },
       ignorePermissionErrors: true,
     })
-    watcher.on('add', () => void load(false))
-    watcher.on('change', () => void load(false))
+    watcher.on('add', () => void load(false).catch(e => logForDebugging(`[cronScheduler] load on add failed: ${e}`, { level: 'error' })))
+    watcher.on('change', () => void load(false).catch(e => logForDebugging(`[cronScheduler] load on change failed: ${e}`, { level: 'error' })))
     watcher.on('unlink', () => {
       if (!stopped) {
         tasks = []
@@ -511,7 +511,7 @@ export function createCronScheduler(
         clearInterval(lockProbeTimer)
         lockProbeTimer = null
       }
-      void watcher?.close()
+      watcher?.close().catch(e => logForDebugging(`[cronScheduler] watcher close error: ${e}`, { level: 'error' }))
       watcher = null
       if (isOwner) {
         isOwner = false

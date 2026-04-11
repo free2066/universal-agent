@@ -1204,14 +1204,12 @@ export const connectToServer = memoize(
           serverVersion:
             serverVersion as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         })
-        try {
-          void maybeNotifyIDEConnected(client)
-        } catch (error) {
+        await maybeNotifyIDEConnected(client).catch(error => {
           logMCPError(
             name,
             `Failed to send ide_connected notification: ${error}`,
           )
-        }
+        })
       }
 
       // Enhanced connection drop detection and logging for all transport types
@@ -1391,7 +1389,7 @@ export const connectToServer = memoize(
         fetchResourcesForClient.cache.delete(name)
         fetchCommandsForClient.cache.delete(name)
         if (feature('MCP_SKILLS')) {
-          fetchMcpSkillsForClient!.cache.delete(name)
+          fetchMcpSkillsForClient?.cache.delete(name)
         }
 
         connectToServer.cache.delete(key)
@@ -1669,7 +1667,7 @@ export async function clearServerCache(
   fetchResourcesForClient.cache.delete(name)
   fetchCommandsForClient.cache.delete(name)
   if (feature('MCP_SKILLS')) {
-    fetchMcpSkillsForClient!.cache.delete(name)
+    fetchMcpSkillsForClient?.cache.delete(name)
   }
 }
 

@@ -102,6 +102,8 @@ export const init = memoize(async (): Promise<void> => {
       gb.onGrowthBookRefresh(() => {
         void fp.reinitialize1PEventLoggingIfConfigChanged()
       })
+    }).catch(err => {
+      logForDebugging(`[init] analytics init failed: ${err}`, { level: 'error' })
     })
     profileCheckpoint('init_after_1p_event_logging')
 

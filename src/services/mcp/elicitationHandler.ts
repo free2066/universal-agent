@@ -194,7 +194,9 @@ export function registerElicitationHandler(
           if (idx === -1) return prev
           found = true
           const queue = [...prev.elicitation.queue]
-          queue[idx] = { ...queue[idx]!, completed: true }
+          const item = queue[idx]
+          if (!item) return prev
+          queue[idx] = { ...item, completed: true }
           return { ...prev, elicitation: { queue } }
         })
         if (!found) {
@@ -205,8 +207,11 @@ export function registerElicitationHandler(
         }
       },
     )
-  } catch {
+  } catch (error) {
     // Client wasn't created with elicitation capability - nothing to register
+    if (!String(error).includes('capability') && !String(error).includes('Capability')) {
+      logMCPDebug(serverName, `Unexpected elicitation registration error: ${error}`)
+    }
     return
   }
 }

@@ -15,6 +15,8 @@ type RegistryResponse = {
 // URLs stripped of query string and trailing slash — matches the normalization
 // done by getLoggingSafeMcpBaseUrl so direct Set.has() lookup works.
 let officialUrls: Set<string> | undefined = undefined
+// Prevent concurrent fetches from making multiple network requests
+let prefetchInFlight: Promise<void> | undefined
 
 function normalizeUrl(url: string): string | undefined {
   try {
@@ -30,33 +32,43 @@ function normalizeUrl(url: string): string | undefined {
  * Fire-and-forget fetch of the official MCP registry.
  * Populates officialUrls for isOfficialMcpUrl lookups.
  */
-export async function prefetchOfficialMcpUrls(): Promise<void> {
+export function prefetchOfficialMcpUrls(): Promise<void> {
   if (process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC) {
-    return
+    return Promise.resolve()
   }
+  // Already populated — skip
+  if (officialUrls !== undefined) return Promise.resolve()
+  // De-duplicate concurrent callers: return the in-flight promise
+  if (prefetchInFlight) return prefetchInFlight
 
-  try {
-    const response = await axios.get<RegistryResponse>(
-      'https://api.anthropic.com/mcp-registry/v0/servers?version=latest&visibility=commercial',
-      { timeout: 5000 },
-    )
+  prefetchInFlight = (async () => {
+    try {
+      const response = await axios.get<RegistryResponse>(
+        'https://api.anthropic.com/mcp-registry/v0/servers?version=latest&visibility=commercial',
+        { timeout: 5000 },
+      )
 
-    const urls = new Set<string>()
-    for (const entry of response.data.servers) {
-      for (const remote of entry.server.remotes ?? []) {
-        const normalized = normalizeUrl(remote.url)
-        if (normalized) {
-          urls.add(normalized)
+      const urls = new Set<string>()
+      for (const entry of response.data.servers) {
+        for (const remote of entry.server.remotes ?? []) {
+          const normalized = normalizeUrl(remote.url)
+          if (normalized) {
+            urls.add(normalized)
+          }
         }
       }
+      officialUrls = urls
+      logForDebugging(`[mcp-registry] Loaded ${urls.size} official MCP URLs`)
+    } catch (error) {
+      logForDebugging(`Failed to fetch MCP registry: ${errorMessage(error)}`, {
+        level: 'error',
+      })
     }
-    officialUrls = urls
-    logForDebugging(`[mcp-registry] Loaded ${urls.size} official MCP URLs`)
-  } catch (error) {
-    logForDebugging(`Failed to fetch MCP registry: ${errorMessage(error)}`, {
-      level: 'error',
-    })
-  }
+  })().finally(() => {
+    prefetchInFlight = undefined
+  })
+
+  return prefetchInFlight
 }
 
 /**
@@ -69,4 +81,5 @@ export function isOfficialMcpUrl(normalizedUrl: string): boolean {
 
 export function resetOfficialMcpUrlsForTesting(): void {
   officialUrls = undefined
+  prefetchInFlight = undefined
 }

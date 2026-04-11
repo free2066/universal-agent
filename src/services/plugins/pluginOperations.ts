@@ -19,6 +19,7 @@ import type { LoadedPlugin, PluginManifest } from '../../types/plugin.js'
 import { isENOENT, toError } from '../../utils/errors.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
 import { logError } from '../../utils/log.js'
+import { logForDebugging } from '../../utils/debug.js'
 import {
   clearAllCaches,
   markPluginVersionOrphaned,
@@ -293,9 +294,13 @@ export function getPluginInstallationFromV2(pluginId: string): {
   }
 
   // Fall back to first installation (could be managed)
+  const firstInstall = installations[0]
+  if (!firstInstall) {
+    throw new Error('getInstallationScope: no installations found')
+  }
   return {
-    scope: installations[0]!.scope,
-    projectPath: installations[0]!.projectPath,
+    scope: firstInstall.scope,
+    projectPath: firstInstall.projectPath,
   }
 }
 
@@ -994,7 +999,8 @@ async function performPluginUpdate({
         entry.name,
         entry.source,
       )
-    } catch {
+    } catch (e) {
+      logForDebugging(`Failed to load plugin manifest for ${entry.name}: ${e}`, { level: 'warn' })
       // Failed to load - will use other version sources
     }
 

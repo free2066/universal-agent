@@ -526,8 +526,9 @@ export async function gracefulShutdown(
     const cleanupPromise = (async () => {
       try {
         await runCleanupFunctions()
-      } catch {
-        // Silently ignore cleanup errors
+      } catch (e) {
+        // Log cleanup errors but don't let them block the shutdown sequence
+        logForDebugging(`[gracefulShutdown] cleanup error: ${e}`, { level: 'error' })
       }
     })()
 

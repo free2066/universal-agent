@@ -658,7 +658,7 @@ export function refreshAwsAuth(awsAuthRefresh: string): Promise<boolean> {
     const refreshProc = exec(awsAuthRefresh, {
       timeout: AWS_AUTH_REFRESH_TIMEOUT_MS,
     })
-    refreshProc.stdout!.on('data', data => {
+    refreshProc.stdout?.on('data', data => {
       const output = data.toString().trim()
       if (output) {
         // Add output to status manager for UI display
@@ -668,12 +668,18 @@ export function refreshAwsAuth(awsAuthRefresh: string): Promise<boolean> {
       }
     })
 
-    refreshProc.stderr!.on('data', data => {
+    refreshProc.stderr?.on('data', data => {
       const error = data.toString().trim()
       if (error) {
         authStatusManager.setError(error)
         logForDebugging(error, { level: 'error' })
       }
+    })
+
+    refreshProc.on('error', err => {
+      logForDebugging(`AWS auth refresh process error: ${err.message}`, { level: 'error' })
+      authStatusManager.endAuthentication(false)
+      void resolve(false)
     })
 
     refreshProc.on('close', (code, signal) => {
@@ -926,7 +932,7 @@ export function refreshGcpAuth(gcpAuthRefresh: string): Promise<boolean> {
     const refreshProc = exec(gcpAuthRefresh, {
       timeout: GCP_AUTH_REFRESH_TIMEOUT_MS,
     })
-    refreshProc.stdout!.on('data', data => {
+    refreshProc.stdout?.on('data', data => {
       const output = data.toString().trim()
       if (output) {
         // Add output to status manager for UI display
@@ -936,12 +942,18 @@ export function refreshGcpAuth(gcpAuthRefresh: string): Promise<boolean> {
       }
     })
 
-    refreshProc.stderr!.on('data', data => {
+    refreshProc.stderr?.on('data', data => {
       const error = data.toString().trim()
       if (error) {
         authStatusManager.setError(error)
         logForDebugging(error, { level: 'error' })
       }
+    })
+
+    refreshProc.on('error', err => {
+      logForDebugging(`GCP auth refresh process error: ${err.message}`, { level: 'error' })
+      authStatusManager.endAuthentication(false)
+      void resolve(false)
     })
 
     refreshProc.on('close', (code, signal) => {

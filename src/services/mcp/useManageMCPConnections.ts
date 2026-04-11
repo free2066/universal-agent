@@ -462,7 +462,13 @@ export function useManageMCPConnections(
                 }
               }
 
-              void reconnectWithBackoff()
+              reconnectWithBackoff().catch(error => {
+                logMCPError(
+                  client.name,
+                  `Reconnect loop failed unexpectedly: ${error}`,
+                )
+                updateServer({ ...client, type: 'failed' })
+              })
             } else {
               updateServer({ ...client, type: 'failed' })
             }
@@ -808,7 +814,9 @@ export function useManageMCPConnections(
           }
           if (s.type === 'connected') {
             s.client.onclose = undefined
-            void clearServerCache(s.name, s.config).catch(() => {})
+            clearServerCache(s.name, s.config).catch(err => {
+              logForDebugging(`clearServerCache failed for ${s.name}: ${err}`, { level: 'error' })
+            })
           }
         }
 

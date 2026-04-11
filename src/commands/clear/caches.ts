@@ -129,17 +129,17 @@ export function clearSessionCaches(
   // Clear WebFetch URL cache (up to 50MB of cached page content)
   void import('../../tools/WebFetchTool/utils.js').then(
     ({ clearWebFetchCache }) => clearWebFetchCache(),
-  )
+  ).catch(() => {})
   // Clear ToolSearch description cache (full tool prompts, ~500KB for 50 MCP tools)
   void import('../../tools/ToolSearchTool/ToolSearchTool.js').then(
     ({ clearToolSearchDescriptionCache }) => clearToolSearchDescriptionCache(),
-  )
+  ).catch(() => {})
   // Clear agent definitions cache (accumulates per-cwd via EnterWorktreeTool)
   void import('../../tools/AgentTool/loadAgentsDir.js').then(
     ({ clearAgentDefinitionsCache }) => clearAgentDefinitionsCache(),
-  )
+  ).catch(() => {})
   // Clear SkillTool prompt cache (accumulates per project root)
   void import('../../tools/SkillTool/prompt.js').then(({ clearPromptCache }) =>
     clearPromptCache(),
-  )
+  ).catch(() => {})
 }

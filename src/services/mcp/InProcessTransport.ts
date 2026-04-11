@@ -30,7 +30,11 @@ class InProcessTransport implements Transport {
     // Deliver to the other side asynchronously to avoid stack depth issues
     // with synchronous request/response cycles
     queueMicrotask(() => {
-      this.peer?.onmessage?.(message)
+      if (!this.peer) {
+        this.onerror?.(new Error('InProcessTransport: peer not set, message dropped'))
+        return
+      }
+      this.peer.onmessage?.(message)
     })
   }
 

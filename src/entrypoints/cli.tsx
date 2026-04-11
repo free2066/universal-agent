@@ -151,9 +151,10 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     uaLog(`[step2] router: ${process.env.UA_TASK_ROUTER ?? 'not configured'}`)
     uaLog(`[step2] fallback chain: ${process.env.UA_FALLBACK_CHAIN ?? 'not configured'}`)
 
+    const modelName = process.env.ANTHROPIC_MODEL ?? ''
     const isAnthropicModel =
-      process.env.ANTHROPIC_MODEL!.startsWith('claude-') ||
-      process.env.ANTHROPIC_MODEL!.includes('anthropic.claude')
+      modelName.startsWith('claude-') ||
+      modelName.includes('anthropic.claude')
 
     uaLog(`[step2] isAnthropicModel: ${isAnthropicModel}`)
 
@@ -165,7 +166,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
       // Load per-profile credentials if the profile has them and .env didn't set them
       const profiles: any[] = config.profiles || []
-      const activeModel = process.env.ANTHROPIC_MODEL!
+      const activeModel = process.env.ANTHROPIC_MODEL ?? ''
       const profile = profiles.find((p: any) => p.name === activeModel || p.modelName === activeModel)
 
       if (profile) {
