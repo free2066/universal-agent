@@ -613,11 +613,6 @@ export async function initializeTelemetry() {
         await tracerProvider?.forceFlush()
       })
 
-      process.on('exit', () => {
-        // Final attempt to flush logs and traces
-        void loggerProvider?.forceFlush()
-        void getTracerProvider()?.forceFlush()
-      })
     }
   }
 
