@@ -369,7 +369,28 @@ export const AgentTool = buildTool({
       const agents = filterDeniedAgents(
       // When allowedAgentTypes is set (from Agent(x,y) tool spec), restrict to those types
       allowedAgentTypes ? allAgents.filter(a => allowedAgentTypes.includes(a.agentType)) : allAgents, appState.toolPermissionContext, AGENT_TOOL_NAME);
-      const found = agents.find(agent => agent.agentType === effectiveType);
+      const found = (() => {
+        // 1. Exact match (original logic)
+        const exact = agents.find(agent => agent.agentType === effectiveType);
+        if (exact) return exact;
+
+        // 2. Case-insensitive short-name fallback.
+        // LLMs sometimes output bare names without namespace prefix, e.g.
+        // "Explore" instead of "oh-my-claudecode:explore". Match against the
+        // suffix after the last ":" so both bare names and prefixed names work.
+        if (effectiveType) {
+          const lowerType = effectiveType.toLowerCase();
+          const fuzzy = agents.find(agent => {
+            const lower = agent.agentType.toLowerCase();
+            return lower === lowerType || lower.endsWith(':' + lowerType);
+          });
+          if (fuzzy) {
+            logForDebugging(`[UA] subagent_type '${effectiveType}' normalized to '${fuzzy.agentType}'`);
+            return fuzzy;
+          }
+        }
+        return undefined;
+      })();
       if (!found) {
         // Check if the agent exists but is denied by permission rules
         const agentExistsButDenied = allAgents.find(agent => agent.agentType === effectiveType);

@@ -572,6 +572,21 @@ export class MultiModelAnthropicAdapter {
         }
       }
     } catch (err: any) {
+      // ── 429 Rate-limit auto-retry ──────────────────────────────────────────
+      // Delays: 15s → 30s → 60s → give up (4th attempt throws normally)
+      const RETRY_DELAYS = [15_000, 30_000, 60_000]
+      const retryCount: number = (params.__retryCount ?? 0) as number
+      const is429 = err?.status === 429 || (err?.message ?? '').includes('429')
+      if (is429 && retryCount < RETRY_DELAYS.length) {
+        const delay = RETRY_DELAYS[retryCount]!
+        process.stderr.write(
+          `[UA:429] rate limited on ${this.modelName}, retry ${retryCount + 1}/${RETRY_DELAYS.length} in ${delay / 1000}s...\n`,
+        )
+        await new Promise<void>(resolve => setTimeout(resolve, delay))
+        return this._callModel({ ...params, __retryCount: retryCount + 1 }, options)
+      }
+      // ── /429 auto-retry ────────────────────────────────────────────────────
+
       // Log error details — 详细记录便于排查
       const uaLogFile = process.env.UA_DEBUG_LOG
       const uaLog = uaLogFile
