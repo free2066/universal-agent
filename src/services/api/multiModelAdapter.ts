@@ -529,24 +529,47 @@ export class MultiModelAnthropicAdapter {
         const inputTokensFn = () => Math.ceil(inputLen / 4)
         const outputTokensFn = () => Math.ceil(outputLen / 4)
 
-        const streamChatPromise = this.llmClient.streamChat(chatOptions, onChunk).then(
-          (r: any) => {
-            chatResponse = r
-            // Wake up Generator one final time so it can drain the queue and exit
-            notifyResolve?.()
-            if (process.env.UA_DEBUG_LOG) {
-              try {
-                require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
-                  `[UA:multiModel] realStream OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
-              } catch {}
-            }
-            return r
-          },
-          (e: any) => {
-            notifyResolve?.()
-            throw e
-          },
-        )
+        // Wrap streamChat in a retry helper so 429 rate-limit errors from the
+        // streaming request are retried (15s → 30s → 60s → give up) before the
+        // rejection propagates into buildRealStreamResult and surfaces to the user.
+        const RETRY_DELAYS_STREAM = [15_000, 30_000, 60_000]
+        const attemptStream = (attempt: number): Promise<any> =>
+          this.llmClient.streamChat(chatOptions, onChunk).then(
+            (r: any) => {
+              chatResponse = r
+              notifyResolve?.()
+              if (process.env.UA_DEBUG_LOG) {
+                try {
+                  require('fs').appendFileSync(process.env.UA_DEBUG_LOG,
+                    `[UA:multiModel] realStream OK: type=${r?.type} toolCalls=${r?.toolCalls?.length || 0}\n`)
+                } catch {}
+              }
+              return r
+            },
+            async (e: any) => {
+              const is429 = e?.status === 429 || String(e?.message || '').includes('429')
+              if (is429 && attempt < RETRY_DELAYS_STREAM.length) {
+                const delay = RETRY_DELAYS_STREAM[attempt]
+                process.stderr.write(`[UA:429] stream rate limited, retry ${attempt + 1}/${RETRY_DELAYS_STREAM.length} in ${delay / 1000}s...\n`)
+                // Reset queue for the fresh attempt
+                chunkQueue.length = 0
+                outputLen = 0
+                // IMPORTANT: resolve the old notifyPromise BEFORE replacing it so the
+                // generator (which may already be awaiting it) can wake up and see the
+                // empty queue, then go back to await the new notifyPromise.
+                // Skipping this step orphans the old Promise and causes a permanent deadlock.
+                const oldResolve = notifyResolve
+                notifyPromise = new Promise<void>(res => { notifyResolve = res })
+                oldResolve?.()
+                await new Promise<void>(res => setTimeout(res, delay))
+                return attemptStream(attempt + 1)
+              }
+              notifyResolve?.()
+              throw e
+            },
+          )
+
+        const streamChatPromise = attemptStream(0)
 
         return Promise.resolve({
           chatResponse: null,
