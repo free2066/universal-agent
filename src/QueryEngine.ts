@@ -59,6 +59,7 @@ import {
 } from './utils/fileStateCache.js'
 import { headlessProfilerCheckpoint } from './utils/headlessProfiler.js'
 import { registerStructuredOutputEnforcement } from './utils/hooks/hookHelpers.js'
+import { logForDebugging } from './utils/debug.js'
 import { getInMemoryErrors, logError } from './utils/log.js'
 import { countToolCalls, SYNTHETIC_MESSAGES } from './utils/messages.js'
 import {
@@ -129,6 +130,8 @@ const snipProjection = feature('HISTORY_SNIP')
   ? (require('./services/compact/snipProjection.js') as typeof import('./services/compact/snipProjection.js'))
   : null
 /* eslint-enable @typescript-eslint/no-require-imports */
+
+const SESSION_DB_CONTENT_MAX = 4096
 
 export type QueryEngineConfig = {
   cwd: string
@@ -716,6 +719,8 @@ export class QueryEngine {
             )
             if (tailIdx !== -1) {
               await recordTranscript(this.mutableMessages.slice(0, tailIdx + 1))
+            } else {
+              logForDebugging('compact_boundary tailUuid not found in mutableMessages', { tailUuid })
             }
           }
         }
@@ -910,8 +915,7 @@ export class QueryEngine {
           )
           if (snipResult !== undefined) {
             if (snipResult.executed) {
-              this.mutableMessages.length = 0
-              this.mutableMessages.push(...snipResult.messages)
+              this.mutableMessages = snipResult.messages.slice()
             }
             break
           }
@@ -1095,7 +1099,7 @@ export class QueryEngine {
             id: randomUUID(),
             sessionId,
             role: 'assistant',
-            content: text.slice(0, 4096), // cap to keep files small
+            content: text.slice(0, SESSION_DB_CONTENT_MAX), // cap to keep files small
             createdAt: new Date().toISOString(),
           })
         }
@@ -1131,9 +1135,8 @@ export class QueryEngine {
         // entire process's logError buffer (ripgrep timeouts, ENOENT, etc).
         errors: (() => {
           const all = getInMemoryErrors()
-          const start = errorLogWatermark
-            ? all.lastIndexOf(errorLogWatermark) + 1
-            : 0
+          const idx = errorLogWatermark ? all.lastIndexOf(errorLogWatermark) : -1
+          const start = idx !== -1 ? idx + 1 : all.length
           return [
             `[ede_diagnostic] result_type=${edeResultType} last_content_type=${edeLastContentType} stop_reason=${lastStopReason}`,
             ...all.slice(start).map(_ => _.error),

@@ -538,6 +538,10 @@ export function getRetryDelay(
     if (!isNaN(seconds)) {
       return seconds * 1000
     }
+    const retryDate = new Date(retryAfterHeader)
+    if (!isNaN(retryDate.getTime())) {
+      return Math.max(0, retryDate.getTime() - Date.now())
+    }
   }
 
   const baseDelay = Math.min(

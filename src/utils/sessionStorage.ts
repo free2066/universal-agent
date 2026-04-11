@@ -2363,7 +2363,7 @@ export async function loadTranscriptFromFile(
   try {
     parsed = jsonParse(content)
   } catch (error) {
-    throw new Error(`Invalid JSON in transcript file: ${error}`)
+    throw new Error(`Invalid JSON in transcript file: ${error instanceof Error ? error.message : String(error)}`)
   }
 
   let messages: TranscriptMessage[]
