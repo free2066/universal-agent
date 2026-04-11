@@ -103,7 +103,7 @@ export async function getAnthropicClient({
   // ── UA Multi-Model Router ─────────────────────────────────────────────────
   // If the active model is not a native Anthropic model (e.g. OpenAI/Gemini/
   // Ollama/万擎), route to the MultiModelAnthropicAdapter instead.
-  const resolvedModel = model ?? process.env.ANTHROPIC_MODEL ?? ''
+  const resolvedModel = model || process.env.ANTHROPIC_MODEL || ''
   if (isNonAnthropicModel(resolvedModel)) {
     return new MultiModelAnthropicAdapter(resolvedModel) as unknown as Anthropic
   }

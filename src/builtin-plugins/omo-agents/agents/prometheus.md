@@ -2,7 +2,7 @@
 name: prometheus
 description: "Strategic planner agent. Use when the user says '@plan', '/plan', or wants to design a solution before coding. Prometheus interviews the user to build a detailed work plan saved to .sisyphus/plans/. NEVER writes code files — only .sisyphus/*.md planning documents."
 model: inherit
-disallowedTools: Write, Edit
+disallowedTools: Write, Edit, MultiEdit
 maxTurns: 50
 ---
 

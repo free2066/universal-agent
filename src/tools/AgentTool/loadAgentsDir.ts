@@ -274,15 +274,23 @@ async function initializeAgentMemorySnapshots(
           logForDebugging(
             `Initializing ${agent.agentType} memory from project snapshot`,
           )
+          if (!result.snapshotTimestamp) {
+            logForDebugging(`[UA] Missing snapshotTimestamp for initialize action on ${agent.agentType}, skipping`)
+            break
+          }
           await initializeFromSnapshot(
             agent.agentType,
             agent.memory,
-            result.snapshotTimestamp!,
+            result.snapshotTimestamp,
           )
           break
         case 'prompt-update':
+          if (!result.snapshotTimestamp) {
+            logForDebugging(`[UA] Missing snapshotTimestamp for prompt-update on ${agent.agentType}, skipping`)
+            break
+          }
           agent.pendingSnapshotUpdate = {
-            snapshotTimestamp: result.snapshotTimestamp!,
+            snapshotTimestamp: result.snapshotTimestamp,
           }
           logForDebugging(
             `Newer snapshot available for ${agent.agentType} memory (snapshot: ${result.snapshotTimestamp})`,

@@ -405,20 +405,32 @@ function maskModelCodename(baseName: string): string {
   return [masked, ...rest].join('-')
 }
 
+// UA: module-level cache for UA_EXTRA_MODELS to avoid hot-path JSON.parse on every render
+let _uaExtraModelsCache: Array<{ name: string; displayName: string }> | null | undefined = undefined
+function getUAExtraModels(): Array<{ name: string; displayName: string }> | null {
+  if (_uaExtraModelsCache !== undefined) return _uaExtraModelsCache
+  try {
+    const raw = process.env.UA_EXTRA_MODELS
+    if (!raw) { _uaExtraModelsCache = null; return null }
+    const parsed = JSON.parse(raw)
+    _uaExtraModelsCache = Array.isArray(parsed) ? parsed : null
+  } catch {
+    _uaExtraModelsCache = null
+  }
+  return _uaExtraModelsCache
+}
+
 export function renderModelName(model: ModelName): string {
   const publicName = getPublicModelDisplayName(model)
   if (publicName) {
     return publicName
   }
   // UA: 从 UA_EXTRA_MODELS 里查找友好名（覆盖切换后的模型）
-  try {
-    const uaExtra = process.env.UA_EXTRA_MODELS
-    if (uaExtra) {
-      const profiles: Array<{ name: string; displayName: string }> = JSON.parse(uaExtra)
-      const match = profiles.find(p => p.name === model)
-      if (match) return match.displayName
-    }
-  } catch {}
+  const uaProfiles = getUAExtraModels()
+  if (uaProfiles) {
+    const match = uaProfiles.find(p => p.name === model)
+    if (match) return match.displayName
+  }
   if (process.env.USER_TYPE === 'ant') {
     const resolved = parseUserSpecifiedModel(model)
     const antModel = resolveAntModel(model)

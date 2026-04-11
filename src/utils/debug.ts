@@ -1,4 +1,5 @@
 import { appendFile, mkdir, symlink, unlink } from 'fs/promises'
+import { mkdirSync } from 'fs'
 import memoize from 'lodash-es/memoize.js'
 import { dirname, join } from 'path'
 import { getSessionId } from 'src/bootstrap/state.js'
@@ -32,7 +33,7 @@ function getUASessionLogWriter(): BufferedWriter | null {
         try {
           if (!ensuredDir) {
             // Use native mkdirSync for recursive support (getFsImplementation type lacks it)
-            require('fs').mkdirSync(dirname(sessionLogFile), { recursive: true })
+            mkdirSync(dirname(sessionLogFile), { recursive: true })
             ensuredDir = true
           }
           getFsImplementation().appendFileSync(sessionLogFile, content)

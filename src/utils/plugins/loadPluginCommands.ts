@@ -683,8 +683,8 @@ export const getPluginCommands = memoize(async (): Promise<Command[]> => {
   for (const plugin of enabled) {
     if (plugin.manifest?.namespace !== false) continue
     for (const cmd of perPluginCommands[enabled.indexOf(plugin)] ?? []) {
-      // cmd.name is "pluginName:cmdName" — strip the plugin prefix to get bare name
-      const colonIdx = cmd.name.indexOf(':')
+      // cmd.name is "pluginName:cmdName" or "ns:sub:cmd" — strip everything before the last ":" to get bare name
+      const colonIdx = cmd.name.lastIndexOf(':')
       if (colonIdx < 0) continue
       const bareName = cmd.name.slice(colonIdx + 1)
       // Only register alias if no conflict with existing commands
@@ -695,7 +695,12 @@ export const getPluginCommands = memoize(async (): Promise<Command[]> => {
         continue
       }
       commandNameSet.add(bareName)
-      aliases.push({ ...cmd, name: bareName })
+      aliases.push({
+        ...cmd,
+        name: bareName,
+        // Override userFacingName so it shows the alias name, not the original prefixed name
+        userFacingName(): string { return bareName },
+      })
       logForDebugging(
         `[UA A2] Registered no-prefix alias "/${bareName}" for plugin command "/${cmd.name}"`,
       )

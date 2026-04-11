@@ -323,6 +323,12 @@ export const AgentTool = buildTool({
             return l === lowerInput || l.endsWith(':' + lowerInput);
           });
           if (fuzzy.length === 1) normalizedSubagentType = fuzzy[0]!.agentType;
+          else if (fuzzy.length > 1) {
+            // UA: multiple fuzzy matches → ambiguous, throw to prevent silent wrong-agent spawn
+            throw new Error(
+              `Ambiguous subagent_type '${subagent_type}': matches multiple agents: ${fuzzy.map(a => a.agentType).join(', ')}. Use the full agent type.`,
+            );
+          }
         }
       }
       // Set agent definition color for grouped UI display before spawning
@@ -438,8 +444,9 @@ export const AgentTool = buildTool({
           if (fuzzyDenied.length === 1) agentExistsButDenied = fuzzyDenied[0];
         }
         if (agentExistsButDenied) {
-          const denyRule = getDenyRuleForAgent(appState.toolPermissionContext, AGENT_TOOL_NAME, agentExistsButDenied.agentType);
-          throw new Error(`Agent type '${effectiveType}' has been denied by permission rule '${AGENT_TOOL_NAME}(${agentExistsButDenied.agentType})' from ${denyRule?.source ?? 'settings'}.`);
+          // UA: use user-supplied effectiveType in error message to avoid leaking
+          // fuzzy-inferred namespaced agentType (information disclosure)
+          throw new Error(`Agent type '${effectiveType}' has been denied by permission rules.`);
         }
         throw new Error(`Agent type '${effectiveType}' not found. Available agents: ${agents.map(a => a.agentType).join(', ')}`);
       }

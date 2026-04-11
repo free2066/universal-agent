@@ -648,7 +648,7 @@ export async function compactConversation(
             : rawContent
           summaryMessages.push(
             createUserMessage({
-              content: `[Context: The user's last request before this auto-compaction was: "${truncated}". Please continue addressing it after reviewing the summary above.]`,
+              content: `[Context: The user's last request before this auto-compaction was:\n---\n${truncated}\n---\nPlease continue addressing it after reviewing the summary above.]`,
               isMeta: true,
               isCompactSummary: true,
             }),

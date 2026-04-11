@@ -179,6 +179,8 @@ export const getUserContext = memoize(
     // Supports HTTP(S) URLs pointing to shared team rule files.
     // Multiple URLs can be separated by commas. Failures are silent.
     // Inspired by opencode/packages/opencode/src/session/instruction.ts.
+    // Security: content is capped at 50KB per URL and must have text/* Content-Type.
+    const UA_REMOTE_MAX_BYTES = 50_000
     let remoteInstructions: string | null = null
     const remoteUrls = process.env.UA_REMOTE_INSTRUCTIONS
     if (remoteUrls) {
@@ -189,8 +191,25 @@ export const getUserContext = memoize(
         const results = await Promise.all(
           urls.map(async (url) => {
             try {
-              const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
-              if (res.ok) return await res.text()
+              // AbortSignal.timeout compatibility: Bun/older Node may lack it
+              const signal = typeof AbortSignal.timeout === 'function'
+                ? AbortSignal.timeout(5000)
+                : (() => { const c = new AbortController(); setTimeout(() => c.abort(), 5000); return c.signal })()
+              const res = await fetch(url, { signal })
+              if (!res.ok) return ''
+              // Validate Content-Type is text/* to reject binary/JSON injection
+              const ct = res.headers.get('content-type') ?? ''
+              if (!ct.startsWith('text/') && !ct.startsWith('application/json')) return ''
+              const text = await res.text()
+              // Cap at 50KB to prevent context window flooding
+              if (text.length > UA_REMOTE_MAX_BYTES) {
+                logForDebugging(
+                  `[UA_REMOTE_INSTRUCTIONS] ${url} response too large (${text.length} bytes > ${UA_REMOTE_MAX_BYTES}), truncating`,
+                  { level: 'warn' },
+                )
+                return text.slice(0, UA_REMOTE_MAX_BYTES)
+              }
+              return text
             } catch {
               // Silent failure — network issues or invalid URLs don't block startup
             }

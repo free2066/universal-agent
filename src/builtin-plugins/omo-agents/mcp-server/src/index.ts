@@ -11,6 +11,7 @@
  */
 
 import { readFile, writeFile } from 'node:fs/promises'
+import { resolve, relative } from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
@@ -119,9 +120,28 @@ RULES:
   },
 }
 
+// --------------- Path validation ---------------
+
+// Only allow access to files under cwd (passed via env var) or process.cwd().
+// This prevents LLM prompt injection attacks from reading arbitrary files.
+const WORKSPACE_ROOT = process.env.UA_WORKSPACE_ROOT || process.cwd()
+
+function validateFilePath(filePath: string): void {
+  const resolved = resolve(filePath)
+  const rel = relative(WORKSPACE_ROOT, resolved)
+  // rel starts with '..' means it escaped the workspace root
+  if (rel.startsWith('..') || rel.startsWith('/')) {
+    throw new Error(
+      `Access denied: "${filePath}" is outside the allowed workspace (${WORKSPACE_ROOT}). ` +
+      `Only files under the workspace root are accessible via hashline tools.`,
+    )
+  }
+}
+
 // --------------- Handlers ---------------
 
 async function handleHashlineRead(filePath: string): Promise<string> {
+  validateFilePath(filePath)
   let content: string
   try {
     content = await readFile(filePath, 'utf8')
@@ -146,6 +166,7 @@ async function handleHashlineEdit(
   filePath: string,
   rawEdits: RawHashlineEdit[],
 ): Promise<string> {
+  validateFilePath(filePath)
   // Read current file content
   let content: string
   try {

@@ -13,7 +13,9 @@ import { isBilledAsExtraUsage } from '../../utils/extraUsage.js';
 import { clearFastModeCooldown, isFastModeAvailable, isFastModeEnabled, isFastModeSupportedByModel } from '../../utils/fastMode.js';
 import { MODEL_ALIASES } from '../../utils/model/aliases.js';
 import { checkOpus1mAccess, checkSonnet1mAccess } from '../../utils/model/check1mAccess.js';
+import { appendFile } from 'fs/promises';
 import { getDefaultMainLoopModelSetting, isOpus1mMergeEnabled, renderDefaultModelSetting } from '../../utils/model/model.js';
+import { logForDebugging } from '../../utils/debug.js';
 import { updateSettingsForSource } from '../../utils/settings/settings.js';
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js';
 import { validateModel } from '../../utils/model/validateModel.js';
@@ -206,28 +208,27 @@ function SetModelAndClose({
       // UA: 持久化模型选择到 settings.json，下次启动 bootstrap 可读取
       try {
         updateSettingsForSource('userSettings', { model: modelValue ?? undefined })
-      } catch {}
+      } catch (err) {
+        logForDebugging(`[model-switch] Failed to persist model setting: ${(err as Error).message}`, { level: 'warn' })
+      }
       // UA: 记录模型切换日志，帮助排查切换后 credentials 不对的问题
       if (process.env.UA_DEBUG_LOG) {
-        try {
-          const { appendFileSync } = require('fs')
-          const uaExtra = process.env.UA_EXTRA_MODELS
-          let displayName = modelValue ?? 'default'
-          if (uaExtra && modelValue) {
-            try {
-              const profiles = JSON.parse(uaExtra)
-              const match = profiles.find((p: any) => p.name === modelValue)
-              if (match) displayName = `${match.displayName} (${modelValue})`
-            } catch {}
-          }
-          appendFileSync(process.env.UA_DEBUG_LOG,
-            `[${new Date().toISOString()}] [model-switch] → ${displayName}\n` +
-            `[model-switch]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ ***' + process.env.WQ_API_KEY.slice(-4) : '✗ NOT SET'}\n` +
-            `[model-switch]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}\n` +
-            `[model-switch]   ANTHROPIC_MODEL (env): ${process.env.ANTHROPIC_MODEL ?? 'NOT SET'}\n` +
-            `[model-switch]   NOTE: credentials are set at bootstrap, switching model does NOT reload credentials\n`
-          )
-        } catch {}
+        const uaExtra = process.env.UA_EXTRA_MODELS
+        let displayName = modelValue ?? 'default'
+        if (uaExtra && modelValue) {
+          try {
+            const profiles = JSON.parse(uaExtra)
+            const match = Array.isArray(profiles) ? profiles.find((p: any) => p.name === modelValue) : null
+            if (match) displayName = `${match.displayName} (${modelValue})`
+          } catch {}
+        }
+        void appendFile(process.env.UA_DEBUG_LOG,
+          `[${new Date().toISOString()}] [model-switch] → ${displayName}\n` +
+          `[model-switch]   WQ_API_KEY: ${process.env.WQ_API_KEY ? '✓ set' : '✗ NOT SET'}\n` +
+          `[model-switch]   OPENAI_BASE_URL: ${process.env.OPENAI_BASE_URL ?? 'NOT SET'}\n` +
+          `[model-switch]   ANTHROPIC_MODEL (env): ${process.env.ANTHROPIC_MODEL ?? 'NOT SET'}\n` +
+          `[model-switch]   NOTE: credentials are set at bootstrap, switching model does NOT reload credentials\n`
+        ).catch(() => {})
       }
       let message = `Set model to ${chalk.bold(renderModelLabel(modelValue))}`;
       let wasFastModeToggledOn = undefined;

@@ -34,6 +34,21 @@ import {
 import { has1mContext } from '../context.js'
 import { getGlobalConfig } from '../config.js'
 
+// UA: module-level cache for UA_EXTRA_MODELS in model selector
+let _uaExtraOptsCache: Array<{ name: string; displayName: string; contextLength?: number }> | null | undefined = undefined
+function getUAExtraOpts(): Array<{ name: string; displayName: string; contextLength?: number }> | null {
+  if (_uaExtraOptsCache !== undefined) return _uaExtraOptsCache
+  try {
+    const raw = process.env.UA_EXTRA_MODELS
+    if (!raw) { _uaExtraOptsCache = null; return null }
+    const parsed = JSON.parse(raw)
+    _uaExtraOptsCache = Array.isArray(parsed) ? parsed : null
+  } catch {
+    _uaExtraOptsCache = null
+  }
+  return _uaExtraOptsCache
+}
+
 // @[MODEL LAUNCH]: Update all the available and default model option strings below.
 
 export type ModelOption = {
@@ -485,29 +500,25 @@ export function getModelOptions(fastMode = false): ModelOption[] {
   }
 
   // UA: 把 models.json 里所有 active profiles 加到列表
-  try {
-    const uaExtra = process.env.UA_EXTRA_MODELS
-    if (uaExtra) {
-      const extraProfiles: Array<{ name: string; displayName: string; contextLength?: number }> =
-        JSON.parse(uaExtra)
-      for (const p of extraProfiles) {
-        if (!options.some(opt => opt.value === p.name)) {
-          const ctxNote = p.contextLength
-            ? p.contextLength >= 1_000_000
-              ? ' (1M context)'
-              : p.contextLength >= 200_000
-                ? ' (200K context)'
-                : ''
-            : ''
-          options.push({
-            value: p.name,
-            label: p.displayName,
-            description: `wanqing · ${p.displayName}${ctxNote}`,
-          })
-        }
+  const extraProfiles = getUAExtraOpts()
+  if (extraProfiles) {
+    for (const p of extraProfiles) {
+      if (!options.some(opt => opt.value === p.name)) {
+        const ctxNote = p.contextLength
+          ? p.contextLength >= 1_000_000
+            ? ' (1M context)'
+            : p.contextLength >= 200_000
+              ? ' (200K context)'
+              : ''
+          : ''
+        options.push({
+          value: p.name,
+          label: p.displayName,
+          description: `${p.displayName}${ctxNote}`,
+        })
       }
     }
-  } catch {}
+  }
 
   // Add custom model from either the current model value or the initial one
   // if it is not already in the options.

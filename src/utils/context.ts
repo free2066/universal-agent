@@ -49,6 +49,21 @@ export function modelSupports1M(model: string): boolean {
   return canonical.includes('claude-sonnet-4') || canonical.includes('opus-4-6')
 }
 
+// UA: module-level cache for UA_EXTRA_MODELS (context window lookups)
+let _uaExtraCtxCache: Array<{ name: string; contextLength?: number; inputLimit?: number }> | null | undefined = undefined
+function getUAExtraCtxModels(): Array<{ name: string; contextLength?: number; inputLimit?: number }> | null {
+  if (_uaExtraCtxCache !== undefined) return _uaExtraCtxCache
+  try {
+    const raw = process.env.UA_EXTRA_MODELS
+    if (!raw) { _uaExtraCtxCache = null; return null }
+    const parsed = JSON.parse(raw)
+    _uaExtraCtxCache = Array.isArray(parsed) ? parsed : null
+  } catch {
+    _uaExtraCtxCache = null
+  }
+  return _uaExtraCtxCache
+}
+
 export function getContextWindowForModel(
   model: string,
   betas?: string[],

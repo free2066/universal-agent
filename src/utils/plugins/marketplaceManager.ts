@@ -1704,7 +1704,7 @@ async function loadAndCacheMarketplace(
         // .claude-plugin/plugin.json). If so, synthesize a minimal marketplace
         // so that `gh-url → single plugin` installs work transparently.
         // Inspired by oh-my-claudecode / oh-my-openagent single-repo plugin pattern.
-        const repoRoot = dirname(dirname(marketplacePath)) // up from .claude-plugin/marketplace.json
+        const repoRoot = temporaryCachePath // UA fix: use the actual clone/resolved root, not dirname(dirname(marketplacePath)) which breaks when source.path is customized
         const pluginJsonPaths = [
           join(repoRoot, '.claude-plugin', 'plugin.json'),
           join(repoRoot, 'plugin.json'),
@@ -1732,6 +1732,13 @@ async function loadAndCacheMarketplace(
             .toLowerCase()
             .replace(/[^a-z0-9.-]+/g, '-')
             .replace(/^[-.]|[-.]$/g, '')
+          // UA fix (P1): reject empty pluginName after sanitization to prevent invalid cache paths
+          if (!pluginName) {
+            throw new Error(
+              `[UA] plugin.json 'name' field "${pluginManifest.name}" sanitizes to an empty string. ` +
+              `Please use a valid kebab-case plugin name.`,
+            )
+          }
           const pluginDesc = typeof pluginManifest.description === 'string'
             ? pluginManifest.description
             : `Plugin ${pluginName} (auto-detected single-plugin repo)`
@@ -1768,7 +1775,12 @@ async function loadAndCacheMarketplace(
             // Use a stable subdir name based on the plugin name and repoRoot hash.
             // The plugin `source` in the marketplace is a relative path to a symlink
             // that points back to the user's actual plugin root directory.
-            const spDirName = `__sp-${pluginName}`
+            // UA fix (P1): include a hash of repoRoot in spDirName so that two local
+            // plugins with the same name but different paths don't share a cache dir.
+            // Uses a simple djb2-style hash (no crypto dependency needed).
+            const repoRootHash = [...repoRoot].reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 5381)
+            const repoRootHashHex = (repoRootHash >>> 0).toString(16).slice(0, 8)
+            const spDirName = `__sp-${pluginName}-${repoRootHashHex}`
             const spCachePath = join(cacheDir, spDirName)
             const spMarketplacePath = join(spCachePath, '.claude-plugin', 'marketplace.json')
             const spPluginLinkName = pluginName

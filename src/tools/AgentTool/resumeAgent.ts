@@ -156,9 +156,18 @@ export async function resumeAgentBackground({
     permissionMode,
   )
 
+  // UA: apply same parent-mode-priority logic as runAgent.ts first spawn path:
+  // if parent is bypassPermissions or acceptEdits, do NOT let agent definition override.
+  const parentMode = appState.toolPermissionContext.mode
+  const effectivePermMode =
+    selectedAgent.permissionMode &&
+    parentMode !== 'bypassPermissions' &&
+    parentMode !== 'acceptEdits'
+      ? selectedAgent.permissionMode
+      : parentMode
   const workerPermissionContext = {
     ...appState.toolPermissionContext,
-    mode: selectedAgent.permissionMode ?? 'acceptEdits',
+    mode: effectivePermMode,
   }
   const workerTools = isResumedFork
     ? toolUseContext.options.tools

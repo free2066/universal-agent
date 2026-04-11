@@ -69,8 +69,16 @@ export async function getPrompt(
   allowedAgentTypes?: string[],
 ): Promise<string> {
   // Filter agents by allowed types when Agent(x,y) restricts which agents can be spawned
+  // UA: use the same fuzzy/case-insensitive matching as the execution layer in AgentTool.tsx
+  // so the LLM prompt accurately reflects which agents are actually executable.
   const effectiveAgents = allowedAgentTypes
-    ? agentDefinitions.filter(a => allowedAgentTypes.includes(a.agentType))
+    ? agentDefinitions.filter(a => {
+        const lowerA = a.agentType.toLowerCase()
+        return allowedAgentTypes.some(allowed => {
+          const lowerAllowed = allowed.toLowerCase()
+          return lowerA === lowerAllowed || lowerA.endsWith(':' + lowerAllowed)
+        })
+      })
     : agentDefinitions
 
   // Fork subagent feature: when enabled, insert the "When to fork" section
