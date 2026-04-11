@@ -223,10 +223,8 @@ const MAX_MCP_DESCRIPTION_LENGTH = 2048
  * Uses MCP_TOOL_TIMEOUT environment variable if set, otherwise defaults to ~27.8 hours.
  */
 function getMcpToolTimeoutMs(): number {
-  return (
-    parseInt(process.env.MCP_TOOL_TIMEOUT || '', 10) ||
-    DEFAULT_MCP_TOOL_TIMEOUT_MS
-  )
+  const v = parseInt(process.env.MCP_TOOL_TIMEOUT ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_MCP_TOOL_TIMEOUT_MS
 }
 
 import { isClaudeInChromeMCPServer } from '../../utils/claudeInChrome/common.js'
@@ -259,8 +257,9 @@ const MCP_AUTH_CACHE_TTL_MS = 15 * 60 * 1000 // 15 min
 
 type McpAuthCacheData = Record<string, { timestamp: number }>
 
+let _mcpAuthCachePath: string | undefined
 function getMcpAuthCachePath(): string {
-  return join(getClaudeConfigHomeDir(), 'mcp-needs-auth-cache.json')
+  return (_mcpAuthCachePath ??= join(getClaudeConfigHomeDir(), 'mcp-needs-auth-cache.json'))
 }
 
 // Memoized so N concurrent isMcpAuthCached() calls during batched connection
@@ -455,7 +454,8 @@ const IMAGE_MIME_TYPES = new Set([
 ])
 
 function getConnectionTimeoutMs(): number {
-  return parseInt(process.env.MCP_TIMEOUT || '', 10) || 30000
+  const v = parseInt(process.env.MCP_TIMEOUT ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : 30000
 }
 
 /**
@@ -525,9 +525,10 @@ export function wrapFetchWithTimeout(baseFetch: FetchLike): FetchLike {
 
     const parentSignal = init?.signal
     const abort = () => controller.abort(parentSignal?.reason)
-    parentSignal?.addEventListener('abort', abort)
     if (parentSignal?.aborted) {
       controller.abort(parentSignal.reason)
+    } else {
+      parentSignal?.addEventListener('abort', abort, { once: true })
     }
 
     const cleanup = () => {
@@ -551,14 +552,13 @@ export function wrapFetchWithTimeout(baseFetch: FetchLike): FetchLike {
 }
 
 export function getMcpServerConnectionBatchSize(): number {
-  return parseInt(process.env.MCP_SERVER_CONNECTION_BATCH_SIZE || '', 10) || 3
+  const v = parseInt(process.env.MCP_SERVER_CONNECTION_BATCH_SIZE ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : 3
 }
 
 function getRemoteMcpServerConnectionBatchSize(): number {
-  return (
-    parseInt(process.env.MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE || '', 10) ||
-    20
-  )
+  const v = parseInt(process.env.MCP_REMOTE_SERVER_CONNECTION_BATCH_SIZE ?? '', 10)
+  return Number.isFinite(v) && v > 0 ? v : 20
 }
 
 function isLocalMcpServer(config: ScopedMcpServerConfig): boolean {
@@ -583,7 +583,10 @@ export function getServerCacheKey(
   name: string,
   serverRef: ScopedMcpServerConfig,
 ): string {
-  return `${name}-${jsonStringify(serverRef)}`
+  const sorted = Object.fromEntries(
+    Object.entries(serverRef).sort(([a], [b]) => a.localeCompare(b)),
+  )
+  return `${name}-${jsonStringify(sorted)}`
 }
 
 /**

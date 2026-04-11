@@ -177,6 +177,12 @@ const SESSION_END_HOOK_TIMEOUT_MS_DEFAULT = 1500
 export function getSessionEndHookTimeoutMs(): number {
   const raw = process.env.CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS
   const parsed = raw ? parseInt(raw, 10) : NaN
+  if (raw !== undefined && !(Number.isFinite(parsed) && parsed > 0)) {
+    logForDebugging(
+      `[hooks] CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS="${raw}" is invalid (must be a positive integer); using default ${SESSION_END_HOOK_TIMEOUT_MS_DEFAULT}ms`,
+      { level: 'warn' },
+    )
+  }
   return Number.isFinite(parsed) && parsed > 0
     ? parsed
     : SESSION_END_HOOK_TIMEOUT_MS_DEFAULT
@@ -548,32 +554,6 @@ function processHookJSONOutput({
     result.systemMessage = json.systemMessage
   }
 
-  // Handle PreToolUse specific
-  if (
-    json.hookSpecificOutput?.hookEventName === 'PreToolUse' &&
-    json.hookSpecificOutput.permissionDecision
-  ) {
-    switch (json.hookSpecificOutput.permissionDecision) {
-      case 'allow':
-        result.permissionBehavior = 'allow'
-        break
-      case 'deny':
-        result.permissionBehavior = 'deny'
-        result.blockingError = {
-          blockingError: json.reason || 'Blocked by hook',
-          command,
-        }
-        break
-      case 'ask':
-        result.permissionBehavior = 'ask'
-        break
-      default:
-        // Handle unknown decision types as errors
-        throw new Error(
-          `Unknown hook permissionDecision type: ${json.hookSpecificOutput.permissionDecision}. Valid types are: allow, deny, ask`,
-        )
-    }
-  }
   if (result.permissionBehavior !== undefined && json.reason !== undefined) {
     result.hookPermissionDecisionReason = json.reason
   }

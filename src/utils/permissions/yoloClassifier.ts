@@ -106,10 +106,15 @@ export function getDefaultExternalAutoModeRules(): AutoModeRules {
   }
 }
 
+const TAGGED_BULLETS_REGEXES: Record<string, RegExp> = {
+  user_allow_rules_to_replace: /<user_allow_rules_to_replace>([\s\S]*?)<\/user_allow_rules_to_replace>/,
+  user_deny_rules_to_replace: /<user_deny_rules_to_replace>([\s\S]*?)<\/user_deny_rules_to_replace>/,
+  user_environment_to_replace: /<user_environment_to_replace>([\s\S]*?)<\/user_environment_to_replace>/,
+}
+
 function extractTaggedBullets(tagName: string): string[] {
-  const match = EXTERNAL_PERMISSIONS_TEMPLATE.match(
-    new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`),
-  )
+  const re = TAGGED_BULLETS_REGEXES[tagName] ?? new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`)
+  const match = EXTERNAL_PERMISSIONS_TEMPLATE.match(re)
   if (!match) return []
   return (match[1] ?? '')
     .split('\n')
@@ -581,7 +586,9 @@ function parseXmlBlock(text: string): boolean | null {
     ...stripThinking(text).matchAll(/<block>(yes|no)\b(<\/block>)?/gi),
   ]
   if (matches.length === 0) return null
-  return matches[0]![1]!.toLowerCase() === 'yes'
+  const val = matches[0]?.[1]?.toLowerCase()
+  if (val === undefined) return null
+  return val === 'yes'
 }
 
 /**
@@ -593,7 +600,7 @@ function parseXmlReason(text: string): string | null {
     ...stripThinking(text).matchAll(/<reason>([\s\S]*?)<\/reason>/g),
   ]
   if (matches.length === 0) return null
-  return matches[0]![1]!.trim()
+  return matches[0]?.[1]?.trim() ?? null
 }
 
 /**
@@ -748,7 +755,7 @@ async function classifyYoloActionXml(
     },
   ]
   let stage1Usage: ClassifierUsage | undefined
-  let stage1DurationMs: number | undefined
+  let stage1DurationMs = 0
   let stage1RequestId: string | undefined
   let stage1MsgId: string | undefined
   let stage1Opts: Parameters<typeof sideQuery>[0] | undefined
@@ -886,7 +893,7 @@ async function classifyYoloActionXml(
     const stage2MsgId = stage2Raw.id
     const stage2Text = extractTextContent(stage2Raw.content)
     const stage2Block = parseXmlBlock(stage2Text)
-    const totalDurationMs = (stage1DurationMs ?? 0) + stage2DurationMs
+    const totalDurationMs = stage1DurationMs + stage2DurationMs
     const totalUsage = stage1Usage
       ? combineUsage(stage1Usage, stage2Usage)
       : stage2Usage

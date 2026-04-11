@@ -125,7 +125,12 @@ export function cloneFileStateCache(cache: FileStateCache): FileStateCache {
   return cloned
 }
 
-// Merge two file state caches, with more recent entries (by timestamp) overriding older ones
+// Merge two file state caches, with more recent entries (by timestamp) overriding older ones.
+// NOTE: timestamp is derived from Date.now() which is not monotonic — NTP clock adjustments
+// can cause a newer write to carry a smaller timestamp than an older one. In practice this
+// is rare and the worst outcome is a stale cache entry being retained for one session; the
+// next Read will refresh it. A monotonic counter would eliminate this entirely but would
+// require threading a counter through every write site.
 export function mergeFileStateCaches(
   first: FileStateCache,
   second: FileStateCache,

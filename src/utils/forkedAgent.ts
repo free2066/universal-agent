@@ -150,21 +150,20 @@ export function createGetAppStateWithAllowedTools(
   allowedTools: string[],
 ): ToolUseContext['getAppState'] {
   if (allowedTools.length === 0) return baseGetAppState
+  const allowedToolsSet = new Set(allowedTools)
   return () => {
     const appState = baseGetAppState()
+    const existing = appState.toolPermissionContext.alwaysAllowRules.command ?? []
+    const merged = existing.length === 0
+      ? allowedTools
+      : [...new Set([...existing, ...allowedToolsSet])]
     return {
       ...appState,
       toolPermissionContext: {
         ...appState.toolPermissionContext,
         alwaysAllowRules: {
           ...appState.toolPermissionContext.alwaysAllowRules,
-          command: [
-            ...new Set([
-              ...(appState.toolPermissionContext.alwaysAllowRules.command ||
-                []),
-              ...allowedTools,
-            ]),
-          ],
+          command: merged,
         },
       },
     }
@@ -218,6 +217,10 @@ export async function prepareForkedCommandContext(
     agents[0]
 
   if (!baseAgent) {
+    logForDebugging(
+      `[prepareForkedCommandContext] No agent found for type '${agentTypeName}'; no agents registered (count: ${agents.length})`,
+      { level: 'error' },
+    )
     throw new Error('No agent available for forked execution')
   }
 

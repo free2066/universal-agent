@@ -36,6 +36,9 @@ const INTERNAL_WORKER_TOOLS = new Set([
 // CO-1: Module-level variable as the authoritative source for coordinator mode override.
 // Using process.env alone is a process-global write and is susceptible to race conditions
 // when multiple sessions operate concurrently in the same process.
+// NOTE: _coordinatorModeOverride is also a process-global singleton, so concurrent
+// sessions that call matchSessionMode() with conflicting modes will still race — last
+// write wins. This is a known limitation for multi-session in-process scenarios.
 let _coordinatorModeOverride: boolean | null = null
 
 export function isCoordinatorMode(): boolean {
