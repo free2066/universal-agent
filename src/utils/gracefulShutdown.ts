@@ -155,7 +155,7 @@ function printResumeHint(): void {
   }
   // Only show with TTY, interactive sessions, and persistence
   if (
-    process.stderr.isTTY &&
+    process.stdout.isTTY &&
     getIsInteractive() &&
     !isSessionPersistenceDisabled()
   ) {

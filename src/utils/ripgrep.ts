@@ -57,17 +57,20 @@ const getRipgrepConfig = memoize((): RipgrepConfig => {
 
   // When not in bundled mode (e.g. Node.js executes the JS bundle) there is no
   // embedded rg and the vendor directory does not exist. Fall back to any rg
-  // on PATH before attempting the vendor path, which would ENOENT immediately.
-  if (!isInBundledMode()) {
-    const knownPaths = [
-      '/opt/homebrew/bin',
-      '/usr/local/bin',
-      '/usr/bin',
-    ]
-    const { cmd: systemRg } = findExecutable('rg', knownPaths)
-    if (systemRg && systemRg !== 'rg') {
-      logForDebugging(`[ripgrep] using system rg: ${systemRg}`)
-      return { mode: 'system', command: systemRg, args: [] }
+  // found at well-known absolute paths (existsSync is reliable and avoids the
+  // PATH hijacking risk of a bare 'rg' command).
+  // NOTE: do NOT pass knownPaths to findExecutable — its second argument is
+  // extra CLI args, not search paths. Use existsSync for direct path checks.
+  {
+    const { existsSync } = require('fs') as typeof import('fs')
+    const knownRgPaths =
+      process.platform === 'win32'
+        ? [] as string[]
+        : ['/opt/homebrew/bin/rg', '/usr/local/bin/rg', '/usr/bin/rg']
+    const foundRg = knownRgPaths.find(p => existsSync(p))
+    if (foundRg) {
+      logForDebugging(`[ripgrep] using system rg at: ${foundRg}`)
+      return { mode: 'system', command: foundRg, args: [] }
     }
   }
 

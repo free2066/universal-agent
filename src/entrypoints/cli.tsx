@@ -12,12 +12,12 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
   try {
     const { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, unlinkSync } = require('fs')
     const { resolve, dirname } = require('path')
-    const uagentDir = resolve(process.env.HOME || '~', '.uagent')
+    const uagentDir = resolve(require('os').homedir(), '.uagent')
 
     // ── Step 0: Ensure ~/.claude.json has UA placeholder key approved ──────────
     // Prevents "Detected a custom API key" dialog on every startup
     try {
-      const claudeConfigPath = resolve(process.env.HOME || '~', '.claude.json')
+      const claudeConfigPath = resolve(require('os').homedir(), '.claude.json')
       const UA_KEY_NORMALIZED = 'ti-model-placeholder' // last 20 chars of 'ua-multi-model-placeholder'
       let claudeConfig: any = {}
       if (existsSync(claudeConfigPath)) {
@@ -64,7 +64,14 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     const configFile = resolve(uagentDir, 'models.json')
     if (!existsSync(configFile)) return
 
-    const config = JSON.parse(readFileSync(configFile, 'utf8'))
+    let config: any
+    try {
+      config = JSON.parse(readFileSync(configFile, 'utf8'))
+    } catch (parseErr: any) {
+      process.stderr.write(`[uagent] ERROR: ~/.uagent/models.json is not valid JSON: ${parseErr?.message ?? parseErr}\n`)
+      process.stderr.write(`[uagent] Please fix or regenerate ~/.uagent/models.json\n`)
+      return
+    }
     const mainModel = config?.pointers?.main
     if (!mainModel) return
 
@@ -72,7 +79,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     // 优先级：ANTHROPIC_MODEL 环境变量 > settings.json 持久化（/model 命令写入）> UAGENT_MODEL > models.json default
     let persistedModel: string | undefined
     try {
-      const settingsPath = resolve(process.env.HOME || '~', '.claude', 'settings.json')
+      const settingsPath = resolve(require('os').homedir(), '.claude', 'settings.json')
       if (existsSync(settingsPath)) {
         const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
         if (settings?.model && typeof settings.model === 'string') {
@@ -99,7 +106,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     }
 
     // ── Setup UA debug log ────────────────────────────────────────────────────
-    const uaLogFile = resolve(process.env.HOME || '~', '.claude', 'debug', 'ua-debug.log')
+    const uaLogFile = resolve(require('os').homedir(), '.claude', 'debug', 'ua-debug.log')
     const uaLog = (msg: string) => {
       try { appendFileSync(uaLogFile, `[${new Date().toISOString()}] ${msg}\n`) } catch {}
     }
@@ -208,7 +215,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     // 不使用 --debug-file，避免触发 isDebugMode()=true（会显示 debug banner
     // 且将所有写入改为同步 appendFileSync，影响 UI 交互性能）。
     // 日志路径：~/.uagent/logs/session-YYYY-MM-DD.log
-    const sessionLogDir = resolve(process.env.HOME || '~', '.uagent', 'logs')
+    const sessionLogDir = resolve(require('os').homedir(), '.uagent', 'logs')
     const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
     const sessionLogFile = resolve(sessionLogDir, `session-${today}.log`)
     try { mkdirSync(sessionLogDir, { recursive: true }) } catch {}
@@ -240,24 +247,28 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
 
     // Ensure ripgrep is available. When running as a Node.js-executed JS bundle
     // (not a Bun standalone executable), the embedded rg is unavailable and the
-    // vendor/ directory does not exist. Auto-install via brew if missing so Grep
-    // tool works correctly.
+    // vendor/ directory does not exist. On macOS, auto-install via brew (async,
+    // non-blocking) so Grep tool works correctly. On Linux, only warn.
     try {
-      const { execSync } = require('child_process')
-      const { existsSync } = require('fs')
+      const { existsSync: _ex } = require('fs')
       const rgPaths = ['/opt/homebrew/bin/rg', '/usr/local/bin/rg', '/usr/bin/rg']
-      const rgExists = rgPaths.some((p: string) => existsSync(p))
+      const rgExists = rgPaths.some((p: string) => _ex(p))
       if (!rgExists) {
-        uaLog(`[ripgrep] rg not found, attempting brew install ripgrep...`)
-        try {
-          execSync('brew install ripgrep', { stdio: 'ignore', timeout: 60_000 })
-          uaLog(`[ripgrep] brew install ripgrep succeeded`)
-        } catch {
-          uaLog(`[ripgrep] brew install failed — Grep tool may not work; install ripgrep manually`)
-          process.stderr.write('[uagent] Warning: ripgrep (rg) not found. Install it with: brew install ripgrep\n')
+        uaLog(`[ripgrep] rg not found`)
+        if (process.platform === 'darwin') {
+          // Run brew install in the background — do NOT block the main thread.
+          const { exec } = require('child_process')
+          process.stderr.write('[uagent] ripgrep not found, installing via brew (background)...\n')
+          exec('brew install ripgrep', { timeout: 120_000 }, (err: any) => {
+            if (err) uaLog(`[ripgrep] brew install failed: ${err.message}`)
+            else uaLog(`[ripgrep] brew install ripgrep succeeded`)
+          })
+        } else {
+          process.stderr.write('[uagent] Warning: ripgrep (rg) not found. Install it manually.\n')
+          uaLog(`[ripgrep] non-macOS platform, skipping brew install`)
         }
       } else {
-        uaLog(`[ripgrep] rg found`)
+        uaLog(`[ripgrep] rg found at ${rgPaths.find((p: string) => _ex(p))}`)
       }
     } catch { /* non-fatal */ }
 
@@ -267,7 +278,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     try {
       const { appendFileSync, mkdirSync } = require('fs')
       const { resolve, dirname } = require('path')
-      const f = resolve(process.env.HOME || '~', '.claude', 'debug', 'ua-debug.log')
+      const f = resolve(require('os').homedir(), '.claude', 'debug', 'ua-debug.log')
       mkdirSync(dirname(f), { recursive: true })
       appendFileSync(f, `[${new Date().toISOString()}] BOOTSTRAP ERROR: ${_e?.message ?? _e}\n`)
     } catch {}

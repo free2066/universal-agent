@@ -380,13 +380,18 @@ export const AgentTool = buildTool({
         // suffix after the last ":" so both bare names and prefixed names work.
         if (effectiveType) {
           const lowerType = effectiveType.toLowerCase();
-          const fuzzy = agents.find(agent => {
+          const fuzzyMatches = agents.filter(agent => {
             const lower = agent.agentType.toLowerCase();
             return lower === lowerType || lower.endsWith(':' + lowerType);
           });
-          if (fuzzy) {
-            logForDebugging(`[UA] subagent_type '${effectiveType}' normalized to '${fuzzy.agentType}'`);
-            return fuzzy;
+          if (fuzzyMatches.length === 1) {
+            logForDebugging(`[UA] subagent_type '${effectiveType}' normalized to '${fuzzyMatches[0]!.agentType}'`);
+            return fuzzyMatches[0];
+          }
+          if (fuzzyMatches.length > 1) {
+            throw new Error(
+              `Ambiguous subagent_type '${effectiveType}': matches multiple agents: ${fuzzyMatches.map(a => a.agentType).join(', ')}. Use the full agent type.`,
+            );
           }
         }
         return undefined;

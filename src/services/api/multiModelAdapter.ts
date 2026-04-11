@@ -460,7 +460,7 @@ export class MultiModelAnthropicAdapter {
     this.llmClient = createLLMClient(modelName)
   }
 
-  private async _callModel(params: any, options?: any): Promise<any> {
+  private async _callModel(params: any, options?: any, retryCount = 0): Promise<any> {
     // Extract system prompt and conversation messages separately
     // (UA LLM clients expect { systemPrompt, messages } not a merged array)
     let systemPrompt = ''
@@ -597,8 +597,9 @@ export class MultiModelAnthropicAdapter {
     } catch (err: any) {
       // ── 429 Rate-limit auto-retry ──────────────────────────────────────────
       // Delays: 15s → 30s → 60s → give up (4th attempt throws normally)
+      // retryCount is passed as a method parameter (not via params) to keep
+      // the params object clean and avoid polluting the LLM client payload.
       const RETRY_DELAYS = [15_000, 30_000, 60_000]
-      const retryCount: number = (params.__retryCount ?? 0) as number
       const is429 = err?.status === 429 || (err?.message ?? '').includes('429')
       if (is429 && retryCount < RETRY_DELAYS.length) {
         const delay = RETRY_DELAYS[retryCount]!
@@ -606,7 +607,7 @@ export class MultiModelAnthropicAdapter {
           `[UA:429] rate limited on ${this.modelName}, retry ${retryCount + 1}/${RETRY_DELAYS.length} in ${delay / 1000}s...\n`,
         )
         await new Promise<void>(resolve => setTimeout(resolve, delay))
-        return this._callModel({ ...params, __retryCount: retryCount + 1 }, options)
+        return this._callModel(params, options, retryCount + 1)
       }
       // ── /429 auto-retry ────────────────────────────────────────────────────
 
@@ -639,7 +640,7 @@ export class MultiModelAnthropicAdapter {
         uaLog?.(`[UA:fallback] ⚠️ ${this.modelName} failed → trying fallback: ${nextModel}`)
         process.stderr.write(`[UA:fallback] Switching to fallback model: ${nextModel}\n`)
         const fallbackAdapter = new MultiModelAnthropicAdapter(nextModel)
-        return fallbackAdapter._callModel(params, options)
+        return fallbackAdapter._callModel(params, options, 0) // new model starts fresh
       }
       // ── /UA Fallback Chain ─────────────────────────────────────────────────
 
