@@ -309,10 +309,26 @@ export const AgentTool = buildTool({
     // Check if this is a multi-agent spawn request
     // Spawn is triggered when team_name is set (from param or context) and name is provided
     if (teamName && name) {
+      // UA: normalize subagent_type via case-insensitive fuzzy match (same logic as the
+      // selectedAgent resolution below) so that bare short-names like "explore" resolve
+      // to their full agentType "oh-my-claudecode:explore" before passing to spawnTeammate.
+      let normalizedSubagentType = subagent_type;
+      if (subagent_type && !subagent_type.includes(':')) {
+        const allActiveAgents = toolUseContext.options.agentDefinitions.activeAgents;
+        const lowerInput = subagent_type.toLowerCase();
+        const exactMatch = allActiveAgents.find(a => a.agentType === subagent_type);
+        if (!exactMatch) {
+          const fuzzy = allActiveAgents.filter(a => {
+            const l = a.agentType.toLowerCase();
+            return l === lowerInput || l.endsWith(':' + lowerInput);
+          });
+          if (fuzzy.length === 1) normalizedSubagentType = fuzzy[0]!.agentType;
+        }
+      }
       // Set agent definition color for grouped UI display before spawning
-      const agentDef = subagent_type ? toolUseContext.options.agentDefinitions.activeAgents.find(a => a.agentType === subagent_type) : undefined;
+      const agentDef = normalizedSubagentType ? toolUseContext.options.agentDefinitions.activeAgents.find(a => a.agentType === normalizedSubagentType) : undefined;
       if (agentDef?.color) {
-        setAgentColor(subagent_type!, agentDef.color);
+        setAgentColor(normalizedSubagentType!, agentDef.color);
       }
       const result = await spawnTeammate({
         name,
@@ -322,7 +338,7 @@ export const AgentTool = buildTool({
         use_splitpane: true,
         plan_mode_required: spawnMode === 'plan',
         model: model ?? agentDef?.model,
-        agent_type: subagent_type,
+        agent_type: normalizedSubagentType,
         invokingRequestId: assistantMessage?.requestId
       }, toolUseContext);
 
@@ -366,9 +382,18 @@ export const AgentTool = buildTool({
       const {
         allowedAgentTypes
       } = toolUseContext.options.agentDefinitions;
-      const agents = filterDeniedAgents(
-      // When allowedAgentTypes is set (from Agent(x,y) tool spec), restrict to those types
-      allowedAgentTypes ? allAgents.filter(a => allowedAgentTypes.includes(a.agentType)) : allAgents, appState.toolPermissionContext, AGENT_TOOL_NAME);
+      // UA: allowedAgentTypes whitelist also supports case-insensitive / namespace-stripped matching
+      // so that Agent(explore) in tool spec correctly allows "oh-my-claudecode:explore"
+      const agentsInAllowList = allowedAgentTypes
+        ? allAgents.filter(a => {
+            const lowerA = a.agentType.toLowerCase();
+            return allowedAgentTypes.some(allowed => {
+              const lowerAllowed = allowed.toLowerCase();
+              return lowerA === lowerAllowed || lowerA.endsWith(':' + lowerAllowed);
+            });
+          })
+        : allAgents;
+      const agents = filterDeniedAgents(agentsInAllowList, appState.toolPermissionContext, AGENT_TOOL_NAME);
       const found = (() => {
         // 1. Exact match (original logic)
         const exact = agents.find(agent => agent.agentType === effectiveType);
@@ -378,11 +403,14 @@ export const AgentTool = buildTool({
         // LLMs sometimes output bare names without namespace prefix, e.g.
         // "Explore" instead of "oh-my-claudecode:explore". Match against the
         // suffix after the last ":" so both bare names and prefixed names work.
+        // Only fuzzy-match when the input does not contain ":" to avoid
+        // double-colon edge cases like lowerType="ns:agent" matching "x:ns:agent".
         if (effectiveType) {
           const lowerType = effectiveType.toLowerCase();
+          const canFuzzyMatch = !lowerType.includes(':');
           const fuzzyMatches = agents.filter(agent => {
             const lower = agent.agentType.toLowerCase();
-            return lower === lowerType || lower.endsWith(':' + lowerType);
+            return lower === lowerType || (canFuzzyMatch && lower.endsWith(':' + lowerType));
           });
           if (fuzzyMatches.length === 1) {
             logForDebugging(`[UA] subagent_type '${effectiveType}' normalized to '${fuzzyMatches[0]!.agentType}'`);
@@ -397,11 +425,21 @@ export const AgentTool = buildTool({
         return undefined;
       })();
       if (!found) {
-        // Check if the agent exists but is denied by permission rules
-        const agentExistsButDenied = allAgents.find(agent => agent.agentType === effectiveType);
+        // Check if the agent exists but is denied by permission rules.
+        // Also try fuzzy match against allAgents so that a bare-name input
+        // (e.g. "explore") shows "denied" instead of the misleading "not found".
+        let agentExistsButDenied = allAgents.find(agent => agent.agentType === effectiveType);
+        if (!agentExistsButDenied && effectiveType && !effectiveType.includes(':')) {
+          const lowerType = effectiveType.toLowerCase();
+          const fuzzyDenied = allAgents.filter(a => {
+            const lower = a.agentType.toLowerCase();
+            return lower === lowerType || lower.endsWith(':' + lowerType);
+          });
+          if (fuzzyDenied.length === 1) agentExistsButDenied = fuzzyDenied[0];
+        }
         if (agentExistsButDenied) {
-          const denyRule = getDenyRuleForAgent(appState.toolPermissionContext, AGENT_TOOL_NAME, effectiveType);
-          throw new Error(`Agent type '${effectiveType}' has been denied by permission rule '${AGENT_TOOL_NAME}(${effectiveType})' from ${denyRule?.source ?? 'settings'}.`);
+          const denyRule = getDenyRuleForAgent(appState.toolPermissionContext, AGENT_TOOL_NAME, agentExistsButDenied.agentType);
+          throw new Error(`Agent type '${effectiveType}' has been denied by permission rule '${AGENT_TOOL_NAME}(${agentExistsButDenied.agentType})' from ${denyRule?.source ?? 'settings'}.`);
         }
         throw new Error(`Agent type '${effectiveType}' not found. Available agents: ${agents.map(a => a.agentType).join(', ')}`);
       }

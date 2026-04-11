@@ -53,7 +53,11 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
         const eq = line.indexOf('=')
         if (eq < 1) continue
         const k = line.slice(0, eq).trim()
-        const v = line.slice(eq + 1).trim()
+        let v = line.slice(eq + 1).trim()
+        // Strip surrounding quotes: KEY="value" or KEY='value' → value
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+          v = v.slice(1, -1)
+        }
         if (k && v && !process.env[k]) {
           process.env[k] = v
         }
@@ -82,8 +86,8 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       const settingsPath = resolve(require('os').homedir(), '.claude', 'settings.json')
       if (existsSync(settingsPath)) {
         const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
-        if (settings?.model && typeof settings.model === 'string') {
-          persistedModel = settings.model
+        if (settings?.model && typeof settings.model === 'string' && settings.model.trim().length > 0) {
+          persistedModel = settings.model.trim()
         }
       }
     } catch {}
@@ -412,7 +416,13 @@ async function main(): Promise<void> {
     const { existsSync } = require('fs') as typeof import('fs')
 
     // 找到 uagent 安装目录（package.json 所在位置）
-    const scriptPath = process.argv[1]!
+    // Resolve symlinks so that `npm link` installs work correctly:
+    // process.argv[1] may point to /usr/local/bin/uagent (symlink) rather
+    // than the actual dist/entrypoints/cli.js.
+    const { realpathSync } = require('fs') as typeof import('fs')
+    const scriptPath = (() => {
+      try { return realpathSync(process.argv[1]!) } catch { return process.argv[1]! }
+    })()
     // dist/entrypoints/cli.js → 项目根目录
     const pkgRoot = resolve(scriptPath, '../../..')
     const pkgJson = resolve(pkgRoot, 'package.json')
@@ -428,6 +438,10 @@ async function main(): Promise<void> {
     // Step 1: git pull
     console.log('\n[1/3] Pulling latest changes from GitHub...')
     const pull = spawnSync('git', ['pull'], { cwd: pkgRoot, stdio: 'inherit', encoding: 'utf8' })
+    if (pull.error) {
+      process.stderr.write(`[uagent update] git not found or failed to spawn: ${pull.error.message}\n`)
+      process.exit(1)
+    }
     if (pull.status !== 0) {
       process.stderr.write(`[uagent update] git pull failed (exit ${pull.status})\n`)
       process.exit(pull.status ?? 1)
@@ -436,6 +450,10 @@ async function main(): Promise<void> {
     // Step 2: bun run build
     console.log('\n[2/3] Building...')
     const build = spawnSync('bun', ['run', 'build'], { cwd: pkgRoot, stdio: 'inherit', encoding: 'utf8' })
+    if (build.error) {
+      process.stderr.write(`[uagent update] bun not found or failed to spawn: ${build.error.message}\n`)
+      process.exit(1)
+    }
     if (build.status !== 0) {
       process.stderr.write(`[uagent update] build failed (exit ${build.status})\n`)
       process.exit(build.status ?? 1)
@@ -444,6 +462,10 @@ async function main(): Promise<void> {
     // Step 3: npm link
     console.log('\n[3/3] Linking...')
     const link = spawnSync('npm', ['link', '--force'], { cwd: pkgRoot, stdio: 'inherit', encoding: 'utf8' })
+    if (link.error) {
+      process.stderr.write(`[uagent update] npm not found or failed to spawn: ${link.error.message}\n`)
+      process.exit(1)
+    }
     if (link.status !== 0) {
       process.stderr.write(`[uagent update] npm link failed (exit ${link.status})\n`)
       process.exit(link.status ?? 1)

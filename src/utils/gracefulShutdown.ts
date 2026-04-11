@@ -170,8 +170,12 @@ function printResumeHint(): void {
       // Use custom title if available, otherwise fall back to session ID
       let resumeArg: string
       if (customTitle) {
-        // Wrap in double quotes, escape backslashes first then quotes
-        const escaped = customTitle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        // Wrap in double quotes, escape backslashes, quotes, newlines, and carriage returns
+        const escaped = customTitle
+          .replace(/\\/g, '\\\\')
+          .replace(/"/g, '\\"')
+          .replace(/\n/g, ' ')
+          .replace(/\r/g, '')
         resumeArg = `"${escaped}"`
       } else {
         resumeArg = sessionId
@@ -217,7 +221,8 @@ function printResumeHint(): void {
 
       // Log file
       try {
-        rows.push(['📝  Log file:', getTranscriptPath()])
+        const transcriptPath = getTranscriptPath()
+        if (transcriptPath) rows.push(['📝  Log file:', transcriptPath])
       } catch { /* ignore */ }
 
       // Align labels and values
@@ -244,10 +249,17 @@ function printResumeHint(): void {
       // synchronously unmounts Ink, so Ink rendering is already complete.
       // \r\x1b[J = CR + erase from cursor to end of screen: clears any Ink
       // render residue (typeahead list, command suggestions) before printing.
-      writeSync(1, '\r\x1b[J' + output)
+      // Set flag BEFORE writeSync so concurrent signals or failsafe timer
+      // cannot cause double-printing (writeSync is blocking, signal handlers
+      // could re-enter printResumeHint during the syscall).
       resumeHintPrinted = true
+      try {
+        writeSync(1, '\r\x1b[J' + output)
+      } catch {
+        // Write failed (e.g. stdout is closed); flag already set, no retry
+      }
     } catch {
-      // Ignore write errors
+      // Ignore errors building or printing the summary
     }
   }
 }

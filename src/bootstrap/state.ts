@@ -841,8 +841,9 @@ export function setExitSummaryInfo(info: {
   permissionMode?: string
   effortLevel?: string
 }): void {
-  if (info.permissionMode) _exitPermissionMode = info.permissionMode
-  if (info.effortLevel) _exitEffortLevel = info.effortLevel
+  // Use !== undefined to correctly handle empty-string values
+  if (info.permissionMode !== undefined) _exitPermissionMode = info.permissionMode
+  if (info.effortLevel !== undefined) _exitEffortLevel = info.effortLevel
 }
 
 export function getExitPermissionMode(): string | undefined {

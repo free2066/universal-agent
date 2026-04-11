@@ -628,19 +628,25 @@ export class MultiModelAnthropicAdapter {
 
       // ── UA Fallback Chain ──────────────────────────────────────────────────
       // 如果 models.json 配置了 fallback 数组，当前模型失败时自动切换到下一个
+      // Guard against cycles: only pick a model that appears AFTER the current
+      // one in the chain and hasn't been tried yet in this call tree.
       const fallbackChain: string[] = (() => {
         try { return JSON.parse(process.env.UA_FALLBACK_CHAIN || '[]') } catch { return [] }
       })()
+      const triedModels: Set<string> = options?._triedModels instanceof Set
+        ? options._triedModels
+        : new Set([this.modelName])
       const currentIdx = fallbackChain.indexOf(this.modelName)
-      const nextModel = currentIdx >= 0 && currentIdx < fallbackChain.length - 1
-        ? fallbackChain[currentIdx + 1]
+      const nextModel = currentIdx >= 0
+        ? fallbackChain.slice(currentIdx + 1).find(m => !triedModels.has(m))
         : undefined
 
       if (nextModel) {
         uaLog?.(`[UA:fallback] ⚠️ ${this.modelName} failed → trying fallback: ${nextModel}`)
         process.stderr.write(`[UA:fallback] Switching to fallback model: ${nextModel}\n`)
+        triedModels.add(nextModel)
         const fallbackAdapter = new MultiModelAnthropicAdapter(nextModel)
-        return fallbackAdapter._callModel(params, options, 0) // new model starts fresh
+        return fallbackAdapter._callModel(params, { ...options, _triedModels: triedModels }, 0)
       }
       // ── /UA Fallback Chain ─────────────────────────────────────────────────
 
@@ -694,10 +700,16 @@ export class MultiModelAnthropicAdapter {
   /** Top-level messages (some callers use anthropic.messages directly) */
   get messages() {
     return {
-      create: (params: any, options?: any) =>
-        this._callModel(params, options).then(({ chatResponse, inputTokens, outputTokens }) =>
+      create: (params: any, options?: any) => {
+        // Delegate streaming calls to beta.messages.create which correctly
+        // handles the _realStream path; non-streaming calls go directly.
+        if (params.stream) {
+          return this.beta.messages.create(params, options)
+        }
+        return this._callModel(params, options).then(({ chatResponse, inputTokens, outputTokens }) =>
           convertResponseToAnthropicMessage(chatResponse, this.modelName, inputTokens, outputTokens),
-        ),
+        )
+      },
     }
   }
 }

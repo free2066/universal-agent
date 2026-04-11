@@ -34,45 +34,47 @@ export class OpenAIClient implements LLMClient {
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
-    const messages = this.convertMessages(options);
-    const hasTools = (options.tools?.length ?? 0) > 0;
-    const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
-    const extraOpts: Record<string, unknown> = {};
-    if (options.thinkingLevel && isReasoning) {
-      const effortMap: Record<string, string> = {
-        low: 'low', medium: 'medium', high: 'high',
-        max: 'high', xhigh: 'high', maxOrXhigh: 'high',
-      };
-      extraOpts.reasoning_effort = effortMap[options.thinkingLevel] ?? options.thinkingLevel;
-    }
+    return withInferenceTimeout(this.model, async (signal) => {
+      const messages = this.convertMessages(options);
+      const hasTools = (options.tools?.length ?? 0) > 0;
+      const isReasoning = /^o\d/.test(this.model.split('/').pop() ?? this.model);
+      const extraOpts: Record<string, unknown> = {};
+      if (options.thinkingLevel && isReasoning) {
+        const effortMap: Record<string, string> = {
+          low: 'low', medium: 'medium', high: 'high',
+          max: 'high', xhigh: 'high', maxOrXhigh: 'high',
+        };
+        extraOpts.reasoning_effort = effortMap[options.thinkingLevel] ?? options.thinkingLevel;
+      }
 
-    const response = (await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      ...extraOpts,
-      ...(hasTools ? {
-        tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
-        tool_choice: 'auto' as const,
-      } : {}),
-    } as OpenAI.ChatCompletionCreateParamsNonStreaming)) as OpenAI.ChatCompletion;
+      const response = (await this.client.chat.completions.create({
+        model: this.model,
+        messages,
+        ...extraOpts,
+        ...(hasTools ? {
+          tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
+          tool_choice: 'auto' as const,
+        } : {}),
+      } as OpenAI.ChatCompletionCreateParamsNonStreaming, { signal })) as OpenAI.ChatCompletion;
 
-    const choice = response.choices[0];
-    if (!choice) throw new Error('No choices returned from OpenAI');
-    const msg = choice.message;
+      const choice = response.choices[0];
+      if (!choice) throw new Error('No choices returned from OpenAI');
+      const msg = choice.message;
 
-    if (msg.tool_calls?.length) {
-      return {
-        type: 'tool_calls',
-        content: msg.content || '',
-        toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: safeParseJSON(tc.function.arguments, tc.function.name),
-        })),
-      };
-    }
+      if (msg.tool_calls?.length) {
+        return {
+          type: 'tool_calls',
+          content: msg.content || '',
+          toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
+            id: tc.id,
+            name: tc.function.name,
+            arguments: safeParseJSON(tc.function.arguments, tc.function.name),
+          })),
+        };
+      }
 
-    return { type: 'text', content: msg.content || '' };
+      return { type: 'text', content: msg.content || '' };
+    });
   }
 
   async streamChat(options: ChatOptions, onChunk: (chunk: string) => void): Promise<ChatResponse> {
@@ -243,9 +245,32 @@ export class DeepSeekClient extends OpenAIClient {
           { signal },
         )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
         let textContent = '';
+        const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
         for await (const chunk of stream) {
-          const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
+          const delta = chunk.choices[0]?.delta as {
+            content?: string;
+            reasoning_content?: string;
+            tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
+          };
           if (delta?.content) { onChunk(delta.content); textContent += delta.content; }
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              if (!toolCallMap.has(tc.index)) {
+                toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
+              } else {
+                const entry = toolCallMap.get(tc.index)!;
+                if (tc.id) entry.id = tc.id;
+                if (tc.function?.name) entry.name = tc.function.name;
+              }
+              if (tc.function?.arguments) toolCallMap.get(tc.index)!.args += tc.function.arguments;
+            }
+          }
+        }
+        if (toolCallMap.size > 0) {
+          const toolCalls = Array.from(toolCallMap.entries())
+            .sort((a, b) => a[0] - b[0])
+            .map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) }));
+          return { type: 'tool_calls', content: textContent, toolCalls };
         }
         return { type: 'text', content: textContent };
       });
@@ -295,9 +320,32 @@ export class QwenClient extends OpenAIClient {
           { signal },
         )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
         let textContent = '';
+        const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
         for await (const chunk of stream) {
-          const delta = chunk.choices[0]?.delta as { content?: string; reasoning_content?: string };
+          const delta = chunk.choices[0]?.delta as {
+            content?: string;
+            reasoning_content?: string;
+            tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
+          };
           if (delta?.content) { onChunk(delta.content); textContent += delta.content; }
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              if (!toolCallMap.has(tc.index)) {
+                toolCallMap.set(tc.index, { id: tc.id ?? '', name: tc.function?.name ?? '', args: '' });
+              } else {
+                const entry = toolCallMap.get(tc.index)!;
+                if (tc.id) entry.id = tc.id;
+                if (tc.function?.name) entry.name = tc.function.name;
+              }
+              if (tc.function?.arguments) toolCallMap.get(tc.index)!.args += tc.function.arguments;
+            }
+          }
+        }
+        if (toolCallMap.size > 0) {
+          const toolCalls = Array.from(toolCallMap.entries())
+            .sort((a, b) => a[0] - b[0])
+            .map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) }));
+          return { type: 'tool_calls', content: textContent, toolCalls };
         }
         return { type: 'text', content: textContent };
       });
