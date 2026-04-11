@@ -55,6 +55,22 @@ const getRipgrepConfig = memoize((): RipgrepConfig => {
     }
   }
 
+  // When not in bundled mode (e.g. Node.js executes the JS bundle) there is no
+  // embedded rg and the vendor directory does not exist. Fall back to any rg
+  // on PATH before attempting the vendor path, which would ENOENT immediately.
+  if (!isInBundledMode()) {
+    const knownPaths = [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+    ]
+    const { cmd: systemRg } = findExecutable('rg', knownPaths)
+    if (systemRg && systemRg !== 'rg') {
+      logForDebugging(`[ripgrep] using system rg: ${systemRg}`)
+      return { mode: 'system', command: systemRg, args: [] }
+    }
+  }
+
   const rgRoot = path.resolve(__dirname, 'vendor', 'ripgrep')
   const command =
     process.platform === 'win32'

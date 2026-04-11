@@ -238,6 +238,29 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       }
     } catch {}
 
+    // Ensure ripgrep is available. When running as a Node.js-executed JS bundle
+    // (not a Bun standalone executable), the embedded rg is unavailable and the
+    // vendor/ directory does not exist. Auto-install via brew if missing so Grep
+    // tool works correctly.
+    try {
+      const { execSync } = require('child_process')
+      const { existsSync } = require('fs')
+      const rgPaths = ['/opt/homebrew/bin/rg', '/usr/local/bin/rg', '/usr/bin/rg']
+      const rgExists = rgPaths.some((p: string) => existsSync(p))
+      if (!rgExists) {
+        uaLog(`[ripgrep] rg not found, attempting brew install ripgrep...`)
+        try {
+          execSync('brew install ripgrep', { stdio: 'ignore', timeout: 60_000 })
+          uaLog(`[ripgrep] brew install ripgrep succeeded`)
+        } catch {
+          uaLog(`[ripgrep] brew install failed — Grep tool may not work; install ripgrep manually`)
+          process.stderr.write('[uagent] Warning: ripgrep (rg) not found. Install it with: brew install ripgrep\n')
+        }
+      } else {
+        uaLog(`[ripgrep] rg found`)
+      }
+    } catch { /* non-fatal */ }
+
     uaLog(`━━━ UA bootstrap done ━━━`)
   } catch (_e: any) {
     // 即使日志失败也不影响启动，但尝试记录错误
