@@ -866,7 +866,9 @@ export async function initBridgeCore(
     logForDebugging(
       `[bridge:repl] Drained ${msgs.length} pending message(s) after flush`,
     )
-    void transport.writeBatch(events)
+    void transport.writeBatch(events).catch((err: unknown) => {
+      logForDebugging(`[bridge:repl] flush writeBatch failed: ${errorMessage(err)}`, { level: 'error' })
+    })
   }
 
   // Teardown reference — set after definition below. All callers are async
@@ -1762,7 +1764,9 @@ export async function initBridgeCore(
         ...sdkMsg,
         session_id: currentSessionId,
       }))
-      void transport.writeBatch(events)
+      void transport.writeBatch(events).catch((err: unknown) => {
+        logForDebugging(`[bridge:repl] writeMessages writeBatch failed: ${errorMessage(err)}`, { level: 'error' })
+      })
     },
     writeSdkMessages(messages) {
       // Daemon path: query() already yields SDKMessage, skip conversion.
@@ -1784,7 +1788,9 @@ export async function initBridgeCore(
         if (msg.uuid) recentPostedUUIDs.add(msg.uuid)
       }
       const events = filtered.map(m => ({ ...m, session_id: currentSessionId }))
-      void transport.writeBatch(events)
+      void transport.writeBatch(events).catch((err: unknown) => {
+        logForDebugging(`[bridge:repl] writeSdkMessages writeBatch failed: ${errorMessage(err)}`, { level: 'error' })
+      })
     },
     sendControlRequest(request: SDKControlRequest) {
       if (!transport) {
@@ -1794,7 +1800,9 @@ export async function initBridgeCore(
         return
       }
       const event = { ...request, session_id: currentSessionId }
-      void transport.write(event)
+      void transport.write(event).catch((err: unknown) => {
+        logForDebugging(`[bridge:repl] sendControlRequest write failed: ${errorMessage(err)}`, { level: 'error' })
+      })
       logForDebugging(
         `[bridge:repl] Sent control_request request_id=${request.request_id}`,
       )
@@ -1807,7 +1815,9 @@ export async function initBridgeCore(
         return
       }
       const event = { ...response, session_id: currentSessionId }
-      void transport.write(event)
+      void transport.write(event).catch((err: unknown) => {
+        logForDebugging(`[bridge:repl] sendControlResponse write failed: ${errorMessage(err)}`, { level: 'error' })
+      })
       logForDebugging('[bridge:repl] Sent control_response')
     },
     sendControlCancelRequest(requestId: string) {
@@ -1822,7 +1832,9 @@ export async function initBridgeCore(
         request_id: requestId,
         session_id: currentSessionId,
       }
-      void transport.write(event)
+      void transport.write(event).catch((err: unknown) => {
+        logForDebugging(`[bridge:repl] sendControlCancelRequest write failed: ${errorMessage(err)}`, { level: 'error' })
+      })
       logForDebugging(
         `[bridge:repl] Sent control_cancel_request request_id=${requestId}`,
       )
@@ -1834,7 +1846,9 @@ export async function initBridgeCore(
         )
         return
       }
-      void transport.write(makeResultMessage(currentSessionId))
+      void transport.write(makeResultMessage(currentSessionId)).catch((err: unknown) => {
+        logForDebugging(`[bridge:repl] sendResult write failed: ${errorMessage(err)}`, { level: 'error' })
+      })
       logForDebugging(
         `[bridge:repl] Sent result for session=${currentSessionId}`,
       )
