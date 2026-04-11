@@ -11,52 +11,53 @@ import { GeminiClient } from './gemini.js';
 import { OllamaClient } from './ollama.js';
 
 export function createLLMClient(model: string): LLMClient {
+  if (!model) return new OpenAIClient(model);
+
+  const m = model.toLowerCase();
+
   // Anthropic Claude
-  if (model.startsWith('claude')) return new AnthropicClient(model);
+  if (m.startsWith('claude')) return new AnthropicClient(model);
 
   // Local Ollama
-  if (model.startsWith('ollama:')) return new OllamaClient(model.replace('ollama:', ''));
+  if (m.startsWith('ollama:')) return new OllamaClient(model.slice('ollama:'.length));
 
   // Google Gemini
-  if (model.startsWith('gemini')) return new GeminiClient(model);
+  if (m.startsWith('gemini')) return new GeminiClient(model);
 
   // DeepSeek (uses OpenAI-compat API)
-  if (model.startsWith('deepseek')) return new DeepSeekClient(model);
+  if (m.startsWith('deepseek')) return new DeepSeekClient(model);
 
   // Moonshot / Kimi — LLM-1: also route moonshot-v1-* prefix
-  if (model.startsWith('kimi') || model.startsWith('moonshot')) return new MoonshotClient(model);
+  if (m.startsWith('kimi') || m.startsWith('moonshot')) return new MoonshotClient(model);
 
   // Alibaba Qwen / Tongyi
-  if (model.startsWith('qwen') || model.startsWith('tongyi')) return new QwenClient(model);
+  if (m.startsWith('qwen') || m.startsWith('tongyi')) return new QwenClient(model);
 
   // Mistral
-  if (model.startsWith('mistral') || model.startsWith('mixtral')) return new MistralClient(model);
+  if (m.startsWith('mistral') || m.startsWith('mixtral')) return new MistralClient(model);
 
   // Groq (free tier — llama3/deepseek-r1/qwen, ultra-fast)
-  if (model.startsWith('groq:')) return new GroqClient(model.replace('groq:', ''));
+  if (m.startsWith('groq:')) return new GroqClient(model.slice('groq:'.length));
 
   // SiliconFlow (free open-source models)
-  if (model.startsWith('siliconflow:')) return new SiliconFlowClient(model.replace('siliconflow:', ''));
+  if (m.startsWith('siliconflow:')) return new SiliconFlowClient(model.slice('siliconflow:'.length));
 
   // OpenRouter (many free models via :free suffix)
-  if (model.startsWith('openrouter:')) return new OpenRouterClient(model.replace('openrouter:', ''));
+  if (m.startsWith('openrouter:')) return new OpenRouterClient(model.slice('openrouter:'.length));
 
   // Generic OpenAI-compatible (any model name, custom baseURL via env)
-  if (model.startsWith('openai-compat:')) {
-    return new OpenAICompatClient(model.replace('openai-compat:', ''));
+  if (m.startsWith('openai-compat:')) {
+    return new OpenAICompatClient(model.slice('openai-compat:'.length));
   }
 
   // 万擎 (Wanqing) internal API
-  if (model.startsWith('wanqing/')) {
-    const actualModel = model.slice('wanqing/'.length);
-    const key = process.env.WQ_API_KEY ?? process.env.OPENAI_API_KEY;
-    const base = process.env.OPENAI_BASE_URL;
-    return new OpenAIClient(actualModel, key, base);
+  const wqKey = process.env.WQ_API_KEY ?? process.env.OPENAI_API_KEY;
+  const wqBase = process.env.OPENAI_BASE_URL;
+  if (m.startsWith('wanqing/')) {
+    return new OpenAIClient(model.slice('wanqing/'.length), wqKey, wqBase);
   }
-  if (model.startsWith('ep-') || model.startsWith('api-') || model.startsWith('wanqing-')) {
-    const key = process.env.WQ_API_KEY ?? process.env.OPENAI_API_KEY;
-    const base = process.env.OPENAI_BASE_URL;
-    return new OpenAIClient(model, key, base);
+  if (m.startsWith('ep-') || m.startsWith('wanqing-')) {
+    return new OpenAIClient(model, wqKey, wqBase);
   }
 
   // Default: OpenAI

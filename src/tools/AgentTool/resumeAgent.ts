@@ -146,9 +146,26 @@ export async function resumeAgentBackground({
       })
     }
     if (!forkParentSystemPrompt) {
-      throw new Error(
-        'Cannot resume fork agent: unable to reconstruct parent system prompt',
-      )
+      const errMsg = 'Cannot resume fork agent: unable to reconstruct parent system prompt'
+      const agentBackgroundTask = registerAsyncAgent({
+        agentId,
+        description: uiDescription,
+        prompt,
+        selectedAgent,
+        setAppState: rootSetAppState,
+        toolUseId: toolUseContext.toolUseId,
+      })
+      failAgentTask(agentBackgroundTask.agentId, errMsg, rootSetAppState)
+      enqueueAgentNotification({
+        taskId: agentBackgroundTask.agentId,
+        description: uiDescription,
+        status: 'failed',
+        error: errMsg,
+        setAppState: rootSetAppState,
+        toolUseId: toolUseContext.toolUseId,
+        ...(resumedWorktreePath ? { worktreePath: resumedWorktreePath } : {}),
+      })
+      throw new Error(errMsg)
     }
   }
 

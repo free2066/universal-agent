@@ -211,6 +211,13 @@ async function initializeAgentMcpServers(
   }
 
   // Return merged clients (parent + agent-specific) and agent tools
+  const failedCount = agentClients.filter(c => c.type !== 'connected').length
+  if (failedCount > 0) {
+    logForDebugging(
+      `[Agent: ${agentDefinition.agentType}] ${failedCount} of ${agentClients.length} MCP server(s) failed to connect; some tools will be unavailable`,
+      { level: 'warn' },
+    )
+  }
   return {
     clients: [...parentClients, ...agentClients],
     tools: agentTools,
@@ -815,6 +822,19 @@ export async function* runAgent({
       agentDefinition.callback()
     }
   } finally {
+    // Kill shell tasks first — before any async cleanup that could hang
+    killShellTasksForAgent(agentId, toolUseContext.getAppState, rootSetAppState)
+    /* eslint-disable @typescript-eslint/no-require-imports */
+    if (feature('MONITOR_TOOL')) {
+      const mcpMod =
+        require('../../tasks/MonitorMcpTask/MonitorMcpTask.js') as typeof import('../../tasks/MonitorMcpTask/MonitorMcpTask.js')
+      mcpMod.killMonitorMcpTasksForAgent(
+        agentId,
+        toolUseContext.getAppState,
+        rootSetAppState,
+      )
+    }
+    /* eslint-enable @typescript-eslint/no-require-imports */
     // Clean up agent-specific MCP servers (runs on normal completion, abort, or error)
     await mcpCleanup()
     // Clean up agent's session hooks
@@ -842,21 +862,6 @@ export async function* runAgent({
       const { [agentId]: _removed, ...todos } = prev.todos
       return { ...prev, todos }
     })
-    // Kill any background bash tasks this agent spawned. Without this, a
-    // `run_in_background` shell loop (e.g. test fixture fake-logs.sh) outlives
-    // the agent as a PPID=1 zombie once the main session eventually exits.
-    killShellTasksForAgent(agentId, toolUseContext.getAppState, rootSetAppState)
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    if (feature('MONITOR_TOOL')) {
-      const mcpMod =
-        require('../../tasks/MonitorMcpTask/MonitorMcpTask.js') as typeof import('../../tasks/MonitorMcpTask/MonitorMcpTask.js')
-      mcpMod.killMonitorMcpTasksForAgent(
-        agentId,
-        toolUseContext.getAppState,
-        rootSetAppState,
-      )
-    }
-    /* eslint-enable @typescript-eslint/no-require-imports */
   }
 }
 
@@ -923,6 +928,10 @@ async function getAgentSystemPrompt(
       enabledToolNames,
     )
   } catch (_error) {
+    logForDebugging(
+      `[Agent: ${agentDefinition.agentType}] Failed to build system prompt, falling back to default: ${_error}`,
+      { level: 'warn' },
+    )
     return enhanceSystemPromptWithEnvDetails(
       [DEFAULT_AGENT_PROMPT],
       resolvedAgentModel,
@@ -963,12 +972,7 @@ function resolveSkillName(
     }
   }
 
-  // 3. Suffix match — find a skill whose name ends with ":skillName"
-  const suffix = `:${skillName}`
-  const match = allSkills.find(cmd => cmd.name.endsWith(suffix))
-  if (match) {
-    return match.name
-  }
+  // 3. Suffix match — find a skill whose name ends with \":skillName\"\n  const suffix = `:${skillName}`\n  const matches = allSkills.filter(cmd => cmd.name.endsWith(suffix))\n  if (matches.length > 1) {\n    logForDebugging(\n      `[Agent: ${agentDefinition.agentType}] Ambiguous skill '${skillName}': multiple matches found (${matches.map(c => c.name).join(', ')}), using first`,\n      { level: 'warn' },\n    )\n  }\n  if (matches.length > 0) {\n    return matches[0]!.name\n  }
 
   return null
 }
