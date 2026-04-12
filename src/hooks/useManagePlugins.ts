@@ -11,7 +11,7 @@ import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import { count } from '../utils/array.js'
 import { logForDebugging } from '../utils/debug.js'
 import { logForDiagnosticsNoPII } from '../utils/diagLogs.js'
-import { toError } from '../utils/errors.js'
+import { errorMessage, toError } from '../utils/errors.js'
 import { logError } from '../utils/log.js'
 import { loadPluginAgents } from '../utils/plugins/loadPluginAgents.js'
 import { getPluginCommands } from '../utils/plugins/loadPluginCommands.js'
@@ -75,36 +75,30 @@ export function useManagePlugins({
       try {
         commands = await getPluginCommands()
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error)
         errors.push({
           type: 'generic-error',
           source: 'plugin-commands',
-          error: `Failed to load plugin commands: ${errorMessage}`,
+          error: `Failed to load plugin commands: ${errorMessage(error)}`,
         })
       }
 
       try {
         agents = await loadPluginAgents()
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error)
         errors.push({
           type: 'generic-error',
           source: 'plugin-agents',
-          error: `Failed to load plugin agents: ${errorMessage}`,
+          error: `Failed to load plugin agents: ${errorMessage(error)}`,
         })
       }
 
       try {
         await loadPluginHooks()
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error)
         errors.push({
           type: 'generic-error',
           source: 'plugin-hooks',
-          error: `Failed to load plugin hooks: ${errorMessage}`,
+          error: `Failed to load plugin hooks: ${errorMessage(error)}`,
         })
       }
 

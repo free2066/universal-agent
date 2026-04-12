@@ -111,6 +111,7 @@ import {
 } from './bootstrap/state.js'
 import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
+import { errorMessage } from './utils/errors.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -137,7 +138,7 @@ function* yieldMissingToolResultBlocks(
         content: [
           {
             type: 'tool_result',
-            content: errorMessage,
+            content: msg,
             is_error: true,
             tool_use_id: toolUse.id,
           },
@@ -955,8 +956,7 @@ async function* queryLoop(
       }
     } catch (error) {
       logError(error)
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
+      const msg = errorMessage(error)
       logEvent('tengu_query_error', {
         assistantMessages: assistantMessages.length,
         toolUses: assistantMessages.flatMap(_ =>
@@ -982,7 +982,7 @@ async function* queryLoop(
       // yield them as synthetic assistant messages. However if it does throw
       // due to a bug, we may end up in a state where we have already emitted
       // a tool_use block but will stop before emitting the tool_result.
-      yield* yieldMissingToolResultBlocks(assistantMessages, errorMessage)
+      yield* yieldMissingToolResultBlocks(assistantMessages, msg)
 
       // Surface the real error instead of a misleading "[Request interrupted
       // by user]" — this path is a model/runtime failure, not a user action.

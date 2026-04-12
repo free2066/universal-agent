@@ -2,6 +2,7 @@ import figures from 'figures';
 import React, { useEffect, useState } from 'react';
 import { Box, Text } from '../ink.js';
 import { logForDebugging } from '../utils/debug.js';
+import { errorMessage } from '../utils/errors.js';
 import type { GitFileStatus } from '../utils/git.js';
 import { getFileStatus, stashToCleanState } from '../utils/git.js';
 import { Select } from './CustomSelect/index.js';
@@ -28,8 +29,7 @@ export function TeleportStash({
         const fileStatus = await getFileStatus();
         setGitFileStatus(fileStatus);
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        logForDebugging(`Error getting changed files: ${errorMessage}`, {
+        logForDebugging(`Error getting changed files: ${errorMessage(err)}`, {
           level: 'error'
         });
         setError('Failed to get changed files');
@@ -51,8 +51,7 @@ export function TeleportStash({
         setError('Failed to stash changes');
       }
     } catch (err_0) {
-      const errorMessage_0 = err_0 instanceof Error ? err_0.message : String(err_0);
-      logForDebugging(`Error stashing changes: ${errorMessage_0}`, {
+      logForDebugging(`Error stashing changes: ${errorMessage(err_0)}`, {
         level: 'error'
       });
       setError('Failed to stash changes');

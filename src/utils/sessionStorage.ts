@@ -71,7 +71,7 @@ import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { logForDiagnosticsNoPII } from './diagLogs.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
-import { isFsInaccessible } from './errors.js'
+import { errorMessage, isFsInaccessible } from './errors.js'
 import type { FileHistorySnapshot } from './fileHistory.js'
 import { formatFileSize } from './format.js'
 import { getFsImplementation } from './fsOperations.js'
@@ -2363,7 +2363,7 @@ export async function loadTranscriptFromFile(
   try {
     parsed = jsonParse(content)
   } catch (error) {
-    throw new Error(`Invalid JSON in transcript file: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`Invalid JSON in transcript file: ${errorMessage(error)}`)
   }
 
   let messages: TranscriptMessage[]

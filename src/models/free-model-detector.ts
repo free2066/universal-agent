@@ -19,6 +19,7 @@
  */
 
 import type { ModelPointers } from './model-manager.js';
+import { errorMessage } from '../utils/errors.js';
 
 // ── OpenRouter API types ──────────────────────────────────────────────────────
 
@@ -254,7 +255,7 @@ async function tryOpenRouter(apiKey?: string, silent = false): Promise<RankedFre
     const models = await fetchOpenRouterFreeModels(apiKey);
     return models.length > 0 ? models : null;
   } catch (err) {
-    if (!silent) process.stdout.write(` ⚠️  OpenRouter: ${err instanceof Error ? err.message : String(err)}\n`);
+    if (!silent) process.stdout.write(` ⚠️  OpenRouter: ${errorMessage(err)}\n`);
     return null;
   }
 }

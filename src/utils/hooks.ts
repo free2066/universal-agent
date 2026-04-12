@@ -2680,15 +2680,13 @@ async function* executeHooks({
       // Clean up on error
       cleanup?.()
 
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
       emitHookResponse({
         hookId,
         hookName,
         hookEvent,
-        output: `Failed to run: ${errorMessage}`,
+        output: `Failed to run: ${errorMessage(error)}`,
         stdout: '',
-        stderr: `Failed to run: ${errorMessage}`,
+        stderr: `Failed to run: ${errorMessage(error)}`,
         exitCode: 1,
         outcome: 'error',
       })
@@ -3115,10 +3113,8 @@ async function executeHooksOutsideREPL({
         } catch (error) {
           cleanup?.()
 
-          const errorMessage =
-            error instanceof Error ? error.message : String(error)
           logForDebugging(
-            `${hookName} [callback] failed to run: ${errorMessage}`,
+            `${hookName} [callback] failed to run: ${errorMessage(error)}`,
             { level: 'error' },
           )
           return {
@@ -3242,10 +3238,8 @@ async function executeHooksOutsideREPL({
             blocked: !!jsonBlocked,
           }
         } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error)
           logForDebugging(
-            `${hookName} [${hook.url}] failed to run: ${errorMessage}`,
+            `${hookName} [${hook.url}] failed to run: ${errorMessage(error)}`,
             { level: 'error' },
           )
           return {
@@ -3341,10 +3335,8 @@ async function executeHooksOutsideREPL({
         // Clean up on error
         cleanup?.()
 
-        const errorMessage =
-          error instanceof Error ? error.message : String(error)
         logForDebugging(
-          `${hookName} [${hook.command}] failed to run: ${errorMessage}`,
+          `${hookName} [${hook.command}] failed to run: ${errorMessage(error)}`,
           { level: 'error' },
         )
         return {

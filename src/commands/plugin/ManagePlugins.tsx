@@ -1135,8 +1135,7 @@ export function ManagePlugins({
       });
     } catch (error_0) {
       setIsProcessing(false);
-      const errorMessage = error_0 instanceof Error ? error_0.message : String(error_0);
-      setProcessError(`Failed to ${operation}: ${errorMessage}`);
+      setProcessError(`Failed to ${operation}: ${errorMessage(error_0)}`);
       logError(toError(error_0));
     }
   };
@@ -1569,7 +1568,7 @@ export function ManagePlugins({
         });
       } catch (e_0) {
         setIsProcessing(false);
-        setProcessError(e_0 instanceof Error ? e_0.message : String(e_0));
+        setProcessError(errorMessage(e_0));
       }
     };
     if (input === 'y' || input === 'Y') {

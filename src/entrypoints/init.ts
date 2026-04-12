@@ -178,7 +178,7 @@ export const init = memoize(async (): Promise<void> => {
         await initUpstreamProxy()
       } catch (err) {
         logForDebugging(
-          `[init] upstreamproxy init failed: ${err instanceof Error ? err.message : String(err)}; continuing without proxy`,
+          `[init] upstreamproxy init failed: ${errorMessage(err)}; continuing without proxy`,
           { level: 'warn' },
         )
       }

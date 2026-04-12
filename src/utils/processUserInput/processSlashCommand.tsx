@@ -23,7 +23,7 @@ import { getAgentContext } from '../agentContext.js';
 import { createAttachmentMessage, getAttachmentMessages } from '../attachments.js';
 import { logForDebugging } from '../debug.js';
 import { isEnvTruthy } from '../envUtils.js';
-import { AbortError, MalformedCommandError } from '../errors.js';
+import { AbortError, errorMessage, MalformedCommandError } from '../errors.js';
 import { getDisplayPath } from '../file.js';
 import { extractResultText, prepareForkedCommandContext } from '../forkedAgent.js';
 import { getFsImplementation } from '../fsOperations.js';
@@ -171,7 +171,7 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
       enqueueResult(`<scheduled-task-result command="/${commandName}">\n${resultText}\n</scheduled-task-result>`);
     })().catch(err => {
       logError(err);
-      enqueueResult(`<scheduled-task-result command="/${commandName}" status="failed">\n${err instanceof Error ? err.message : String(err)}\n</scheduled-task-result>`);
+      enqueueResult(`<scheduled-task-result command="/${commandName}" status="failed">\n${errorMessage(err)}\n</scheduled-task-result>`);
     });
 
     // Nothing to render, nothing to query — the background runner re-enters

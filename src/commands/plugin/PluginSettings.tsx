@@ -474,7 +474,7 @@ function ErrorsTabContent(t0) {
               markPluginsChanged();
             } catch (t6) {
               const err = t6;
-              setActionMessage(`Failed to remove "${action.name}": ${err instanceof Error ? err.message : String(err)}`);
+              setActionMessage(`Failed to remove "${action.name}": ${errorMessage(err)}`);
             }
           })();
           break bb77;

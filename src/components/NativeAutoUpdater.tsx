@@ -13,6 +13,7 @@ import { isAutoUpdaterDisabled } from '../utils/config.js';
 import { installLatest } from '../utils/nativeInstaller/index.js';
 import { gt } from '../utils/semver.js';
 import { getInitialSettings } from '../utils/settings/settings.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * Categorize error messages for analytics
@@ -127,9 +128,9 @@ export function NativeAutoUpdater({
       }
     } catch (error) {
       const latencyMs = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const msg = errorMessage(error);
       logError(error);
-      const errorType = getErrorType(errorMessage);
+      const errorType = getErrorType(msg);
       logEvent('tengu_native_auto_updater_fail', {
         latency_ms: latencyMs,
         error_timeout: errorType === 'timeout',

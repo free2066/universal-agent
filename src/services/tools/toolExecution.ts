@@ -61,6 +61,7 @@ import type {
 import { count } from '../../utils/array.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { errorMessage } from '../../utils/errors.js'
 import {
   AbortError,
   errorMessage,
@@ -469,9 +470,8 @@ export async function* runToolUse(
     }
   } catch (error) {
     logError(error)
-    const errorMessage = error instanceof Error ? error.message : String(error)
     const toolInfo = tool ? ` (${tool.name})` : ''
-    const detailedError = `Error calling tool${toolInfo}: ${errorMessage}`
+    const detailedError = `Error calling tool${toolInfo}: ${errorMessage(error)}`
 
     yield {
       message: createUserMessage({

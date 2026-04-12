@@ -1,6 +1,7 @@
 import { join } from 'path'
 import { getCwd } from '../cwd.js'
 import { logForDebugging } from '../debug.js'
+import { errorMessage } from '../errors.js'
 import { logError } from '../log.js'
 import type { SettingSource } from '../settings/constants.js'
 import {
@@ -320,9 +321,7 @@ export async function installSelectedPlugins(
       updatedEnabledPlugins[pluginId] = true
       installed.push(pluginId)
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
-      failed.push({ name: pluginId, error: errorMessage })
+      failed.push({ name: pluginId, error: errorMessage(error) })
       logError(error)
     }
   }

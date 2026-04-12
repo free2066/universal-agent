@@ -3602,7 +3602,7 @@ export function REPL({
       clearBuffer: () => {},
       resetHistory: () => {}
     }).catch(err => {
-      logForDebugging(`Survey feedback request failed: ${err instanceof Error ? err.message : String(err)}`);
+      logForDebugging(`Survey feedback request failed: ${errorMessage(err)}`);
     });
   }, [onSubmit]);
 
@@ -4330,7 +4330,7 @@ export function REPL({
           const opened = openFileInExternalEditor(path);
           setStatus(opened ? `opening ${path}` : `wrote ${path} · no $VISUAL/$EDITOR set`);
         } catch (e) {
-          setStatus(`render failed: ${e instanceof Error ? e.message : String(e)}`);
+          setStatus(`render failed: ${errorMessage(e)}`);
         }
         editorRenderingRef.current = false;
         if (gen !== editorGenRef.current) return;

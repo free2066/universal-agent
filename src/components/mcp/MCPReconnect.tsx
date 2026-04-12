@@ -7,6 +7,7 @@ import { Box, color, Text, useTheme } from '../../ink.js';
 import { useMcpReconnect } from '../../services/mcp/MCPConnectionManager.js';
 import { useAppStateStore } from '../../state/AppState.js';
 import { Spinner } from '../Spinner.js';
+import { errorMessage } from '../../utils/errors.js';
 type Props = {
   serverName: string;
   onComplete: (result?: string, options?: {
@@ -64,8 +65,7 @@ export function MCPReconnect(t0) {
           }
         } catch (t3) {
           const err = t3;
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          setError(errorMessage);
+          setError(errorMessage(err));
           setIsReconnecting(false);
           onComplete(`Error: ${errorMessage}`);
         }

@@ -15,6 +15,7 @@ import { asAgentId } from '../../types/ids.js'
 import { runWithAgentContext } from '../../utils/agentContext.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { errorMessage } from '../../utils/errors.js'
 import {
   createUserMessage,
   filterOrphanedThinkingOnlyMessages,
@@ -287,9 +288,8 @@ export async function resumeAgentBackground({
       }),
     ),
   ).catch(err => {
-    const msg = err instanceof Error ? err.message : String(err)
     logForDebugging(
-      `[resumeAgent] runWithAgentContext threw unexpectedly for agent ${agentBackgroundTask.agentId}: ${msg}`,
+      `[resumeAgent] runWithAgentContext threw unexpectedly for agent ${agentBackgroundTask.agentId}: ${errorMessage(err)}`,
       { level: 'error' },
     )
     failAgentTask(agentBackgroundTask.agentId, msg, rootSetAppState)

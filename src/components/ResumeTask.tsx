@@ -14,6 +14,7 @@ import { Byline } from './design-system/Byline.js';
 import { KeyboardShortcutHint } from './design-system/KeyboardShortcutHint.js';
 import { Spinner } from './Spinner.js';
 import { TeleportError } from './TeleportError.js';
+import { errorMessage } from '../utils/errors.js';
 type Props = {
   onSelect: (session: CodeSession) => void;
   onCancel: () => void;
@@ -70,9 +71,9 @@ export function ResumeTask({
       });
       setSessions(sortedSessions);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      logForDebugging(`Error loading code sessions: ${errorMessage}`);
-      setLoadErrorType(determineErrorType(errorMessage));
+      const msg = errorMessage(err);
+      logForDebugging(`Error loading code sessions: ${msg}`);
+      setLoadErrorType(determineErrorType(msg));
     } finally {
       setLoading(false);
       setRetrying(false);
