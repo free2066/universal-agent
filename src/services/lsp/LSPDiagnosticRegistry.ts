@@ -88,19 +88,15 @@ export function registerPendingLSPDiagnostic({
  * Maps severity string to numeric value for sorting.
  * Error=1, Warning=2, Info=3, Hint=4
  */
+const SEVERITY_TO_NUM: Record<string, number> = {
+  Error: 1,
+  Warning: 2,
+  Info: 3,
+  Hint: 4,
+}
+
 function severityToNumber(severity: string | undefined): number {
-  switch (severity) {
-    case 'Error':
-      return 1
-    case 'Warning':
-      return 2
-    case 'Info':
-      return 3
-    case 'Hint':
-      return 4
-    default:
-      return 4
-  }
+  return (severity !== undefined && SEVERITY_TO_NUM[severity]) || 4
 }
 
 /**

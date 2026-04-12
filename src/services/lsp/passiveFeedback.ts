@@ -15,23 +15,17 @@ import type { LSPServerManager } from './LSPServerManager.js'
  * Accepts numeric severity values (1=Error, 2=Warning, 3=Information, 4=Hint)
  * or undefined, defaulting to 'Error' for invalid/missing values.
  */
+const LSP_SEVERITY: Record<number, 'Error' | 'Warning' | 'Info' | 'Hint'> = {
+  1: 'Error',
+  2: 'Warning',
+  3: 'Info',
+  4: 'Hint',
+}
+
 function mapLSPSeverity(
   lspSeverity: number | undefined,
 ): 'Error' | 'Warning' | 'Info' | 'Hint' {
-  // LSP DiagnosticSeverity enum:
-  // 1 = Error, 2 = Warning, 3 = Information, 4 = Hint
-  switch (lspSeverity) {
-    case 1:
-      return 'Error'
-    case 2:
-      return 'Warning'
-    case 3:
-      return 'Info'
-    case 4:
-      return 'Hint'
-    default:
-      return 'Error'
-  }
+  return (lspSeverity !== undefined && LSP_SEVERITY[lspSeverity]) || 'Error'
 }
 
 /**

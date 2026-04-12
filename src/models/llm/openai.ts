@@ -229,10 +229,11 @@ export class DeepSeekClient extends OpenAIClient {
         const choice = response.choices[0];
         if (!choice) throw new Error('No choices from DeepSeek');
         const msg = choice.message;
+        const textContent = typeof msg.content === 'string' ? msg.content || '' : ''
         if (msg.tool_calls?.length) {
           return {
             type: 'tool_calls',
-            content: typeof msg.content === 'string' ? msg.content || '' : '',
+            content: textContent,
             toolCalls: msg.tool_calls.map((tc: OpenAI.ChatCompletionMessageToolCall) => ({
               id: tc.id,
               name: tc.function.name,
@@ -240,7 +241,7 @@ export class DeepSeekClient extends OpenAIClient {
             })),
           };
         }
-        return { type: 'text', content: typeof msg.content === 'string' ? msg.content || '' : '' };
+        return { type: 'text', content: textContent };
       });
     }
     return super.chat(options);
