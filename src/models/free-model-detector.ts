@@ -215,7 +215,7 @@ async function tryOllama(): Promise<RankedFreeModel | null> {
     const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(2000) });
     if (!res.ok) return null;
     const data = await res.json() as { models?: Array<{ name: string }> };
-    const installed = (data.models ?? []).map((m) => m.name);
+    const installed = (data.models ?? []).map((m) => m.name).filter((n): n is string => typeof n === 'string');
     // Prefer qwen3 > llama3.3 > deepseek-r1 if installed
     for (const preferred of ['qwen3', 'llama3.3', 'deepseek-r1', 'llama3']) {
       if (installed.some((n) => n.startsWith(preferred))) {
