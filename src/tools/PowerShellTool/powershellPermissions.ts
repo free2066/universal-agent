@@ -1354,17 +1354,9 @@ export async function powershellToolHasPermission(
   // REDUCE: deny > ask > allow > passthrough. First of each behavior type
   // wins (preserves step-order messaging for single-check cases). If nothing
   // decided, fall through to step 5 per-sub-command approval collection.
-  const deniedDecision = decisions.find(d => d.behavior === 'deny')
-  if (deniedDecision !== undefined) {
-    return deniedDecision
-  }
-  const askDecision = decisions.find(d => d.behavior === 'ask')
-  if (askDecision !== undefined) {
-    return askDecision
-  }
-  const allowDecision = decisions.find(d => d.behavior === 'allow')
-  if (allowDecision !== undefined) {
-    return allowDecision
+  for (const behavior of ['deny', 'ask', 'allow'] as const) {
+    const decision = decisions.find(d => d.behavior === behavior)
+    if (decision !== undefined) return decision
   }
 
   // 5. Pipeline/statement splitting: check each sub-command independently.

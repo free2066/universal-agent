@@ -1407,7 +1407,7 @@ function checkEarlyExitDeny(
     toolPermissionContext,
     'prefix',
   ).matchingDenyRules[0]
-  if (denyMatch !== undefined) {
+  if (denyMatch) {
     return {
       behavior: 'deny',
       message: `Permission to use ${BashTool.name} with command ${input.command} has been denied.`,
@@ -1444,7 +1444,7 @@ function checkSemanticsDeny(
       toolPermissionContext,
       'prefix',
     ).matchingDenyRules[0]
-    if (subDeny !== undefined) {
+    if (subDeny) {
       return {
         behavior: 'deny',
         message: `Permission to use ${BashTool.name} with command ${input.command} has been denied.`,
@@ -2252,7 +2252,7 @@ export async function bashToolHasPermission(
   const deniedSubresult = subcommandPermissionDecisions.find(
     _ => _.behavior === 'deny',
   )
-  if (deniedSubresult !== undefined) {
+  if (deniedSubresult) {
     return {
       behavior: 'deny',
       message: `Permission to use ${BashTool.name} with command ${input.command} has been denied.`,

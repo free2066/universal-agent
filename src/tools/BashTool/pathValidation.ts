@@ -152,7 +152,7 @@ function parsePatternCommand(
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
-    if (arg === undefined || arg === null) continue
+    if (arg == null) continue
 
     if (!afterDoubleDash && arg === '--') {
       afterDoubleDash = true
@@ -455,7 +455,7 @@ export const PATH_EXTRACTORS: Record<
 
     for (let i = 0; i < args.length; i++) {
       const arg = args[i]
-      if (arg === undefined || arg === null) continue
+      if (arg == null) continue
 
       if (!afterDoubleDash && arg === '--') {
         afterDoubleDash = true
