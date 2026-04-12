@@ -445,10 +445,11 @@ export function popAllEditable(
 
   // Extract text from queued commands (handles both strings and ContentBlockParam[])
   const queuedTexts = editable.map(cmd => extractTextFromValue(cmd.value))
-  const newInput = [...queuedTexts, currentInput].filter(Boolean).join('\n')
+  const filteredQueuedTexts = queuedTexts.filter(Boolean)
+  const newInput = [...filteredQueuedTexts, currentInput].filter(Boolean).join('\n')
 
   // Calculate cursor offset: length of joined queued commands + 1 + current cursor offset
-  const cursorOffset = queuedTexts.join('\n').length + 1 + currentCursorOffset
+  const cursorOffset = filteredQueuedTexts.join('\n').length + (filteredQueuedTexts.length > 0 ? 1 : 0) + currentCursorOffset
 
   // Extract images from queued commands
   const images: PastedContent[] = []
