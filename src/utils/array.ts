@@ -3,9 +3,7 @@ export function intersperse<A>(as: A[], separator: (index: number) => A): A[] {
 }
 
 export function count<T>(arr: readonly T[], pred: (x: T) => unknown): number {
-  let n = 0
-  for (const x of arr) n += +!!pred(x)
-  return n
+  return arr.reduce((n, x) => n + (pred(x) ? 1 : 0), 0)
 }
 
 export function uniq<T>(xs: Iterable<T>): T[] {

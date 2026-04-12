@@ -145,6 +145,24 @@ function logClassifierResultForAnts(
 }
 
 /**
+ * Skip leading safe env var assignments (VAR=value) in a token list.
+ * Returns the index after the last safe env var, or null if a non-safe env var is found.
+ */
+function skipSafeEnvVarPrefix(tokens: string[]): number | null {
+  let i = 0
+  while (i < tokens.length && ENV_VAR_ASSIGN_RE.test(tokens[i]!)) {
+    const varName = tokens[i]!.split('=')[0]!
+    const isAntOnlySafe =
+      process.env.USER_TYPE === 'ant' && ANT_ONLY_SAFE_ENV_VARS.has(varName)
+    if (!SAFE_ENV_VARS.has(varName) && !isAntOnlySafe) {
+      return null
+    }
+    i++
+  }
+  return i
+}
+
+/**
  * Extract a stable command prefix (command + subcommand) from a raw command string.
  * Skips leading env var assignments only if they are in SAFE_ENV_VARS (or
  * ANT_ONLY_SAFE_ENV_VARS for ant users). Returns null if a non-safe env var is
@@ -168,16 +186,8 @@ export function getSimpleCommandPrefix(command: string): string | null {
   // env var is encountered, return null to fall back to exact match. This
   // prevents generating prefix rules like Bash(npm run:*) that can never match
   // at allow-rule check time, because stripSafeWrappers only strips safe vars.
-  let i = 0
-  while (i < tokens.length && ENV_VAR_ASSIGN_RE.test(tokens[i]!)) {
-    const varName = tokens[i]!.split('=')[0]!
-    const isAntOnlySafe =
-      process.env.USER_TYPE === 'ant' && ANT_ONLY_SAFE_ENV_VARS.has(varName)
-    if (!SAFE_ENV_VARS.has(varName) && !isAntOnlySafe) {
-      return null
-    }
-    i++
-  }
+  const i = skipSafeEnvVarPrefix(tokens)
+  if (i === null) return null
 
   const remaining = tokens.slice(i)
   if (remaining.length < 2) return null
@@ -244,16 +254,8 @@ const BARE_SHELL_PREFIXES = new Set([
 export function getFirstWordPrefix(command: string): string | null {
   const tokens = command.trim().split(/\s+/).filter(Boolean)
 
-  let i = 0
-  while (i < tokens.length && ENV_VAR_ASSIGN_RE.test(tokens[i]!)) {
-    const varName = tokens[i]!.split('=')[0]!
-    const isAntOnlySafe =
-      process.env.USER_TYPE === 'ant' && ANT_ONLY_SAFE_ENV_VARS.has(varName)
-    if (!SAFE_ENV_VARS.has(varName) && !isAntOnlySafe) {
-      return null
-    }
-    i++
-  }
+  const i = skipSafeEnvVarPrefix(tokens)
+  if (i === null) return null
 
   const cmd = tokens[i]
   if (!cmd) return null
