@@ -58,6 +58,7 @@ export class Stream<T> implements AsyncIterator<T> {
 
   error(error: unknown) {
     this.hasError = error
+    this.isDone = true
     if (this.readReject) {
       const reject = this.readReject
       this.readResolve = undefined

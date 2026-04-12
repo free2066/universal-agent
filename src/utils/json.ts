@@ -131,7 +131,7 @@ function parseJSONLBuffer<T>(buf: Buffer): T[] {
   let start = 0
 
   // Strip UTF-8 BOM (EF BB BF)
-  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+  if (bufLen >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
     start = 3
   }
 
