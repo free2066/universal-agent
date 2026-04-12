@@ -677,7 +677,10 @@ async function claimTaskWithBusyCheck(
     const updated = await updateTask(taskListId, taskId, {
       owner: claimantAgentId,
     })
-    return { success: true, task: updated! }
+    if (!updated) {
+      return { success: false, reason: 'task_not_found' }
+    }
+    return { success: true, task: updated }
   } catch (error) {
     logForDebugging(
       `[Tasks] Failed to claim task ${taskId} with busy check: ${errorMessage(error)}`,

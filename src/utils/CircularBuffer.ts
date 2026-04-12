@@ -70,7 +70,7 @@ export class CircularBuffer<T> {
    * Clear all items from the buffer.
    */
   clear(): void {
-    this.buffer.length = 0
+    this.buffer = new Array(this.capacity)
     this.head = 0
     this.size = 0
   }
