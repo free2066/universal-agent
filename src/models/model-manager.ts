@@ -501,8 +501,8 @@ export class ModelManager {
     // This prevents /model from cycling into gpt-4.1 / claude when the user hasn't
     // configured those providers.
     if (this._detectedModels.length >= 1) {
-      const idx = this._detectedModels.indexOf(this.pointers.main);
-      const next = this._detectedModels[(idx + 1) % this._detectedModels.length];
+      const idx = this._detectedModels.indexOf(this.pointers.main)
+      const next = this._detectedModels[(Math.max(0, idx) + 1) % this._detectedModels.length]
       this.pointers.main = next;
       this.saveToDisk();
       return next;
@@ -521,7 +521,7 @@ export class ModelManager {
 
     if (!active.length) return this.pointers.main;
     const idx = active.indexOf(this.pointers.main);
-    const next = active[(idx + 1) % active.length];
+    const next = active[(Math.max(0, idx) + 1) % active.length];
     this.pointers.main = next;
     this.saveToDisk();
     return next;
