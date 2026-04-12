@@ -87,16 +87,11 @@ export function expandPastedTextRefs(
   // Splice at the original match offsets so placeholder-like strings inside
   // pasted content are never confused for real refs. Reverse order keeps
   // earlier offsets valid after later replacements.
-  for (let i = refs.length - 1; i >= 0; i--) {
-    const ref = refs[i]!
+  return refs.reduceRight((result, ref) => {
     const content = pastedContents[ref.id]
-    if (content?.type !== 'text') continue
-    expanded =
-      expanded.slice(0, ref.index) +
-      content.content +
-      expanded.slice(ref.index + ref.match.length)
-  }
-  return expanded
+    if (content?.type !== 'text') return result
+    return result.slice(0, ref.index) + content.content + result.slice(ref.index + ref.match.length)
+  }, expanded)
 }
 
 function deserializeLogEntry(line: string): LogEntry {

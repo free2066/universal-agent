@@ -16,7 +16,7 @@ export function getPillLabel(tasks: BackgroundTaskState[]): string {
       case 'local_bash': {
         const monitors = count(
           tasks,
-          t => t.type === 'local_bash' && t.kind === 'monitor',
+          t => t.kind === 'monitor',
         )
         const shells = n - monitors
         const parts: string[] = []
@@ -40,7 +40,7 @@ export function getPillLabel(tasks: BackgroundTaskState[]): string {
         const first = tasks[0]!
         // Per design mockup: ◇ open diamond while running/needs-input,
         // ◆ filled once ExitPlanMode is awaiting approval.
-        if (n === 1 && first.type === 'remote_agent' && first.isUltraplan) {
+        if (n === 1 && first.isUltraplan) {
           switch (first.ultraplanPhase) {
             case 'plan_ready':
               return `${DIAMOND_FILLED} ultraplan ready`
