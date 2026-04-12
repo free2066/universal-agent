@@ -103,14 +103,11 @@ export function getSSLErrorHint(error: unknown): string | null {
  * Returns the original message unchanged if no HTML is found.
  */
 function sanitizeMessageHTML(message: string): string {
-  if (message.includes('<!DOCTYPE html') || message.includes('<html')) {
-    const titleMatch = message.match(/<title>([^<]+)<\/title>/)
-    if (titleMatch && titleMatch[1]) {
-      return titleMatch[1].trim()
-    }
-    return ''
+  if (!message.includes('<!DOCTYPE html') && !message.includes('<html')) {
+    return message
   }
-  return message
+  const title = message.match(/<title>([^<]+)<\/title>/)?.[1]
+  return title ? title.trim() : ''
 }
 
 /**

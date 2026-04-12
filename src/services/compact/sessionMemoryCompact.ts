@@ -154,20 +154,12 @@ export function hasTextBlocks(message: Message): boolean {
  * Check if a message contains tool_result blocks and return their tool_use_ids
  */
 function getToolResultIds(message: Message): string[] {
-  if (message.type !== 'user') {
-    return []
-  }
+  if (message.type !== 'user') return []
   const content = message.message.content
-  if (!Array.isArray(content)) {
-    return []
-  }
-  const ids: string[] = []
-  for (const block of content) {
-    if (block.type === 'tool_result') {
-      ids.push(block.tool_use_id)
-    }
-  }
-  return ids
+  if (!Array.isArray(content)) return []
+  return content
+    .filter(block => block.type === 'tool_result')
+    .map(block => block.tool_use_id)
 }
 
 /**

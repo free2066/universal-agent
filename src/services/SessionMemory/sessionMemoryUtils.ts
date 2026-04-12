@@ -90,13 +90,10 @@ export async function waitForSessionMemoryExtraction(): Promise<void> {
   const startTime = Date.now()
   while (extractionStartedAt) {
     const extractionAge = Date.now() - extractionStartedAt
-    if (extractionAge > EXTRACTION_STALE_THRESHOLD_MS) {
-      // Extraction is stale, don't wait
-      return
-    }
-
-    if (Date.now() - startTime > EXTRACTION_WAIT_TIMEOUT_MS) {
-      // Timeout - continue anyway
+    if (
+      extractionAge > EXTRACTION_STALE_THRESHOLD_MS ||
+      Date.now() - startTime > EXTRACTION_WAIT_TIMEOUT_MS
+    ) {
       return
     }
 
