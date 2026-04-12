@@ -276,7 +276,7 @@ export async function* withRetry<T>(
         const overageReason = error.headers?.get(
           'anthropic-ratelimit-unified-overage-disabled-reason',
         )
-        if (overageReason !== null && overageReason !== undefined) {
+        if (overageReason != null) {
           handleFastModeOverageRejection(overageReason)
           retryContext.fastMode = false
           continue

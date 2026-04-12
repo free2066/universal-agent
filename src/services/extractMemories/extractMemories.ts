@@ -84,7 +84,7 @@ function countModelVisibleMessagesSince(
   messages: Message[],
   sinceUuid: string | undefined,
 ): number {
-  if (sinceUuid === null || sinceUuid === undefined) {
+  if (sinceUuid == null) {
     return count(messages, isModelVisibleMessage)
   }
 

@@ -1015,7 +1015,7 @@ function startGlobalConfigFreshnessWatcher(): void {
           // don't regress to the stale snapshot watchFile stat'd.
           if (curr.mtimeMs <= globalConfigCache.mtime) return
           const parsed = safeParseJSON(stripBOM(content))
-          if (parsed === null || typeof parsed !== 'object') return
+          if (parsed == null || typeof parsed !== 'object') return
           globalConfigCache = {
             config: migrateConfigFields({
               ...createDefaultGlobalConfig(),

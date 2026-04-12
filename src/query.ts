@@ -138,7 +138,7 @@ function* yieldMissingToolResultBlocks(
         content: [
           {
             type: 'tool_result',
-            content: msg,
+            content: errorMessage,
             is_error: true,
             tool_use_id: toolUse.id,
           },

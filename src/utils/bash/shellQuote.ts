@@ -47,7 +47,7 @@ export function tryParseShellCommand(
 export function tryQuoteShellArgs(args: unknown[]): ShellQuoteResult {
   try {
     const validated: string[] = args.map((arg, index) => {
-      if (arg === null || arg === undefined) {
+      if (arg == null) {
         return String(arg)
       }
 
@@ -276,7 +276,7 @@ export function quote(args: ReadonlyArray<unknown>): string {
   // This handles objects, symbols, functions, etc. by converting them to strings
   try {
     const stringArgs = args.map(arg => {
-      if (arg === null || arg === undefined) {
+      if (arg == null) {
         return String(arg)
       }
 

@@ -548,7 +548,7 @@ function validateComponentFile(
     return { success: false, errors, warnings, filePath, fileType }
   }
 
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     errors.push({
       path: 'frontmatter',
       message:

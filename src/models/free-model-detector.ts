@@ -218,10 +218,11 @@ async function tryOllama(): Promise<RankedFreeModel | null> {
     const data = await res.json() as { models?: Array<{ name: string }> };
     const installed = (data.models ?? []).map((m) => m.name).filter((n): n is string => typeof n === 'string');
     // Prefer qwen3 > llama3.3 > deepseek-r1 if installed
-    for (const preferred of ['qwen3', 'llama3.3', 'deepseek-r1', 'llama3']) {
-      if (installed.some((n) => n.startsWith(preferred))) {
-        return { id: `ollama:${preferred}`, name: `${preferred} (local Ollama)`, score: 70, contextLength: 32768, supportsTools: true, isFree: true };
-      }
+    const preferred = ['qwen3', 'llama3.3', 'deepseek-r1', 'llama3'].find((p) =>
+      installed.some((n) => n.startsWith(p)),
+    );
+    if (preferred) {
+      return { id: `ollama:${preferred}`, name: `${preferred} (local Ollama)`, score: 70, contextLength: 32768, supportsTools: true, isFree: true };
     }
     // Use whatever is installed
     if (installed.length > 0) {

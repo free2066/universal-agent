@@ -98,10 +98,7 @@ export function findTeammateTaskByAgentId(agentId: string, tasks: Record<string,
       if (task.status === 'running') {
         return task;
       }
-      // Keep first match as fallback in case no running task exists
-      if (!fallback) {
-        fallback = task;
-      }
+      fallback ??= task;
     }
   }
   return fallback;

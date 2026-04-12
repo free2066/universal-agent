@@ -41,10 +41,10 @@ function parsePluginsData(content: string): Record<string, FlaggedPlugin> {
   const parsed = jsonParse(content) as unknown
   if (
     typeof parsed !== 'object' ||
-    parsed === null ||
+    parsed == null ||
     !('plugins' in parsed) ||
     typeof (parsed as { plugins: unknown }).plugins !== 'object' ||
-    (parsed as { plugins: unknown }).plugins === null
+    (parsed as { plugins: unknown }).plugins == null
   ) {
     return {}
   }
