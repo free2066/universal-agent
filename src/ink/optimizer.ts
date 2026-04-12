@@ -25,13 +25,11 @@ export function optimize(diff: Diff): Diff {
     const type = patch.type
 
     // Skip no-ops
-    if (type === 'stdout') {
-      if (patch.content === '') continue
-    } else if (type === 'cursorMove') {
-      if (patch.x === 0 && patch.y === 0) continue
-    } else if (type === 'clear') {
-      if (patch.count === 0) continue
-    }
+    if (
+      (type === 'stdout' && patch.content === '') ||
+      (type === 'cursorMove' && patch.x === 0 && patch.y === 0) ||
+      (type === 'clear' && patch.count === 0)
+    ) continue
 
     // Try to merge with previous patch
     if (len > 0) {

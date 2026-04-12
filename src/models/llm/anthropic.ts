@@ -20,6 +20,11 @@ import { withInferenceTimeout, safeParseJSON, toAnthropicContent, msgText } from
 
 // ── A25: PromptCaching helpers ────────────────────────────────────────────────
 
+const THINKING_BUDGETS: Record<string, number> = {
+  low: 1024, medium: 8000, high: 16000,
+  max: 32000, xhigh: 32000, maxOrXhigh: 32000,
+}
+
 /**
  * A25: isPromptCachingEnabled -- check if Anthropic Prompt Cache is active.
  * Default: true (enabled). Disable with ANTHROPIC_ENABLE_PROMPT_CACHE=false.
@@ -164,11 +169,7 @@ export class AnthropicClient implements LLMClient {
       const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
       // Round 7: adaptive thinking level resolves based on model name
       const thinking = resolveAdaptiveThinking(options.thinkingLevel, this.model);
-      const budgets: Record<string, number> = {
-        low: 1024, medium: 8000, high: 16000,
-        max: 32000, xhigh: 32000, maxOrXhigh: 32000,
-      };
-      const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
+      const budgetTokens = thinking ? (THINKING_BUDGETS[thinking] ?? 1024) : undefined;
       const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
       // A25: add prompt-caching beta header when cache_control is used
@@ -238,11 +239,7 @@ export class AnthropicClient implements LLMClient {
       const maxTokens = parseInt(process.env.ANTHROPIC_MAX_TOKENS ?? '8192', 10);
       // Round 7: adaptive thinking level resolves based on model name
       const thinking = resolveAdaptiveThinking(options.thinkingLevel, this.model);
-      const budgets: Record<string, number> = {
-        low: 1024, medium: 8000, high: 16000,
-        max: 32000, xhigh: 32000, maxOrXhigh: 32000,
-      };
-      const budgetTokens = thinking ? (budgets[thinking] ?? 1024) : undefined;
+      const budgetTokens = thinking ? (THINKING_BUDGETS[thinking] ?? 1024) : undefined;
       const effectiveMax = budgetTokens ? Math.max(maxTokens, budgetTokens + 1024) : maxTokens;
 
       // A19: Combine inference timeout signal with caller's AbortSignal (user Ctrl+C).

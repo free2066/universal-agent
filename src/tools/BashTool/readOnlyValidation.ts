@@ -1283,19 +1283,10 @@ export function isCommandSafeViaFlagParsing(command: string): boolean {
   const allowlist = getCommandAllowlist()
   for (const [cmdPattern] of Object.entries(allowlist)) {
     const cmdTokens = cmdPattern.split(' ')
-    if (tokens.length >= cmdTokens.length) {
-      let matches = true
-      for (let i = 0; i < cmdTokens.length; i++) {
-        if (tokens[i] !== cmdTokens[i]) {
-          matches = false
-          break
-        }
-      }
-      if (matches) {
-        commandConfig = allowlist[cmdPattern]
-        commandTokens = cmdTokens.length
-        break
-      }
+    if (tokens.length >= cmdTokens.length && cmdTokens.every((t, i) => tokens[i] === t)) {
+      commandConfig = allowlist[cmdPattern]
+      commandTokens = cmdTokens.length
+      break
     }
   }
 

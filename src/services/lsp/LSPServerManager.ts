@@ -76,10 +76,6 @@ export function createLSPServerManager(): LSPServerManager {
     return `${serverName}:${fileUri}`
   }
 
-  function getServerStartTime(server: LSPServerInstance): number | undefined {
-    return server.startTime?.getTime()
-  }
-
   function isFileOpenOnCurrentServer(
     fileUri: string,
     server: LSPServerInstance,
@@ -87,7 +83,7 @@ export function createLSPServerManager(): LSPServerManager {
     const opened = openedFiles.get(fileUri)
     return (
       opened?.serverName === server.name &&
-      opened.serverStartTime === getServerStartTime(server)
+      opened.serverStartTime === server.startTime?.getTime()
     )
   }
 
@@ -325,7 +321,7 @@ export function createLSPServerManager(): LSPServerManager {
       // Track that this file is now open on this server
       openedFiles.set(fileUri, {
         serverName: server.name,
-        serverStartTime: getServerStartTime(server),
+        serverStartTime: server.startTime?.getTime(),
       })
       documentVersions.set(documentKey, version)
       logForDebugging(
