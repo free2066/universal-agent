@@ -24,6 +24,7 @@ import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { logMCPDebug } from '../../utils/log.js'
+import { errorMessage } from '../../utils/errors.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 
 const XAA_REQUEST_TIMEOUT_MS = 30000
@@ -145,7 +146,7 @@ export async function discoverProtectedResource(
     )
   } catch (e) {
     throw new Error(
-      `XAA: PRM discovery failed: ${e instanceof Error ? e.message : String(e)}`,
+      `XAA: PRM discovery failed: ${errorMessage(e)}`,
     )
   }
   if (!prm.resource || !prm.authorization_servers?.[0]) {
@@ -449,7 +450,7 @@ export async function performCrossAppAccess(
       candidate = await discoverAuthorizationServer(asUrl, { fetchFn })
     } catch (e) {
       if (abortSignal?.aborted) throw e
-      asErrors.push(`${asUrl}: ${e instanceof Error ? e.message : String(e)}`)
+      asErrors.push(`${asUrl}: ${errorMessage(e)}`)
       continue
     }
     if (

@@ -1,6 +1,7 @@
 // @ts-nocheck
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { MODEL_ALIASES } from './aliases.js'
+import { errorMessage } from '../errors.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { getAPIProvider } from './providers.js'
 import { sideQuery } from '../sideQuery.js'
@@ -131,10 +132,9 @@ function handleValidationError(
   }
 
   // For unknown errors, be safe and reject
-  const errorMessage = error instanceof Error ? error.message : String(error)
   return {
     valid: false,
-    error: `Unable to validate model: ${errorMessage}`,
+    error: `Unable to validate model: ${errorMessage(error)}`,
   }
 }
 

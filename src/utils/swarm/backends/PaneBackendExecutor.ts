@@ -4,6 +4,7 @@ import { formatAgentId, parseAgentId } from '../../../utils/agentId.js'
 import { quote } from '../../../utils/bash/shellQuote.js'
 import { registerCleanup } from '../../../utils/cleanupRegistry.js'
 import { logForDebugging } from '../../../utils/debug.js'
+import { errorMessage } from '../../../utils/errors.js'
 import { jsonStringify } from '../../../utils/slowOperations.js'
 import { writeToMailbox } from '../../../utils/teammateMailbox.js'
 import {
@@ -195,10 +196,8 @@ export class PaneBackendExecutor implements TeammateExecutor {
         paneId,
       }
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
       logForDebugging(
-        `[PaneBackendExecutor] Failed to spawn ${agentId}: ${errorMessage}`,
+        `[PaneBackendExecutor] Failed to spawn ${agentId}: ${errorMessage(error)}`,
       )
       return {
         success: false,

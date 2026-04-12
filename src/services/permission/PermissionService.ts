@@ -19,6 +19,7 @@ import os from 'os'
 import crypto from 'crypto'
 import { minimatch } from 'minimatch'
 import { logForDebugging } from '../../utils/debug.js'
+import { errorMessage } from '../../utils/errors.js'
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Types
@@ -161,7 +162,7 @@ export class PermissionService {
       }
 
       logForDebugging(
-        `[PermissionService] Failed to load rules from ${PERMISSIONS_FILE}: ${error instanceof Error ? error.message : String(error)}`,
+        `[PermissionService] Failed to load rules from ${PERMISSIONS_FILE}: ${errorMessage(error)}`,
         { level: 'warn' },
       )
     }

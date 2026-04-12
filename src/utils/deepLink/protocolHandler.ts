@@ -13,6 +13,7 @@
 
 import { homedir } from 'os'
 import { logForDebugging } from '../debug.js'
+import { errorMessage } from '../errors.js'
 import {
   filterExistingPaths,
   getKnownPathsForRepo,
@@ -40,7 +41,7 @@ export async function handleDeepLinkUri(uri: string): Promise<number> {
   try {
     action = parseDeepLink(uri)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorMessage(error)
     // biome-ignore lint/suspicious/noConsole: intentional error output
     console.error(`Deep link error: ${message}`)
     return 1

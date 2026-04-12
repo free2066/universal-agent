@@ -24,7 +24,7 @@ import {
 } from '../../utils/auth.js'
 import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { logForDebugging } from '../../utils/debug.js'
-import { classifyAxiosError, getErrnoCode } from '../../utils/errors.js'
+import { classifyAxiosError, errorMessage, getErrnoCode } from '../../utils/errors.js'
 import { settingsChangeDetector } from '../../utils/settings/changeDetector.js'
 import {
   type SettingsJson,
@@ -68,9 +68,7 @@ const LOADING_PROMISE_TIMEOUT_MS = 30000 // 30 seconds
 
 function logRemoteSettingsFailOpen(message: string, error?: unknown): void {
   const detail =
-    error === undefined
-      ? ''
-      : ` (${error instanceof Error ? error.message : String(error)})`
+    error === undefined ? '' : ` (${errorMessage(error)})`
   logForDebugging(`Remote settings: ${message}${detail}`, { level: 'warn' })
 }
 
@@ -390,7 +388,7 @@ async function saveSettings(settings: SettingsJson): Promise<void> {
     logForDebugging(`Remote settings: Saved to ${path}`)
   } catch (error) {
     logForDebugging(
-      `Remote settings: Failed to save - ${error instanceof Error ? error.message : 'unknown error'}`,
+      `Remote settings: Failed to save - ${errorMessage(error)}`,
     )
     // Ignore save errors - we'll refetch on next startup
   }
@@ -501,7 +499,7 @@ async function fetchAndLoadRemoteManagedSettings(): Promise<SettingsJson | null>
       const code = getErrnoCode(e)
       if (code !== 'ENOENT') {
         logForDebugging(
-          `Remote settings: Failed to delete cached file - ${e instanceof Error ? e.message : 'unknown error'}`,
+          `Remote settings: Failed to delete cached file - ${errorMessage(e)}`,
         )
       }
     }

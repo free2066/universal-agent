@@ -14,7 +14,7 @@ import { logEvent } from '../../services/analytics/index.js'
 import { getGlobalConfig, saveGlobalConfig } from '../config.js'
 import { logForDebugging } from '../debug.js'
 import { isEnvTruthy } from '../envUtils.js'
-import { toError } from '../errors.js'
+import { errorMessage, toError } from '../errors.js'
 import { logError } from '../log.js'
 import { checkGitAvailable, markGitUnavailable } from './gitAvailability.js'
 import { isSourceAllowedByPolicy } from './marketplaceHelpers.js'
@@ -358,7 +358,7 @@ export async function checkAndInstallOfficialMarketplace(): Promise<OfficialMark
     return { installed: true, skipped: false }
   } catch (error) {
     // Handle installation failure
-    const errorMessage = error instanceof Error ? error.message : String(error)
+    const msg = errorMessage(error)
 
     // On macOS, /usr/bin/git is an xcrun shim that always exists on PATH, so
     // checkGitAvailable() (which only does `which git`) passes even without
@@ -367,7 +367,7 @@ export async function checkAndInstallOfficialMarketplace(): Promise<OfficialMark
     // availability check so other git callers in this session skip cleanly,
     // then return silently without recording any attempt state — next startup
     // tries fresh (no backoff machinery for what is effectively "git absent").
-    if (errorMessage.includes('xcrun: error:')) {
+    if (msg.includes('xcrun: error:')) {
       markGitUnavailable()
       logForDebugging(
         'Official marketplace auto-install: git is a non-functional macOS xcrun shim, treating as git_unavailable',
@@ -386,7 +386,7 @@ export async function checkAndInstallOfficialMarketplace(): Promise<OfficialMark
     }
 
     logForDebugging(
-      `Failed to auto-install official marketplace: ${errorMessage}`,
+      `Failed to auto-install official marketplace: ${msg}`,
       { level: 'error' },
     )
     logError(toError(error))

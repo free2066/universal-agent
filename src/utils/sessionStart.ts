@@ -3,6 +3,7 @@ import { getMainThreadAgentType } from '../bootstrap/state.js'
 import type { HookResultMessage } from '../types/message.js'
 import { createAttachmentMessage } from './attachments.js'
 import { logForDebugging } from './debug.js'
+import { errorMessage } from './errors.js'
 import { withDiagnosticsTiming } from './diagLogs.js'
 import { isBareMode } from './envUtils.js'
 import { updateWatchPaths } from './hooks/fileChangedWatcher.js'
@@ -84,30 +85,29 @@ export async function processSessionStartHooks(
       logError(enhancedError)
 
       // Provide specific guidance based on error type
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
+      const msg = errorMessage(error)
       let userGuidance = ''
 
       if (
-        errorMessage.includes('Failed to clone') ||
-        errorMessage.includes('network') ||
-        errorMessage.includes('ETIMEDOUT') ||
-        errorMessage.includes('ENOTFOUND')
+        msg.includes('Failed to clone') ||
+        msg.includes('network') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('ENOTFOUND')
       ) {
         userGuidance =
           'This appears to be a network issue. Check your internet connection and try again.'
       } else if (
-        errorMessage.includes('Permission denied') ||
-        errorMessage.includes('EACCES') ||
-        errorMessage.includes('EPERM')
+        msg.includes('Permission denied') ||
+        msg.includes('EACCES') ||
+        msg.includes('EPERM')
       ) {
         userGuidance =
           'This appears to be a permissions issue. Check file permissions on ~/.claude/plugins/'
       } else if (
-        errorMessage.includes('Invalid') ||
-        errorMessage.includes('parse') ||
-        errorMessage.includes('JSON') ||
-        errorMessage.includes('schema')
+        msg.includes('Invalid') ||
+        msg.includes('parse') ||
+        msg.includes('JSON') ||
+        msg.includes('schema')
       ) {
         userGuidance =
           'This appears to be a configuration issue. Check your plugin settings in .claude/settings.json'
@@ -118,7 +118,7 @@ export async function processSessionStartHooks(
 
       logForDebugging(
         `Warning: Failed to load plugin hooks. SessionStart hooks from plugins will not execute. ` +
-          `Error: ${errorMessage}. ${userGuidance}`,
+          `Error: ${msg}. ${userGuidance}`,
         { level: 'warn' },
       )
 
@@ -192,10 +192,8 @@ export async function processSetupHooks(
     try {
       await loadPluginHooks()
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
       logForDebugging(
-        `Warning: Failed to load plugin hooks. Setup hooks from plugins will not execute. Error: ${errorMessage}`,
+        `Warning: Failed to load plugin hooks. Setup hooks from plugins will not execute. Error: ${errorMessage(error)}`,
         { level: 'warn' },
       )
     }

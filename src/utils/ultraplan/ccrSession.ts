@@ -12,6 +12,7 @@ import type {
 import type { SDKMessage } from '../../entrypoints/agentSdkTypes.js'
 import { EXIT_PLAN_MODE_V2_TOOL_NAME } from '../../tools/ExitPlanModeTool/constants.js'
 import { logForDebugging } from '../debug.js'
+import { errorMessage } from '../errors.js'
 import { sleep } from '../sleep.js'
 import { isTransientNetworkError } from '../teleport/api.js'
 import {
@@ -231,7 +232,7 @@ export async function pollForApprovedExitPlanMode(
       const transient = isTransientNetworkError(e)
       if (!transient || ++failures >= MAX_CONSECUTIVE_FAILURES) {
         throw new UltraplanPollError(
-          e instanceof Error ? e.message : String(e),
+          errorMessage(e),
           'network_or_unknown',
           scanner.rejectCount,
           { cause: e },
@@ -246,7 +247,7 @@ export async function pollForApprovedExitPlanMode(
       result = scanner.ingest(newEvents)
     } catch (e) {
       throw new UltraplanPollError(
-        e instanceof Error ? e.message : String(e),
+        errorMessage(e),
         'extract_marker_missing',
         scanner.rejectCount,
       )

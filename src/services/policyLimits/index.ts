@@ -31,7 +31,7 @@ import {
 import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
-import { classifyAxiosError } from '../../utils/errors.js'
+import { classifyAxiosError, errorMessage } from '../../utils/errors.js'
 import { safeParseJSON } from '../../utils/json.js'
 import {
   getAPIProvider,
@@ -163,9 +163,7 @@ function computeChecksum(
 
 function logPolicyLimitsFailOpen(message: string, error?: unknown): void {
   const detail =
-    error === undefined
-      ? ''
-      : ` (${error instanceof Error ? error.message : String(error)})`
+    error === undefined ? '' : ` (${errorMessage(error)})`
   logForDebugging(`Policy limits: ${message}${detail}`, { level: 'warn' })
 }
 

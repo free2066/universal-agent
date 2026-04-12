@@ -23,7 +23,7 @@ import {
 } from 'src/services/analytics/index.js'
 import { logForDebugging } from '../debug.js'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
-import { getErrnoCode } from '../errors.js'
+import { errorMessage, getErrnoCode } from '../errors.js'
 import { execFileNoThrow } from '../execFileNoThrow.js'
 import { getInitialSettings } from '../settings/settings.js'
 import { which } from '../which.js'
@@ -338,7 +338,7 @@ export async function ensureDeepLinkProtocolRegistered(): Promise<void> {
         code as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     })
     logForDebugging(
-      `Failed to auto-register deep link protocol handler: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to auto-register deep link protocol handler: ${errorMessage(error)}`,
       { level: 'warn' },
     )
     if (code === 'EACCES' || code === 'ENOSPC') {

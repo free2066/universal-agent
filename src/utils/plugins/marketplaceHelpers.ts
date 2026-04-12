@@ -1,5 +1,5 @@
 import isEqual from 'lodash-es/isEqual.js'
-import { toError } from '../errors.js'
+import { errorMessage, toError } from '../errors.js'
 import { logError } from '../log.js'
 import { getSettingsForSource } from '../settings/settings.js'
 import { plural } from '../stringUtils.js'
@@ -96,8 +96,7 @@ export async function loadMarketplacesWithGracefulDegradation(
       data = await getMarketplace(name)
     } catch (err) {
       // Track individual marketplace failures but continue loading others
-      const errorMessage = err instanceof Error ? err.message : String(err)
-      failures.push({ name, error: errorMessage })
+      failures.push({ name, error: errorMessage(err) })
 
       // Log for monitoring
       logError(toError(err))
