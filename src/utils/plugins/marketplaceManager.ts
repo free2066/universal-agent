@@ -26,6 +26,7 @@ import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import { logForDebugging } from '../debug.js'
+import { errorMessage } from '../errors.js'
 import { isEnvTruthy } from '../envUtils.js'
 import {
   ConfigParseError,
@@ -2741,11 +2742,11 @@ export async function refreshMarketplace(
 
     logForDebugging(`Successfully refreshed marketplace: ${name}`)
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    logForDebugging(`Failed to refresh marketplace ${name}: ${errorMessage}`, {
+    const msg = errorMessage(error)
+    logForDebugging(`Failed to refresh marketplace ${name}: ${msg}`, {
       level: 'error',
     })
-    throw new Error(`Failed to refresh marketplace '${name}': ${errorMessage}`)
+    throw new Error(`Failed to refresh marketplace '${name}': ${msg}`)
   }
 }
 

@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, normalize, sep as pathSep } from 'path'
 import type { ToolUseContext } from '../Tool.js'
 import type { Command } from '../types/command.js'
 import { logForDebugging } from '../utils/debug.js'
+import { errorMessage } from '../utils/errors.js'
 import { getBundledSkillsRoot } from '../utils/permissions/filesystem.js'
 import type { HooksSettings } from '../utils/settings/types.js'
 
@@ -138,7 +139,7 @@ async function extractBundledSkillFiles(
     return dir
   } catch (e) {
     logForDebugging(
-      `Failed to extract bundled skill '${skillName}' to ${dir}: ${e instanceof Error ? e.message : String(e)}`,
+      `Failed to extract bundled skill '${skillName}' to ${dir}: ${errorMessage(e)}`,
     )
     return null
   }

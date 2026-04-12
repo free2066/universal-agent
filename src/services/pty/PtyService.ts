@@ -20,6 +20,7 @@ import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import os from 'os'
 import { logForDebugging } from '../../utils/debug.js'
+import { errorMessage } from '../../utils/errors.js'
 
 /** Max rolling output buffer per pty: 2 MB (same as opencode) */
 const BUFFER_LIMIT = 2 * 1024 * 1024
@@ -196,7 +197,7 @@ export class PtyService {
       }
     } catch (error) {
       logForDebugging(
-        `[PtyService] failed to kill pty ${id} (pid=${entry.info.pid}, signal=${signal}): ${error instanceof Error ? error.message : String(error)}`,
+        `[PtyService] failed to kill pty ${id} (pid=${entry.info.pid}, signal=${signal}): ${errorMessage(error)}`,
         { level: 'warn' },
       )
     }

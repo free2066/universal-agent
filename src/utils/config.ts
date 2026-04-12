@@ -19,7 +19,7 @@ import { logForDebugging } from './debug.js'
 import { logForDiagnosticsNoPII } from './diagLogs.js'
 import { getGlobalClaudeFile } from './env.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
-import { ConfigParseError, getErrnoCode } from './errors.js'
+import { ConfigParseError, errorMessage, getErrnoCode } from './errors.js'
 import { writeFileSyncAndFlush_DEPRECATED } from './file.js'
 import { getFsImplementation } from './fsOperations.js'
 import { findCanonicalGitRoot } from './git.js'
@@ -1444,9 +1444,7 @@ function getConfig<A>(
       }
     } catch (error) {
       // Throw a ConfigParseError with the file path and default config
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
-      throw new ConfigParseError(errorMessage, file, createDefault())
+      throw new ConfigParseError(errorMessage(error), file, createDefault())
     }
   } catch (error) {
     // Handle file not found - check for backup and return default

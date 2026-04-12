@@ -15,7 +15,7 @@ import {
   logEvent,
 } from '../../services/analytics/index.js'
 import { getCwd } from '../cwd.js'
-import { toError } from '../errors.js'
+import { errorMessage, toError } from '../errors.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { logError } from '../log.js'
 import {
@@ -589,8 +589,7 @@ export async function installPluginFromMarketplace({
       message: `✓ Installed ${entry.name}${result.depNote}. Run /reload-plugins to activate.`,
     }
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err)
     logError(toError(err))
-    return { success: false, error: `Failed to install: ${errorMessage}` }
+    return { success: false, error: `Failed to install: ${errorMessage(err)}` }
   }
 }

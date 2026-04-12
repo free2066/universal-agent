@@ -14,6 +14,7 @@ import {
 } from '../../services/mcp/types.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { errorMessage } from '../../utils/errors.js'
 import {
   EFFORT_LEVELS,
   type EffortValue,
@@ -385,9 +386,7 @@ export const getAgentDefinitionsWithOverrides = memoize(
         failedFiles: failedFiles.length > 0 ? failedFiles : undefined,
       }
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
-      logForDebugging(`Error loading agent definitions: ${errorMessage}`)
+      logForDebugging(`Error loading agent definitions: ${errorMessage(error)}`)
       logError(error)
       // Even on error, return the built-in agents
       const builtInAgents = getBuiltInAgents()
@@ -516,8 +515,7 @@ export function parseAgentFromJson(
 
     return agent
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    logForDebugging(`Error parsing agent '${name}' from JSON: ${errorMessage}`)
+    logForDebugging(`Error parsing agent '${name}' from JSON: ${errorMessage(error)}`)
     logError(error)
     return null
   }
@@ -536,8 +534,7 @@ export function parseAgentsFromJson(
       .map(([name, def]) => parseAgentFromJson(name, def, source))
       .filter((agent): agent is CustomAgentDefinition => agent !== null)
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    logForDebugging(`Error parsing agents from JSON: ${errorMessage}`)
+    logForDebugging(`Error parsing agents from JSON: ${errorMessage(error)}`)
     logError(error)
     return []
   }
@@ -755,8 +752,7 @@ export function parseAgentFromMarkdown(
     }
     return agentDef
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    logForDebugging(`Error parsing agent from ${filePath}: ${errorMessage}`)
+    logForDebugging(`Error parsing agent from ${filePath}: ${errorMessage(error)}`)
     logError(error)
     return null
   }
