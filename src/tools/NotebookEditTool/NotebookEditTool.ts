@@ -363,6 +363,22 @@ export const NotebookEditTool = buildTool({
           }
         }
 
+        if (cellIndex === -1) {
+          return {
+            data: {
+              new_source,
+              cell_type: cell_type ?? 'code',
+              language: 'python',
+              edit_mode: originalEditMode,
+              error: `Cell with ID "${cell_id}" not found in notebook.`,
+              cell_id,
+              notebook_path: fullPath,
+              original_file: '',
+              updated_file: '',
+            },
+          }
+        }
+
         if (originalEditMode === 'insert') {
           cellIndex += 1 // Insert after the cell with this ID
         }
