@@ -86,7 +86,7 @@ import {
 // ≈ 1 billion characters ≈ the runtime string limit. Multi-byte UTF-8 files
 // can be larger on disk per character, but 1 GiB is a safe byte-level guard
 // that prevents OOM without being unnecessarily restrictive.
-const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024 // 1 GiB (stat bytes)
+const MAX_EDIT_FILE_SIZE = 512 * 1024 * 1024 // 512 MiB — conservative limit for multi-byte UTF-8
 
 export const FileEditTool = buildTool({
   name: FILE_EDIT_TOOL_NAME,

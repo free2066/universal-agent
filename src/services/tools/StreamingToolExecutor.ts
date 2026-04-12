@@ -477,6 +477,7 @@ export class StreamingToolExecutor {
 
         // Also wait for progress to become available
         const progressPromise = new Promise<void>(resolve => {
+          this.progressAvailableResolve?.()
           this.progressAvailableResolve = resolve
         })
 

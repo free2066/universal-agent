@@ -161,8 +161,9 @@ export class GeminiClient implements LLMClient {
    * 4. additionalProperties → strip (not supported by Gemini)
    * 5. $schema → strip
    */
-  private sanitizeGeminiSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  private sanitizeGeminiSchema(schema: Record<string, unknown>, depth = 0): Record<string, unknown> {
     if (!schema || typeof schema !== 'object') return schema;
+    if (depth > 20) return {};
 
     const result: Record<string, unknown> = {};
 
@@ -186,7 +187,7 @@ export class GeminiClient implements LLMClient {
         // Recursively sanitize each property definition
         const props: Record<string, unknown> = {};
         for (const [propKey, propVal] of Object.entries(value as Record<string, unknown>)) {
-          props[propKey] = this.sanitizeGeminiSchema(propVal as Record<string, unknown>);
+          props[propKey] = this.sanitizeGeminiSchema(propVal as Record<string, unknown>, depth + 1);
         }
         result[key] = props;
         continue;
@@ -195,7 +196,7 @@ export class GeminiClient implements LLMClient {
       if (key === 'items' && typeof value === 'object' && value !== null) {
         const items = value as Record<string, unknown>;
         // Ensure items has a type field (Gemini requires it)
-        const sanitized = this.sanitizeGeminiSchema(items);
+        const sanitized = this.sanitizeGeminiSchema(items, depth + 1);
         if (!sanitized.type) sanitized.type = 'string';
         result[key] = sanitized;
         continue;
@@ -207,17 +208,17 @@ export class GeminiClient implements LLMClient {
         const nonNull = variants.filter((v: any) => v?.type !== 'null');
         if (nonNull.length === 1) {
           // Merge the single variant into the parent
-          const merged = this.sanitizeGeminiSchema(nonNull[0] as Record<string, unknown>);
+          const merged = this.sanitizeGeminiSchema(nonNull[0] as Record<string, unknown>, depth + 1);
           Object.assign(result, merged);
           continue;
         }
         // Multiple variants — keep as-is and let Gemini error if unsupported
-        result[key] = variants.map((v) => this.sanitizeGeminiSchema(v as Record<string, unknown>));
+        result[key] = variants.map((v) => this.sanitizeGeminiSchema(v as Record<string, unknown>, depth + 1));
         continue;
       }
 
       if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        result[key] = this.sanitizeGeminiSchema(value as Record<string, unknown>);
+        result[key] = this.sanitizeGeminiSchema(value as Record<string, unknown>, depth + 1);
       } else {
         result[key] = value;
       }

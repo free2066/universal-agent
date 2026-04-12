@@ -116,8 +116,9 @@ export const WebFetchTool = buildTool({
           decisionReason: { type: 'other', reason: 'Preapproved host' },
         }
       }
-    } catch {
-      // If URL parsing fails, continue with normal permission checks
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e
+      // URL parsing failed — continue with normal permission checks
     }
 
     // Check for a rule specific to the tool input (matching hostname)

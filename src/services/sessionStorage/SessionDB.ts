@@ -127,15 +127,16 @@ export class SessionDB {
       ...msg,
       createdAt: msg.createdAt ?? new Date().toISOString(),
     })
-    fs.appendFileSync(path.join(dir, 'messages.jsonl'), line + '\n')
 
-    // Update message count in meta
+    // Update meta first so messageCount stays consistent even if append crashes
     const meta = this.loadSession(msg.sessionId)
     if (meta) {
       meta.messageCount = (meta.messageCount ?? 0) + 1
       meta.updatedAt = new Date().toISOString()
       this.saveSession(meta)
     }
+
+    fs.appendFileSync(path.join(dir, 'messages.jsonl'), line + '\n')
   }
 
   /**
