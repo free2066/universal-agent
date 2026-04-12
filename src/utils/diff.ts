@@ -29,9 +29,11 @@ export function adjustHunkLineNumbers(
 
 // For some reason, & confuses the diff library, so we replace it with a token,
 // then substitute it back in after the diff is computed.
-const AMPERSAND_TOKEN = '<<:AMPERSAND_TOKEN:>>'
+// Use Unicode private-use-area characters (U+F0001, U+F0002) as tokens so
+// they never collide with real file content (no valid source file uses PUA).
+const AMPERSAND_TOKEN = '\u{F0001}'
 
-const DOLLAR_TOKEN = '<<:DOLLAR_TOKEN:>>'
+const DOLLAR_TOKEN = '\u{F0002}'
 
 function escapeForDiff(s: string): string {
   return s.replaceAll('&', AMPERSAND_TOKEN).replaceAll('$', DOLLAR_TOKEN)
