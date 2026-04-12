@@ -193,11 +193,10 @@ function findPluginInSettings(plugin: string): {
     )?.enabledPlugins
     if (!enabledPlugins) continue
 
-    for (const key of Object.keys(enabledPlugins)) {
-      if (hasMarketplace ? key === plugin : key.startsWith(`${plugin}@`)) {
-        return { pluginId: key, scope }
-      }
-    }
+    const key = Object.keys(enabledPlugins).find(k =>
+      hasMarketplace ? k === plugin : k.startsWith(`${plugin}@`),
+    )
+    if (key) return { pluginId: key, scope }
   }
   return null
 }

@@ -143,17 +143,16 @@ function checkInvokeExpression(
 function checkDynamicCommandName(
   parsed: ParsedPowerShellCommand,
 ): PowerShellSecurityResult {
-  for (const cmd of getAllCommands(parsed)) {
-    if (cmd.elementType !== 'CommandAst') {
-      continue
-    }
+  const isDynamic = getAllCommands(parsed).some(cmd => {
+    if (cmd.elementType !== 'CommandAst') return false
     const nameElementType = cmd.elementTypes?.[0]
-    if (nameElementType !== undefined && nameElementType !== 'StringConstant') {
-      return {
-        behavior: 'ask',
-        message:
-          'Command name is a dynamic expression which cannot be statically validated',
-      }
+    return nameElementType !== undefined && nameElementType !== 'StringConstant'
+  })
+  if (isDynamic) {
+    return {
+      behavior: 'ask',
+      message:
+        'Command name is a dynamic expression which cannot be statically validated',
     }
   }
   return { behavior: 'passthrough' }
@@ -167,12 +166,10 @@ function checkEncodedCommand(
   parsed: ParsedPowerShellCommand,
 ): PowerShellSecurityResult {
   for (const cmd of getAllCommands(parsed)) {
-    if (isPowerShellExecutable(cmd.name)) {
-      if (psExeHasParamAbbreviation(cmd, '-encodedcommand', '-e')) {
-        return {
-          behavior: 'ask',
-          message: 'Command uses encoded parameters which obscure intent',
-        }
+    if (isPowerShellExecutable(cmd.name) && psExeHasParamAbbreviation(cmd, '-encodedcommand', '-e')) {
+      return {
+        behavior: 'ask',
+        message: 'Command uses encoded parameters which obscure intent',
       }
     }
   }
@@ -240,9 +237,7 @@ function checkDownloadCradles(
     if (cmds.length < 2) {
       continue
     }
-    const hasDownloader = cmds.some(cmd => isDownloader(cmd.name))
-    const hasIex = cmds.some(cmd => isIex(cmd.name))
-    if (hasDownloader && hasIex) {
+    if (cmds.some(cmd => isDownloader(cmd.name)) && cmds.some(cmd => isIex(cmd.name))) {
       return {
         behavior: 'ask',
         message: 'Command downloads and executes remote code',
@@ -584,12 +579,10 @@ function checkStartProcess(
         if (!/^[-\u2013\u2014\u2015/]v[a-z]*:/i.test(argClean)) continue
         const kids = cmd.children[i]
         if (!kids) continue
-        for (const child of kids) {
-          if (child.text.replace(/['"`\s]/g, '').toLowerCase() === 'runas') {
-            return {
-              behavior: 'ask',
-              message: 'Command requests elevated privileges',
-            }
+        if (kids.some(child => child.text.replace(/['\"`\s]/g, '').toLowerCase() === 'runas')) {
+          return {
+            behavior: 'ask',
+            message: 'Command requests elevated privileges',
           }
         }
       }
