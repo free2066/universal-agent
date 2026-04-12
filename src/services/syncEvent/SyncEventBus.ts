@@ -21,6 +21,7 @@ import path from 'path'
 import os from 'os'
 import crypto from 'crypto'
 import { logForDebugging } from '../../utils/debug.js'
+import { errorMessage } from '../../utils/errors.js'
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Types
@@ -119,7 +120,7 @@ export class SyncEventBus {
           h(event as SyncEvent<unknown>)
         } catch (error) {
           logForDebugging(
-            `[SyncEventBus] subscriber failed for ${event.type} (${event.aggregateId}): ${error instanceof Error ? error.message : String(error)}`,
+            `[SyncEventBus] subscriber failed for ${event.type} (${event.aggregateId}): ${errorMessage(error)}`,
             { level: 'warn' },
           )
         }
@@ -193,7 +194,7 @@ export class SyncEventBus {
       return events
     } catch (error) {
       logForDebugging(
-        `[SyncEventBus] failed to replay events from ${file}: ${error instanceof Error ? error.message : String(error)}`,
+        `[SyncEventBus] failed to replay events from ${file}: ${errorMessage(error)}`,
         { level: 'warn' },
       )
       return []
@@ -215,7 +216,7 @@ export class SyncEventBus {
       this.writeBuffer = []
     } catch (error) {
       logForDebugging(
-        `[SyncEventBus] failed to persist ${this.writeBuffer.length} event(s): ${error instanceof Error ? error.message : String(error)}`,
+        `[SyncEventBus] failed to persist ${this.writeBuffer.length} event(s): ${errorMessage(error)}`,
         { level: 'warn' },
       )
 

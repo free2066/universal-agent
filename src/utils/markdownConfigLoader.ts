@@ -11,7 +11,7 @@ import {
 import { getProjectRoot } from '../bootstrap/state.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
-import { isFsInaccessible } from './errors.js'
+import { errorMessage, isFsInaccessible } from './errors.js'
 import { normalizePathForComparison } from './file.js'
 import type { FrontmatterData } from './frontmatterParser.js'
 import { parseFrontmatter } from './frontmatterParser.js'
@@ -494,9 +494,7 @@ async function findMarkdownFilesNative(
         visitedDirs.add(dirKey)
       }
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
-      logForDebugging(`Failed to stat directory ${currentDir}: ${errorMessage}`)
+      logForDebugging(`Failed to stat directory ${currentDir}: ${errorMessage(error)}`)
       return
     }
 
@@ -521,10 +519,8 @@ async function findMarkdownFilesNative(
                 files.push(fullPath)
               }
             } catch (error) {
-              const errorMessage =
-                error instanceof Error ? error.message : String(error)
               logForDebugging(
-                `Failed to follow symlink ${fullPath}: ${errorMessage}`,
+                `Failed to follow symlink ${fullPath}: ${errorMessage(error)}`,
               )
             }
           } else if (entry.isDirectory()) {
@@ -534,16 +530,12 @@ async function findMarkdownFilesNative(
           }
         } catch (error) {
           // Skip files/directories we can't access
-          const errorMessage =
-            error instanceof Error ? error.message : String(error)
-          logForDebugging(`Failed to access ${fullPath}: ${errorMessage}`)
+          logForDebugging(`Failed to access ${fullPath}: ${errorMessage(error)}`)
         }
       }
     } catch (error) {
       // If readdir fails (e.g., permission denied), log and continue
-      const errorMessage =
-        error instanceof Error ? error.message : String(error)
-      logForDebugging(`Failed to read directory ${currentDir}: ${errorMessage}`)
+      logForDebugging(`Failed to read directory ${currentDir}: ${errorMessage(error)}`)
     }
   }
 
@@ -599,10 +591,8 @@ async function loadMarkdownFiles(dir: string): Promise<
           content,
         }
       } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error)
         logForDebugging(
-          `Failed to read/parse markdown file:  ${filePath}: ${errorMessage}`,
+          `Failed to read/parse markdown file:  ${filePath}: ${errorMessage(error)}`,
         )
         return null
       }

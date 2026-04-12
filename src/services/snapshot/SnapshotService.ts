@@ -25,6 +25,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { logForDebugging } from '../../utils/debug.js'
+import { errorMessage } from '../../utils/errors.js'
 
 const execAsync = promisify(exec)
 
@@ -199,7 +200,7 @@ export class SnapshotService {
             }
           } catch (error) {
             logForDebugging(
-              `[snapshot] revert failed for ${rel} at ${hash}: ${error instanceof Error ? error.message : String(error)}`,
+              `[snapshot] revert failed for ${rel} at ${hash}: ${errorMessage(error)}`,
               { level: 'warn' },
             )
           }
@@ -323,7 +324,7 @@ export class SnapshotService {
             )
           } catch (error) {
             logForDebugging(
-              `[snapshot] diffFull patch generation failed for ${file}: ${error instanceof Error ? error.message : String(error)}`,
+              `[snapshot] diffFull patch generation failed for ${file}: ${errorMessage(error)}`,
               { level: 'warn' },
             )
           }
@@ -363,14 +364,14 @@ export class SnapshotService {
           if (stat.size > MAX_FILE_SIZE) lines.push(entry.name)
         } catch (error) {
           logForDebugging(
-            `[snapshot] exclusion stat failed for ${entry.name}: ${error instanceof Error ? error.message : String(error)}`,
+            `[snapshot] exclusion stat failed for ${entry.name}: ${errorMessage(error)}`,
             { level: 'warn' },
           )
         }
       }
     } catch (error) {
       logForDebugging(
-        `[snapshot] exclusion scan failed: ${error instanceof Error ? error.message : String(error)}`,
+        `[snapshot] exclusion scan failed: ${errorMessage(error)}`,
         { level: 'warn' },
       )
     }
