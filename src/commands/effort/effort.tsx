@@ -89,7 +89,7 @@ function unsetEffortLevel(): EffortCommandResult {
   // env=auto/unset (null) matches what /effort auto asks for, so only warn
   // when env is pinning a specific level that will keep overriding.
   const envOverride = getEffortEnvOverride();
-  if (envOverride !== undefined && envOverride !== null) {
+  if (envOverride != null) {
     const envRaw = process.env.CLAUDE_CODE_EFFORT_LEVEL;
     return {
       message: `Cleared effort from settings, but CLAUDE_CODE_EFFORT_LEVEL=${envRaw} still controls this session`,

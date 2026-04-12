@@ -288,7 +288,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
       parts.push(`<task_id>${data.task.task_id}</task_id>`);
       parts.push(`<task_type>${data.task.task_type}</task_type>`);
       parts.push(`<status>${data.task.status}</status>`);
-      if (data.task.exitCode !== undefined && data.task.exitCode !== null) {
+      if (data.task.exitCode != null) {
         parts.push(`<exit_code>${data.task.exitCode}</exit_code>`);
       }
       if (data.task.output?.trim()) {

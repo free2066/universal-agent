@@ -403,10 +403,8 @@ export const getFileStatus = async (): Promise<GitFileStatus> => {
     .split('\n')
     .filter(line => line.length > 0)
     .forEach(line => {
-      const status = line.substring(0, 2)
       const filename = line.substring(2).trim()
-
-      if (status === '??') {
+      if (line.startsWith('??')) {
         untracked.push(filename)
       } else if (filename) {
         tracked.push(filename)

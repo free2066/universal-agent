@@ -24,7 +24,7 @@ function buildNestedTree(errors: ValidationError[]): TreeNode {
     let modifiedPath = error.path;
 
     // If we have an invalid value, try to make the path more readable
-    if (error.invalidValue !== null && error.invalidValue !== undefined && pathParts.length > 0) {
+    if (error.invalidValue != null && pathParts.length > 0) {
       const newPathParts: string[] = [];
       for (let i = 0; i < pathParts.length; i++) {
         const part = pathParts[i];

@@ -113,8 +113,8 @@ export function executeLineOp(
   const lineStart = ctx.cursor.startOfLogicalLine().offset
   let lineEnd = lineStart
   for (let i = 0; i < linesToAffect; i++) {
-    const nextNewline = text.indexOf('\n', lineEnd)
-    lineEnd = nextNewline === -1 ? text.length : nextNewline + 1
+    const idx = text.indexOf('\n', lineEnd)
+    lineEnd = idx === -1 ? text.length : idx + 1
   }
 
   let content = text.slice(lineStart, lineEnd)
@@ -309,10 +309,7 @@ export function executePaste(
 
     const insertLine = after ? currentLine + 1 : currentLine
     const contentLines = content.split('\n')
-    const repeatedLines: string[] = []
-    for (let i = 0; i < count; i++) {
-      repeatedLines.push(...contentLines)
-    }
+    const repeatedLines = Array.from({ length: count }, () => contentLines).flat()
 
     const newLines = [
       ...lines.slice(0, insertLine),
