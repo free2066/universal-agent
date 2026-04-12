@@ -276,10 +276,8 @@ export function modelSupportsToolReference(model: string): boolean {
   const unsupportedPatterns = getUnsupportedToolReferencePatterns()
 
   // Check if model matches any unsupported pattern (e.g. 'haiku')
-  for (const pattern of unsupportedPatterns) {
-    if (normalizedModel.includes(pattern.toLowerCase())) {
-      return false
-    }
+  if (unsupportedPatterns.some((p) => normalizedModel.includes(p.toLowerCase()))) {
+    return false
   }
 
   // Known Claude model not in the unsupported list → supports tool_reference

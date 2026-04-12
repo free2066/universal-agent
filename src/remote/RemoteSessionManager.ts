@@ -7,6 +7,7 @@ import type {
   SDKControlResponse,
 } from '../entrypoints/sdk/controlTypes.js'
 import { logForDebugging } from '../utils/debug.js'
+import { toError } from '../utils/errors.js'
 import { logError } from '../utils/log.js'
 import {
   type RemoteMessageContent,
@@ -140,7 +141,7 @@ export class RemoteSessionManager {
 
     void this.websocket.connect().catch(err => {
       logError(err)
-      this.callbacks.onError?.(err instanceof Error ? err : new Error(String(err)))
+      this.callbacks.onError?.(toError(err))
     })
   }
 

@@ -15,6 +15,7 @@
 
 import { EventEmitter } from 'events'
 import path from 'path'
+import { errorMessage } from '../../utils/errors.js'
 
 // Lazily require chokidar to avoid import overhead when watcher is disabled
 let chokidar: typeof import('chokidar') | null = null
@@ -98,7 +99,7 @@ export class FileWatcherService extends EventEmitter {
 
       this.watcher.on('error', (err: unknown) => {
         // Log watcher errors (e.g. ENOSPC when inotify limit is reached) so they are diagnosable
-        process.stderr.write(`[FileWatcherService] watcher error: ${String(err)}\n`)
+        process.stderr.write(`[FileWatcherService] watcher error: ${errorMessage(err)}\n`)
       })
 
       this._running = true
@@ -114,7 +115,7 @@ export class FileWatcherService extends EventEmitter {
   async stop(): Promise<void> {
     if (this.watcher) {
       await this.watcher.close().catch((err: unknown) => {
-        process.stderr.write(`[FileWatcherService] watcher.close() failed: ${String(err)}\n`)
+        process.stderr.write(`[FileWatcherService] watcher.close() failed: ${errorMessage(err)}\n`)
       })
       this.watcher = null
     }

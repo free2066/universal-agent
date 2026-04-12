@@ -788,7 +788,7 @@ export const getSkillDirCommands = memoize(
       const { skill } = entry
 
       const fileId = fileIds[i]
-      if (fileId === null || fileId === undefined) {
+      if (fileId == null) {
         deduplicatedSkills.push(skill)
         continue
       }

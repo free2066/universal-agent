@@ -85,12 +85,10 @@ const MODEL_QUALITY_HINTS: Array<{ pattern: RegExp; score: number; supportsTools
 ];
 
 function scoreModel(model: OpenRouterModel): { score: number; supportsTools: boolean } {
-  // Find matching quality hint
-  for (const hint of MODEL_QUALITY_HINTS) {
-    if (hint.pattern.test(model.id) || hint.pattern.test(model.name)) {
-      return { score: hint.score, supportsTools: hint.supportsTools };
-    }
-  }
+  const hint = MODEL_QUALITY_HINTS.find(
+    (h) => h.pattern.test(model.id) || h.pattern.test(model.name),
+  );
+  if (hint) return { score: hint.score, supportsTools: hint.supportsTools };
   // Unknown model: base score from context length (larger context = likely better model)
   const ctxScore = Math.min(30, Math.log2(model.context_length / 1000) * 5);
   return { score: Math.round(ctxScore), supportsTools: false };

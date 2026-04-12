@@ -93,7 +93,7 @@ export async function checkOverageGate(): Promise<OverageGate> {
   const monthlyLimit = extraUsage.monthly_limit
   const usedCredits = extraUsage.used_credits ?? 0
   const available =
-    monthlyLimit === null || monthlyLimit === undefined
+    monthlyLimit == null
       ? Infinity
       : monthlyLimit - usedCredits
 

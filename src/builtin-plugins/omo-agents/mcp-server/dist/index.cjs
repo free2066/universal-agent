@@ -20936,7 +20936,7 @@ function normalizePrependEdit(raw, index) {
   };
 }
 function normalizeLines(lines, index) {
-  if (lines === null || lines === void 0)
+  if (lines == null)
     return null;
   if (typeof lines === "string")
     return [lines];
@@ -21211,7 +21211,7 @@ function applyHashlineEditsWithReport(content, edits) {
   };
 }
 function normalizeToArray(lines) {
-  if (lines === null || lines === void 0)
+  if (lines == null)
     return [];
   if (typeof lines === "string")
     return [lines];

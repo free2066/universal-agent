@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { resolve } from 'path'
+import { errorMessage } from './errors.js'
 
 /** Task categories that the router can classify a user request into. */
 export type TaskCategory =
@@ -90,7 +91,7 @@ export function loadTaskRouterConfig(): TaskRouterConfig | null {
   } catch (err) {
     // Malformed config — disable routing gracefully, but warn so users know
     // their budget caps (dailyCostLimitUSD etc.) are NOT active.
-    process.stderr.write(`[task-router] WARNING: Failed to parse config at ${configPath}: ${String(err)}\n`)
+    process.stderr.write(`[task-router] WARNING: Failed to parse config at ${configPath}: ${errorMessage(err)}\n`)
     _cachedConfig = null
     return null
   }

@@ -75,7 +75,7 @@ function normalizeLines(
   lines: string | string[] | null | undefined,
   index: number,
 ): string[] | null {
-  if (lines === null || lines === undefined) return null
+  if (lines == null) return null
   if (typeof lines === 'string') return [lines]
   if (Array.isArray(lines)) return lines
   throw new Error(`Edit at index ${index}: "lines" must be a string, array of strings, or null`)

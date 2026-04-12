@@ -277,7 +277,7 @@ export function applyHashlineEditsWithReport(
 // --------------- Utilities ---------------
 
 function normalizeToArray(lines: string | string[] | null): string[] {
-  if (lines === null || lines === undefined) return []
+  if (lines == null) return []
   if (typeof lines === 'string') return [lines]
   return lines
 }

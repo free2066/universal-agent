@@ -194,7 +194,7 @@ class ShellCommandImpl implements ShellCommand {
 
   #exitHandler(code: number | null, signal: NodeJS.Signals | null): void {
     const exitCode =
-      code !== null && code !== undefined
+      code != null
         ? code
         : signal === 'SIGTERM'
           ? 144
