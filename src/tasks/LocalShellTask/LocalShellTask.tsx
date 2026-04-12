@@ -391,21 +391,19 @@ export function backgroundAll(getAppState: () => AppState, setAppState: SetAppSt
   const state = getAppState();
 
   // Background all foreground bash tasks
-  const foregroundBashTaskIds = Object.keys(state.tasks).filter(id => {
-    const task = state.tasks[id];
-    return isLocalShellTask(task) && !task.isBackgrounded && task.shellCommand;
-  });
-  for (const taskId of foregroundBashTaskIds) {
-    backgroundTask(taskId, getAppState, setAppState);
+  for (const taskId of Object.keys(state.tasks)) {
+    const task = state.tasks[taskId];
+    if (isLocalShellTask(task) && !task.isBackgrounded && task.shellCommand) {
+      backgroundTask(taskId, getAppState, setAppState);
+    }
   }
 
   // Background all foreground agent tasks
-  const foregroundAgentTaskIds = Object.keys(state.tasks).filter(id => {
-    const task = state.tasks[id];
-    return isLocalAgentTask(task) && !task.isBackgrounded;
-  });
-  for (const taskId of foregroundAgentTaskIds) {
-    backgroundAgentTask(taskId, getAppState, setAppState);
+  for (const taskId of Object.keys(state.tasks)) {
+    const task = state.tasks[taskId];
+    if (isLocalAgentTask(task) && !task.isBackgrounded) {
+      backgroundAgentTask(taskId, getAppState, setAppState);
+    }
   }
 }
 

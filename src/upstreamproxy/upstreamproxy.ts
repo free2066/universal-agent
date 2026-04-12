@@ -25,7 +25,7 @@ import { join } from 'path'
 import { registerCleanup } from '../utils/cleanupRegistry.js'
 import { logForDebugging } from '../utils/debug.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
-import { isENOENT } from '../utils/errors.js'
+import { errorMessage, isENOENT } from '../utils/errors.js'
 import { startUpstreamProxyRelay } from './relay.js'
 
 const PEM_CERT_PATTERN = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g
@@ -146,7 +146,7 @@ export async function initUpstreamProxy(opts?: {
     })
   } catch (err) {
     logForDebugging(
-      `[upstreamproxy] relay start failed: ${err instanceof Error ? err.message : String(err)}; proxy disabled`,
+      `[upstreamproxy] relay start failed: ${errorMessage(err)}; proxy disabled`,
       { level: 'warn' },
     )
   }
@@ -212,7 +212,7 @@ async function readToken(path: string): Promise<string | null> {
   } catch (err) {
     if (isENOENT(err)) return null
     logForDebugging(
-      `[upstreamproxy] token read failed: ${err instanceof Error ? err.message : String(err)}`,
+      `[upstreamproxy] token read failed: ${errorMessage(err)}`,
       { level: 'warn' },
     )
     return null
@@ -247,7 +247,7 @@ function setNonDumpable(): void {
     }
   } catch (err) {
     logForDebugging(
-      `[upstreamproxy] prctl unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      `[upstreamproxy] prctl unavailable: ${errorMessage(err)}`,
       { level: 'warn' },
     )
   }
@@ -294,7 +294,7 @@ async function downloadCaBundle(
     return true
   } catch (err) {
     logForDebugging(
-      `[upstreamproxy] ca-cert download failed: ${err instanceof Error ? err.message : String(err)}; proxy disabled`,
+      `[upstreamproxy] ca-cert download failed: ${errorMessage(err)}; proxy disabled`,
       { level: 'warn' },
     )
     return false

@@ -55,15 +55,11 @@ export async function checkEnabledPlugins(): Promise<string[]> {
         continue
       }
       const idx = enabledPlugins.indexOf(pluginId)
-      if (value) {
-        if (idx === -1) {
-          enabledPlugins.push(pluginId)
-        }
-      } else {
+      if (value && idx === -1) {
+        enabledPlugins.push(pluginId)
+      } else if (!value && idx !== -1) {
         // Explicitly disabled — remove even if --add-dir enabled it
-        if (idx !== -1) {
-          enabledPlugins.splice(idx, 1)
-        }
+        enabledPlugins.splice(idx, 1)
       }
     }
   }
@@ -228,7 +224,7 @@ export async function findMissingPlugins(
       notInstalled.map(async pluginId => {
         try {
           const plugin = await getPluginById(pluginId)
-          return { pluginId, found: plugin !== null && plugin !== undefined }
+          return { pluginId, found: plugin != null }
         } catch (error) {
           logForDebugging(
             `Failed to check plugin ${pluginId} in marketplace: ${error}`,
