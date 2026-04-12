@@ -57,12 +57,10 @@ export function extractConnectionErrorDetails(
       'code' in current &&
       typeof current.code === 'string'
     ) {
-      const code = current.code
-      const isSSLError = SSL_ERROR_CODES.has(code)
       return {
-        code,
+        code: current.code,
         message: current.message,
-        isSSLError,
+        isSSLError: SSL_ERROR_CODES.has(current.code),
       }
     }
 

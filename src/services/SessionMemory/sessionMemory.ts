@@ -110,27 +110,18 @@ function countToolCallsSince(
   messages: Message[],
   sinceUuid: string | undefined,
 ): number {
-  let toolCallCount = 0
-  let foundStart = sinceUuid === null || sinceUuid === undefined
+  const startIndex =
+    sinceUuid == null
+      ? 0
+      : messages.findIndex(m => m.uuid === sinceUuid) + 1
 
-  for (const message of messages) {
-    if (!foundStart) {
-      if (message.uuid === sinceUuid) {
-        foundStart = true
-      }
-      continue
-    }
-
-    if (message.type === 'assistant') {
-      const content = message.message.content
-      if (Array.isArray(content)) {
-        toolCallCount += count(content, block => block.type === 'tool_use')
-      }
-    }
-  }
-
-  return toolCallCount
+  return messages.slice(startIndex).reduce((total, message) => {
+    if (message.type !== 'assistant') return total
+    const content = message.message.content
+    return total + (Array.isArray(content) ? count(content, block => block.type === 'tool_use') : 0)
+  }, 0)
 }
+
 
 export function shouldExtractMemory(messages: Message[]): boolean {
   // Check if we've met the initialization threshold

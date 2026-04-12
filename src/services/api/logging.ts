@@ -116,21 +116,19 @@ function detectGateway({
     // Header names are already lowercase from the Headers API
     const headerNames: string[] = []
     headers.forEach((_, key) => headerNames.push(key))
-    for (const [gw, { prefixes }] of Object.entries(GATEWAY_FINGERPRINTS)) {
-      if (prefixes.some(p => headerNames.some(h => h.startsWith(p)))) {
-        return gw as KnownGateway
-      }
-    }
+    const gwEntry = Object.entries(GATEWAY_FINGERPRINTS).find(([, { prefixes }]) =>
+      prefixes.some(p => headerNames.some(h => h.startsWith(p))),
+    )
+    if (gwEntry) return gwEntry[0] as KnownGateway
   }
 
   if (baseUrl) {
     try {
       const host = new URL(baseUrl).hostname.toLowerCase()
-      for (const [gw, suffixes] of Object.entries(GATEWAY_HOST_SUFFIXES)) {
-        if (suffixes.some(s => host.endsWith(s))) {
-          return gw as KnownGateway
-        }
-      }
+      const gwEntry = Object.entries(GATEWAY_HOST_SUFFIXES).find(([, suffixes]) =>
+        suffixes.some(s => host.endsWith(s)),
+      )
+      if (gwEntry) return gwEntry[0] as KnownGateway
     } catch {
       // malformed URL — ignore
     }
