@@ -122,7 +122,7 @@ export function renderToolResultMessage(output: string | MCPToolResult, _progres
           </Box>;
       }
       // For text blocks and any other block types, extract text if available
-      const textContent = item.type === 'text' && 'text' in item && item.text !== null && item.text !== undefined ? String(item.text) : '';
+      const textContent = item.type === 'text' && 'text' in item && item.text != null ? String(item.text) : '';
       return feature('MCP_RICH_OUTPUT') ? <MCPTextOutput key={i} content={textContent} verbose={verbose} /> : <OutputLine key={i} content={textContent} verbose={verbose} />;
     });
 

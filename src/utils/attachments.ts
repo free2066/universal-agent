@@ -1000,7 +1000,7 @@ export async function getAttachments(
     ...userAttachmentResults.flat(),
     ...threadAttachmentResults.flat(),
     ...mainThreadAttachmentResults.flat(),
-  ].filter(a => a !== undefined && a !== null)
+  ].filter(a => a != null)
 }
 
 async function maybe<A>(label: string, f: () => Promise<A[]>): Promise<A[]> {
@@ -1012,7 +1012,7 @@ async function maybe<A>(label: string, f: () => Promise<A[]>): Promise<A[]> {
     if (Math.random() < 0.05) {
       // jsonStringify(undefined) returns undefined, so .length would throw
       const attachmentSizeBytes = result
-        .filter(a => a !== undefined && a !== null)
+        .filter(a => a != null)
         .reduce((total, attachment) => {
           return total + jsonStringify(attachment).length
         }, 0)

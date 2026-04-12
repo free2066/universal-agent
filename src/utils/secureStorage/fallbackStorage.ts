@@ -13,14 +13,14 @@ export function createFallbackStorage(
     name: `${primary.name}-with-${secondary.name}-fallback`,
     read(): SecureStorageData {
       const result = primary.read()
-      if (result !== null && result !== undefined) {
+      if (result != null) {
         return result
       }
       return secondary.read() || {}
     },
     async readAsync(): Promise<SecureStorageData | null> {
       const result = await primary.readAsync()
-      if (result !== null && result !== undefined) {
+      if (result != null) {
         return result
       }
       return (await secondary.readAsync()) || {}

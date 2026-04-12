@@ -217,7 +217,7 @@ export async function trackDatadogEvent(
     }
 
     // Transform status to http_status and http_status_range to avoid Datadog reserved field
-    if (allData.status !== undefined && allData.status !== null) {
+    if (allData.status != null) {
       const statusCode = String(allData.status)
       allData.http_status = statusCode
 
@@ -256,7 +256,7 @@ export async function trackDatadogEvent(
 
     // Add all fields as searchable attributes (not duplicated in tags)
     for (const [key, value] of Object.entries(allData)) {
-      if (value !== undefined && value !== null) {
+      if (value != null) {
         log[camelToSnakeCase(key)] = value
       }
     }
