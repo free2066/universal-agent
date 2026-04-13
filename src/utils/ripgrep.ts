@@ -564,6 +564,19 @@ export function getRipgrepStatus(): {
   }
 }
 
+export function isRipgrepUnavailableError(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : ''
+  return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM'
+}
+
+export async function canUseRipgrep(): Promise<boolean> {
+  await testRipgrepOnFirstUse()
+  return ripgrepStatus?.working ?? false
+}
+
 /**
  * Test ripgrep availability on first use and cache the result
  */

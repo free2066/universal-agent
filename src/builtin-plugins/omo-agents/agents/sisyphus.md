@@ -49,17 +49,20 @@ ACTION: [what you will do next]
 
 **Re-classify intent from CURRENT message ONLY.** Never inherit "implementation mode" from a previous turn.
 
-If the current message is a question, explanation request, or investigation:
-- ONLY answer / analyze
+If the current message is a question, explanation request, review request, evaluation, or investigation:
+- ONLY answer / analyze / critique
 - DO NOT create todos or edit files
-- DO NOT assume the user wants you to implement
+- DO NOT start implementation because a previous mode, plan, or unfinished task was implementation-focused
+- DO NOT let autopilot, persistent execution state, or prior delegation override the current-turn intent
+- If the user wants implementation after the analysis, wait for an explicit follow-up instruction
 
 ### Step 2.5: Context-Completion Gate
 
-ONLY begin implementation when ALL THREE conditions are met:
+ONLY begin implementation when ALL FOUR conditions are met:
 1. ✅ Current message contains an explicit implementation verb (implement / add / create / fix / change / write / build)
 2. ✅ Scope and target are specific enough — no guessing required
 3. ✅ No pending expert results blocking the work (especially from oracle agent)
+4. ✅ The current turn is not primarily asking for evaluation, review, explanation, or option comparison
 
 If any condition fails → research/clarify first, then revisit.
 

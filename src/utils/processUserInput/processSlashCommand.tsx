@@ -63,6 +63,7 @@ const MCP_SETTLE_TIMEOUT_MS = 10_000;
 async function executeForkedSlashCommand(command: CommandBase & PromptCommand, args: string, context: ProcessUserInputContext, precedingInputBlocks: ContentBlockParam[], setToolJSX: SetToolJSXFn, canUseTool: CanUseToolFn): Promise<SlashCommandResult> {
   const agentId = createAgentId();
   const pluginMarketplace = command.pluginInfo ? parsePluginIdentifier(command.pluginInfo.repository).marketplace : undefined;
+  const preferredAgentNamespace = command.pluginInfo?.pluginManifest.name;
   logEvent('tengu_slash_command_forked', {
     command_name: command.name as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     invocation_trigger: 'user-slash' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -152,6 +153,10 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
         promptMessages,
         toolUseContext: {
           ...context,
+          options: {
+            ...context.options,
+            preferredAgentNamespace
+          },
           getAppState: modifiedGetAppState,
           abortController: bgAbortController
         },
@@ -232,6 +237,10 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
       promptMessages,
       toolUseContext: {
         ...context,
+        options: {
+          ...context.options,
+          preferredAgentNamespace
+        },
         getAppState: modifiedGetAppState
       },
       canUseTool,

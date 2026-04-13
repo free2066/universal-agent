@@ -679,6 +679,7 @@ export async function* runAgent({
         ? true
         : (toolUseContext.options.isNonInteractiveSession ?? false),
     appendSystemPrompt: toolUseContext.options.appendSystemPrompt,
+    preferredAgentNamespace: toolUseContext.options.preferredAgentNamespace,
     tools: allTools,
     commands: [],
     debug: toolUseContext.options.debug,

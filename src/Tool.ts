@@ -177,6 +177,8 @@ export type ToolUseContext = {
     querySource?: QuerySource
     /** Optional callback to get the latest tools (e.g., after MCP servers connect mid-query) */
     refreshTools?: () => Tools
+    /** Preferred plugin namespace for resolving ambiguous short agent names. */
+    preferredAgentNamespace?: string
   }
   abortController: AbortController
   readFileState: FileStateCache

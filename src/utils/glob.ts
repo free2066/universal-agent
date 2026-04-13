@@ -1,13 +1,22 @@
-import { basename, dirname, isAbsolute, join, sep } from 'path'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
+import { readFile, readdir, stat } from 'fs/promises'
+import ignore from 'ignore'
+import { minimatch } from 'minimatch'
 import type { ToolPermissionContext } from '../Tool.js'
+import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
+import { isFsInaccessible } from './errors.js'
 import {
   getFileReadIgnorePatterns,
   normalizePatternsToPath,
 } from './permissions/filesystem.js'
 import { getPlatform } from './platform.js'
 import { getGlobExclusionsForPluginCache } from './plugins/orphanedPluginFilter.js'
-import { ripGrep } from './ripgrep.js'
+import {
+  canUseRipgrep,
+  isRipgrepUnavailableError,
+  ripGrep,
+} from './ripgrep.js'
 
 /**
  * Extracts the static base directory from a glob pattern.
@@ -97,6 +106,7 @@ export async function glob(
   // Note: use || instead of ?? to treat empty string as unset (defaulting to true)
   const noIgnore = isEnvTruthy(process.env.CLAUDE_CODE_GLOB_NO_IGNORE || 'true')
   const hidden = isEnvTruthy(process.env.CLAUDE_CODE_GLOB_HIDDEN || 'true')
+  const pluginExclusions = await getGlobExclusionsForPluginCache(searchDir)
   const args = [
     '--files',
     '--glob',
@@ -106,19 +116,32 @@ export async function glob(
     ...(hidden ? ['--hidden'] : []),
   ]
 
-  // Add ignore patterns
   for (const pattern of ignorePatterns) {
     args.push('--glob', `!${pattern}`)
   }
-
-  // Exclude orphaned plugin version directories
-  for (const exclusion of await getGlobExclusionsForPluginCache(searchDir)) {
+  for (const exclusion of pluginExclusions) {
     args.push('--glob', exclusion)
   }
 
-  const allPaths = await ripGrep(args, searchDir, abortSignal)
+  const nativeOptions = {
+    abortSignal,
+    hidden,
+    ignorePatterns,
+    noIgnore,
+    pluginExclusions,
+    searchDir,
+    searchPattern,
+  }
 
-  // ripgrep returns relative paths, convert to absolute
+  const allPaths = !(await canUseRipgrep())
+    ? await globNative(nativeOptions)
+    : await ripGrep(args, searchDir, abortSignal).catch(async error => {
+        if (!isRipgrepUnavailableError(error)) {
+          throw error
+        }
+        return globNative(nativeOptions)
+      })
+
   const absolutePaths = allPaths.map(p =>
     isAbsolute(p) ? p : join(searchDir, p),
   )
@@ -127,4 +150,202 @@ export async function glob(
   const files = absolutePaths.slice(offset, offset + limit)
 
   return { files, truncated }
+}
+
+type GlobNativeOptions = {
+  abortSignal: AbortSignal
+  hidden: boolean
+  ignorePatterns: string[]
+  noIgnore: boolean
+  pluginExclusions: string[]
+  searchDir: string
+  searchPattern: string
+}
+
+type IgnoreMatcher = {
+  basePath: string
+  matcher: ReturnType<typeof ignore>
+}
+
+type NativeMatch = {
+  mtimeMs: number
+  path: string
+}
+
+async function globNative({
+  abortSignal,
+  hidden,
+  ignorePatterns,
+  noIgnore,
+  pluginExclusions,
+  searchDir,
+  searchPattern,
+}: GlobNativeOptions): Promise<string[]> {
+  const directIgnore = ignore()
+  const matchBase = !/[\\/]/.test(searchPattern)
+  const directPatterns = [
+    ...ignorePatterns,
+    ...pluginExclusions.map(pattern => pattern.slice(1)),
+  ]
+  if (directPatterns.length > 0) {
+    directIgnore.add(directPatterns)
+  }
+
+  const matches: NativeMatch[] = []
+
+  async function walk(
+    currentDir: string,
+    inheritedIgnoreMatchers: IgnoreMatcher[],
+  ): Promise<void> {
+    if (abortSignal.aborted) {
+      return
+    }
+
+    let entries
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true, encoding: 'utf8' })
+    } catch (error) {
+      if (isFsInaccessible(error)) {
+        return
+      }
+      throw error
+    }
+
+    const localIgnoreMatchers = noIgnore
+      ? inheritedIgnoreMatchers
+      : [
+          ...inheritedIgnoreMatchers,
+          ...(await loadDirectoryIgnoreMatchers(currentDir, searchDir)),
+        ]
+
+    for (const entry of entries) {
+      if (abortSignal.aborted) {
+        return
+      }
+
+      if (!hidden && entry.name.startsWith('.')) {
+        continue
+      }
+
+      const absolutePath = join(currentDir, entry.name)
+      const relativePath = relative(searchDir, absolutePath).replace(/\\/g, '/')
+      if (!relativePath || relativePath.startsWith('..')) {
+        continue
+      }
+
+      const stats = await getEntryStats(absolutePath)
+      if (!stats) {
+        continue
+      }
+
+      const isDirectory = stats.isDirectory()
+      const isFile = stats.isFile()
+      if (!isDirectory && !isFile) {
+        continue
+      }
+
+      const candidatePath = isDirectory ? `${relativePath}/` : relativePath
+      if (
+        directIgnore.ignores(candidatePath) ||
+        isIgnoredByMatchers(relativePath, isDirectory, localIgnoreMatchers)
+      ) {
+        continue
+      }
+
+      if (isDirectory) {
+        await walk(absolutePath, localIgnoreMatchers)
+        continue
+      }
+
+      if (
+        minimatch(relativePath, searchPattern, {
+          dot: hidden,
+          matchBase,
+          nocase: false,
+          windowsPathsNoEscape: true,
+        })
+      ) {
+        matches.push({ mtimeMs: stats.mtimeMs, path: relativePath })
+      }
+    }
+  }
+
+  try {
+    const stats = await stat(searchDir)
+    if (!stats.isDirectory()) {
+      return []
+    }
+  } catch (error) {
+    if (isFsInaccessible(error)) {
+      return []
+    }
+    throw error
+  }
+
+  logForDebugging(`[glob] ripgrep unavailable, falling back to native scan: ${searchDir}`)
+  await walk(searchDir, [])
+  return matches
+    .sort((a, b) => a.mtimeMs - b.mtimeMs || a.path.localeCompare(b.path))
+    .map(match => match.path)
+}
+
+async function loadDirectoryIgnoreMatchers(
+  currentDir: string,
+  searchDir: string,
+): Promise<IgnoreMatcher[]> {
+  const patterns = await Promise.all(
+    ['.gitignore', '.ignore', '.rgignore'].map(async name => {
+      try {
+        return await readFile(join(currentDir, name), 'utf8')
+      } catch (error) {
+        if (isFsInaccessible(error)) {
+          return ''
+        }
+        throw error
+      }
+    }),
+  )
+
+  const matcher = ignore()
+  const combined = patterns.filter(Boolean).join('\n').trim()
+  if (!combined) {
+    return []
+  }
+
+  matcher.add(combined)
+  return [
+    {
+      basePath: relative(searchDir, currentDir).replace(/\\/g, '/'),
+      matcher,
+    },
+  ]
+}
+
+function isIgnoredByMatchers(
+  relativePath: string,
+  isDirectory: boolean,
+  matchers: IgnoreMatcher[],
+): boolean {
+  const candidatePath = isDirectory ? `${relativePath}/` : relativePath
+
+  return matchers.some(({ basePath, matcher }) => {
+    const prefix = basePath ? `${basePath}/` : ''
+    if (prefix && !candidatePath.startsWith(prefix)) {
+      return false
+    }
+
+    const scopedPath = prefix ? candidatePath.slice(prefix.length) : candidatePath
+    return matcher.ignores(scopedPath)
+  })
+}
+
+async function getEntryStats(absolutePath: string) {
+  try {
+    return await stat(absolutePath)
+  } catch (error) {
+    if (isFsInaccessible(error)) {
+      return null
+    }
+    throw error
+  }
 }
