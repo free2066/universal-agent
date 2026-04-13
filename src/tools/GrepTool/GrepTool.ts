@@ -18,7 +18,7 @@ import {
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { getGlobExclusionsForPluginCache } from '../../utils/plugins/orphanedPluginFilter.js'
-import { ripGrep } from '../../utils/ripgrep.js'
+import { isRipgrepUnavailableError, ripGrep } from '../../utils/ripgrep.js'
 import { semanticBoolean } from '../../utils/semanticBoolean.js'
 import { semanticNumber } from '../../utils/semanticNumber.js'
 import { plural } from '../../utils/stringUtils.js'
@@ -438,7 +438,20 @@ export const GrepTool = buildTool({
     // We don't use AbortController for timeout to avoid interrupting the agent loop
     // If ripgrep times out, it throws RipgrepTimeoutError which propagates up
     // so Claude knows the search didn't complete (rather than thinking there were no matches)
-    const results = await ripGrep(args, absolutePath, abortController.signal)
+    let results: string[]
+    try {
+      results = await ripGrep(args, absolutePath, abortController.signal)
+    } catch (error) {
+      // When the ripgrep binary is missing/inaccessible (ENOENT/EACCES/EPERM),
+      // surface a clear actionable message so the model can immediately fall back
+      // to `bash grep` rather than retrying or silently returning no results.
+      if (isRipgrepUnavailableError(error)) {
+        throw new Error(
+          'ripgrep binary not available (ENOENT). Use the Bash tool with `grep -r` instead.',
+        )
+      }
+      throw error
+    }
 
     if (output_mode === 'content') {
       // For content mode, results are the actual content lines
