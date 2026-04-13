@@ -175,6 +175,10 @@ import {
 } from './mcpInstructionsDelta.js'
 import { CLAUDE_IN_CHROME_MCP_SERVER_NAME } from './claudeInChrome/common.js'
 import { CHROME_TOOL_SEARCH_INSTRUCTIONS } from './claudeInChrome/prompt.js'
+import {
+  INTELLIJ_INDEX_MCP_SERVER_NAME,
+  INTELLIJ_INDEX_TOOL_INSTRUCTIONS,
+} from './intellijIndexPrompt.js'
 import type { MCPServerConnection } from '../services/mcp/types.js'
 import type {
   HookEvent,
@@ -1579,6 +1583,13 @@ export function getMcpInstructionsDeltaAttachment(
       block: CHROME_TOOL_SEARCH_INSTRUCTIONS,
     })
   }
+
+  // Always inject intellij-index guidance — it has non-obvious parameter names
+  // and requires the IDE to be open with the project indexed.
+  clientSide.push({
+    serverName: INTELLIJ_INDEX_MCP_SERVER_NAME,
+    block: INTELLIJ_INDEX_TOOL_INSTRUCTIONS,
+  })
 
   const delta = getMcpInstructionsDelta(mcpClients, messages ?? [], clientSide)
   if (!delta) return []
