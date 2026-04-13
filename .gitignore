@@ -12,3 +12,4 @@ src/builtin-plugins/**/node_modules/
 dist-bun/
 dist/entrypoints/
 .omc/
+src/entrypoints/vendor/
