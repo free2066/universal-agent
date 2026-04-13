@@ -554,7 +554,11 @@ function processHookJSONOutput({
     result.systemMessage = json.systemMessage
   }
 
-  if (result.permissionBehavior !== undefined && json.reason !== undefined) {
+  if (
+    result.permissionBehavior !== undefined &&
+    json.reason !== undefined &&
+    result.hookPermissionDecisionReason === undefined
+  ) {
     result.hookPermissionDecisionReason = json.reason
   }
 

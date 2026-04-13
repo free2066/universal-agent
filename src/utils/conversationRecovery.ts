@@ -147,6 +147,14 @@ export type DeserializeResult = {
   turnInterruptionState: TurnInterruptionState
 }
 
+export type ResumeSummary = {
+  restoredMessageCount: number
+  resumedFromInterruption: boolean
+  restoredFileHistory: boolean
+  restoredSkills: boolean
+  restoredContextSummary: boolean
+}
+
 /**
  * Deserializes messages from a log file into the format expected by the REPL.
  * Filters unresolved tool uses, orphaned thinking messages, and appends a
@@ -461,6 +469,7 @@ export async function loadConversationForResume(
 ): Promise<{
   messages: Message[]
   turnInterruptionState: TurnInterruptionState
+  resumeSummary: ResumeSummary
   fileHistorySnapshots?: FileHistorySnapshot[]
   attributionSnapshots?: AttributionSnapshotMessage[]
   contentReplacements?: ContentReplacementRecord[]
@@ -571,9 +580,24 @@ export async function loadConversationForResume(
     // Append hook messages to the conversation
     messages.push(...hookMessages)
 
+    const resumeSummary: ResumeSummary = {
+      restoredMessageCount: messages.length,
+      resumedFromInterruption: deserialized.turnInterruptionState.kind !== 'none',
+      restoredFileHistory: Boolean(log?.fileHistorySnapshots?.length),
+      restoredSkills: messages.some(
+        message =>
+          message.type === 'attachment' &&
+          message.attachment?.type === 'invoked_skills',
+      ),
+      restoredContextSummary: Boolean(
+        log?.contextCollapseSnapshot || log?.contextCollapseCommits?.length,
+      ),
+    }
+
     return {
       messages,
       turnInterruptionState: deserialized.turnInterruptionState,
+      resumeSummary,
       fileHistorySnapshots: log?.fileHistorySnapshots,
       attributionSnapshots: log?.attributionSnapshots,
       contentReplacements: log?.contentReplacements,

@@ -34,6 +34,664 @@ import { generateSessionTitle } from '../utils/sessionTitle.js'
 import type { RemoteMessageContent } from '../utils/teleport/api.js'
 import { updateSessionTitle } from '../utils/teleport/api.js'
 
+function describeTaskTerminalStatus(status: string): string {
+  switch (status) {
+    case 'failed':
+      return 'failed'
+    case 'stopped':
+      return 'stopped'
+    default:
+      return 'completed'
+  }
+}
+
+function buildTaskStartedMessage(sdkMessage: {
+  description: string
+  task_type?: string
+  workflow_name?: string
+}): string | null {
+  const description = sdkMessage.description?.trim()
+  if (!description) {
+    return null
+  }
+
+  const kind = sdkMessage.workflow_name?.trim() || sdkMessage.task_type?.trim()
+  return kind
+    ? `Started background ${kind}: ${description}`
+    : `Started background task: ${description}`
+}
+
+function buildTaskProgressMessage(sdkMessage: {
+  description: string
+  summary?: string
+  last_tool_name?: string
+  usage?: { duration_ms?: number }
+}): string | null {
+  const summary = sdkMessage.summary?.trim()
+  if (summary) {
+    return `Background task update: ${summary}`
+  }
+
+  const toolName = sdkMessage.last_tool_name?.trim()
+  if (!toolName) {
+    return null
+  }
+
+  const durationMs = sdkMessage.usage?.duration_ms
+  const durationSuffix =
+    typeof durationMs === 'number' && durationMs >= 0
+      ? ` (${Math.max(0, Math.round(durationMs / 1000))}s)`
+      : ''
+  const description = sdkMessage.description?.trim()
+  if (description) {
+    return `Background task is using ${toolName}${durationSuffix}: ${description}`
+  }
+  return `Background task is using ${toolName}${durationSuffix}`
+}
+
+function buildTaskNotificationMessage(sdkMessage: {
+  status: string
+  summary?: string
+  output_file?: string
+  description?: string
+}): { content: string; level: 'info' | 'warning' } | null {
+  const status = describeTaskTerminalStatus(sdkMessage.status)
+  const summary = sdkMessage.summary?.trim()
+  const outputFile = sdkMessage.output_file?.trim()
+  const description = sdkMessage.description?.trim()
+  const parts: string[] = []
+
+  parts.push(
+    status === 'failed'
+      ? 'Background task failed.'
+      : status === 'stopped'
+        ? 'Background task stopped.'
+        : 'Background task completed.',
+  )
+
+  if (description && !summary) {
+    parts.push(description)
+  }
+  if (summary) {
+    parts.push(summary)
+  }
+  if (outputFile) {
+    parts.push(`Output saved to ${outputFile}.`)
+  }
+
+  return {
+    content: parts.join(' '),
+    level: status === 'failed' ? 'warning' : 'info',
+  }
+}
+
+function getToolResultBlockText(block: { content?: unknown }): string {
+  const content = block?.content
+  if (typeof content === 'string') {
+    return content.trim()
+  }
+  if (Array.isArray(content)) {
+    return extractTextContent(content, '\n').trim()
+  }
+  return ''
+}
+
+function getFirstNonEmptyLine(text: string): string | null {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed) {
+      return trimmed
+    }
+  }
+  return null
+}
+
+function getFirstMatchingNonEmptyLine(
+  text: string,
+  predicate: (line: string) => boolean,
+): string | null {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed && predicate(trimmed)) {
+      return trimmed
+    }
+  }
+  return null
+}
+
+type TodoLikeItem = {
+  id?: string
+  content?: string
+  status?: string
+}
+
+function getToolUseResultReturnDisplay(source: unknown): unknown {
+  if (!source || typeof source !== 'object') {
+    return null
+  }
+  return (source as { returnDisplay?: unknown }).returnDisplay ?? null
+}
+
+function getNestedToolResultValue(source: unknown, path: string[]): unknown {
+  let current: unknown = source
+  for (const key of path) {
+    if (!current || typeof current !== 'object') {
+      return null
+    }
+    current = (current as Record<string, unknown>)[key]
+  }
+  return current ?? null
+}
+
+function getToolUseResultReturnDisplayObject(
+  source: unknown,
+): Record<string, unknown> | null {
+  const returnDisplay = getToolUseResultReturnDisplay(source)
+  return returnDisplay && typeof returnDisplay === 'object'
+    ? (returnDisplay as Record<string, unknown>)
+    : null
+}
+
+function coerceTodoItems(source: unknown): TodoLikeItem[] {
+  if (!Array.isArray(source)) {
+    return []
+  }
+  return source
+    .filter(item => item && typeof item === 'object')
+    .map(item => {
+      const record = item as Record<string, unknown>
+      return {
+        id:
+          typeof record.id === 'string' && record.id.trim()
+            ? record.id.trim()
+            : undefined,
+        content:
+          typeof record.content === 'string' && record.content.trim()
+            ? record.content.trim()
+            : undefined,
+        status:
+          typeof record.status === 'string' && record.status.trim()
+            ? record.status.trim()
+            : undefined,
+      }
+    })
+}
+
+function getTodoItemsFromPaths(
+  source: unknown,
+  paths: string[][],
+): TodoLikeItem[] {
+  for (const path of paths) {
+    const todos = coerceTodoItems(getNestedToolResultValue(source, path))
+    if (todos.length > 0) {
+      return todos
+    }
+  }
+  return []
+}
+
+function getTodoIdentity(todo: TodoLikeItem): string | null {
+  return todo.id ?? todo.content ?? null
+}
+
+function getTodoStatusMap(todos: TodoLikeItem[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const todo of todos) {
+    const key = getTodoIdentity(todo)
+    if (!key || !todo.status) {
+      continue
+    }
+    map.set(key, todo.status)
+  }
+  return map
+}
+
+function getTodoItemsByStatusTransition(
+  oldTodos: TodoLikeItem[],
+  newTodos: TodoLikeItem[],
+  status: string,
+): TodoLikeItem[] {
+  const oldStatusByTodo = getTodoStatusMap(oldTodos)
+  return newTodos.filter(todo => {
+    const key = getTodoIdentity(todo)
+    if (!key || todo.status !== status) {
+      return false
+    }
+    return oldStatusByTodo.get(key) !== status
+  })
+}
+
+function summarizeTodoItems(todos: TodoLikeItem[]): string {
+  const titles = todos
+    .map(todo => todo.content?.trim())
+    .filter((title): title is string => !!title)
+  if (titles.length === 0) {
+    return `${todos.length} item${todos.length === 1 ? '' : 's'}`
+  }
+  const shown = titles
+    .slice(0, 2)
+    .map(title => `"${truncateToWidth(title, 80)}"`)
+  const extra = titles.length - shown.length
+  return extra > 0 ? `${shown.join(', ')} +${extra} more` : shown.join(', ')
+}
+
+function getToolUseResultLlmContent(source: unknown): string | null {
+  if (!source || typeof source !== 'object') {
+    return null
+  }
+  const llmContent = (source as { llmContent?: unknown }).llmContent
+  return typeof llmContent === 'string' && llmContent.trim()
+    ? llmContent.trim()
+    : null
+}
+
+function getToolUseResultOutputPath(source: unknown): string | null {
+  if (!source || typeof source !== 'object') {
+    return null
+  }
+  const outputPath = (source as { outputPath?: unknown }).outputPath
+  return typeof outputPath === 'string' && outputPath.trim()
+    ? outputPath.trim()
+    : null
+}
+
+function getToolUseResultToolName(source: unknown): string | null {
+  if (!source || typeof source !== 'object') {
+    return null
+  }
+  const toolName =
+    (source as { toolName?: unknown; tool_name?: unknown }).toolName ??
+    (source as { toolName?: unknown; tool_name?: unknown }).tool_name
+  return typeof toolName === 'string' && toolName.trim() ? toolName.trim() : null
+}
+
+function getToolUseResultIsError(source: unknown): boolean {
+  if (!source || typeof source !== 'object') {
+    return false
+  }
+  const isError =
+    (source as { isError?: unknown; is_error?: unknown }).isError ??
+    (source as { isError?: unknown; is_error?: unknown }).is_error
+  return isError === true
+}
+
+function getToolResultSourceText(source: unknown): string | null {
+  if (typeof source === 'string') {
+    return source.trim() || null
+  }
+  if (source && typeof source === 'object' && 'content' in source) {
+    const text = getToolResultBlockText(source as { content?: unknown })
+    return text || null
+  }
+  const llmContent = getToolUseResultLlmContent(source)
+  if (llmContent) {
+    return llmContent
+  }
+  const returnDisplay = getToolUseResultReturnDisplay(source)
+  return typeof returnDisplay === 'string' && returnDisplay.trim()
+    ? returnDisplay.trim()
+    : null
+}
+
+function ensureTrailingPeriod(text: string): string {
+  return /[.!?…]$/.test(text) ? text : `${text}.`
+}
+
+function isNoiseToolResultLine(line: string): boolean {
+  const normalized = line.replace(/\s+/g, ' ').trim()
+  return (
+    !normalized ||
+    /^(?:Command|Directory|Working directory|Path|Exit code|Stdout|Stderr):/i.test(
+      normalized,
+    ) ||
+    /^Full output saved to:/i.test(normalized) ||
+    /^Read \d+ lines?(?: \(from line \d+ to \d+\))?\.?$/.test(normalized) ||
+    /^Found \d+ lines in \d+ files(?: \(\d+ms\))?\.?$/.test(normalized) ||
+    /^Found \d+ files(?: in \d+ms)?\.?$/.test(normalized) ||
+    /^[\[{(]$/.test(normalized)
+  )
+}
+
+function getFallbackToolErrorDetail(text: string): string | null {
+  const detail = getFirstMatchingNonEmptyLine(
+    text,
+    line => !isNoiseToolResultLine(line),
+  )
+  return detail ? detail.replace(/\s+/g, ' ').trim() : null
+}
+
+function buildTodoWriteFeedback(
+  source: unknown,
+): { content: string; level: 'info' | 'warning' } | null {
+  const text = getToolResultSourceText(source) ?? ''
+  const toolName = getToolUseResultToolName(source)?.toLowerCase()
+  const returnDisplay = getToolUseResultReturnDisplayObject(source)
+  const isTodoWrite =
+    text.includes('Todos have been modified successfully') ||
+    returnDisplay?.type === 'todo_write' ||
+    toolName === 'todowrite' ||
+    toolName === 'todo_write'
+  if (!isTodoWrite) {
+    return null
+  }
+
+  const oldTodos = getTodoItemsFromPaths(source, [
+    ['oldTodos'],
+    ['data', 'oldTodos'],
+    ['result', 'oldTodos'],
+    ['structuredContent', 'oldTodos'],
+  ])
+  const newTodos = getTodoItemsFromPaths(source, [
+    ['newTodos'],
+    ['data', 'newTodos'],
+    ['result', 'newTodos'],
+    ['structuredContent', 'newTodos'],
+    ['input', 'todos'],
+  ])
+  const completed = getTodoItemsByStatusTransition(oldTodos, newTodos, 'completed')
+  if (completed.length > 0) {
+    return {
+      content:
+        completed.length === 1
+          ? `Completed todo: ${summarizeTodoItems(completed)}`
+          : `Completed todos: ${summarizeTodoItems(completed)}`,
+      level: 'info',
+    }
+  }
+
+  const started = getTodoItemsByStatusTransition(oldTodos, newTodos, 'in_progress')
+  if (started.length > 0) {
+    return {
+      content:
+        started.length === 1
+          ? `Started todo: ${summarizeTodoItems(started)}`
+          : `Started todos: ${summarizeTodoItems(started)}`,
+      level: 'info',
+    }
+  }
+
+  const completedCount = newTodos.filter(todo => todo.status === 'completed').length
+  const inProgressCount = newTodos.filter(todo => todo.status === 'in_progress').length
+  if (completedCount > 0 || inProgressCount > 0) {
+    const parts: string[] = []
+    if (completedCount > 0) {
+      parts.push(`${completedCount} completed`)
+    }
+    if (inProgressCount > 0) {
+      parts.push(`${inProgressCount} in progress`)
+    }
+    return {
+      content: `Todo progress updated: ${parts.join(', ')}.`,
+      level: 'info',
+    }
+  }
+
+  return { content: 'Todo list updated successfully.', level: 'info' }
+}
+
+function buildAgentResultFeedback(
+  source: unknown,
+): { content: string; level: 'info' | 'warning' } | null {
+  const returnDisplay = getToolUseResultReturnDisplayObject(source)
+  if (returnDisplay?.type === 'agent_result') {
+    const status = typeof returnDisplay.status === 'string' ? returnDisplay.status : ''
+    const description =
+      typeof returnDisplay.description === 'string'
+        ? returnDisplay.description.trim()
+        : ''
+    const agentType =
+      typeof returnDisplay.agentType === 'string'
+        ? returnDisplay.agentType.trim()
+        : ''
+    const detail =
+      typeof returnDisplay.content === 'string'
+        ? getFirstNonEmptyLine(returnDisplay.content)
+        : null
+    const subject = description || agentType || 'Sub-agent task'
+    if (status === 'failed') {
+      return {
+        content: detail
+          ? `Sub-agent failed: ${subject} — ${detail}`
+          : `Sub-agent failed: ${subject}`,
+        level: 'warning',
+      }
+    }
+    if (status === 'completed') {
+      return {
+        content: `Sub-agent completed: ${subject}`,
+        level: 'info',
+      }
+    }
+    if (status === 'stopped' || status === 'killed') {
+      return {
+        content: `Sub-agent stopped: ${subject}`,
+        level: 'warning',
+      }
+    }
+  }
+
+  if (typeof source !== 'string') {
+    return null
+  }
+
+  const successMatch = source.match(/^Sub-agent \(([^)]+)\) completed successfully:/m)
+  if (successMatch) {
+    return {
+      content: `Sub-agent completed: ${successMatch[1]!.trim()}`,
+      level: 'info',
+    }
+  }
+
+  const failureMatch = source.match(/^Sub-agent \(([^)]+)\) failed:/m)
+  if (failureMatch) {
+    const detail =
+      source.match(/Agent execution error:\s*([^\n]+)/)?.[1]?.trim() || null
+    return {
+      content: detail
+        ? `Sub-agent failed: ${failureMatch[1]!.trim()} — ${detail}`
+        : `Sub-agent failed: ${failureMatch[1]!.trim()}`,
+      level: 'warning',
+    }
+  }
+
+  return null
+}
+
+function getQueryToolScaleSummary(text: string): string | null {
+  const summaryLine = getFirstMatchingNonEmptyLine(text, line => {
+    const normalized = line.replace(/\s+/g, ' ').trim()
+    return (
+      /^Read \d+ lines?(?: \(from line \d+ to \d+\))?\.?$/.test(normalized) ||
+      /^Found \d+ lines in \d+ files(?: \(\d+ms\))?\.?$/.test(normalized) ||
+      /^Found \d+ files(?: in \d+ms)?\.?$/.test(normalized)
+    )
+  })
+  return summaryLine ? ensureTrailingPeriod(summaryLine.replace(/\s+/g, ' ').trim()) : null
+}
+
+function isQueryToolName(toolName: string | null): boolean {
+  return !!toolName && /(read|grep|search|glob|list|find|outline|lint|ls)/i.test(toolName)
+}
+
+function isHighValueToolSummaryLine(line: string): boolean {
+  const normalized = line.replace(/\s+/g, ' ').trim()
+  if (isNoiseToolResultLine(normalized)) {
+    return false
+  }
+  return /^(?:No linter errors found|Bundled \d+ modules in \d+(?:ms|s)|Build passed|Compilation succeeded|已(?:完成|定位|修复|检查|确认|分析|更新|补齐|实现|运行|同步|读取|审查|创建)|构建通过|编译通过)/.test(
+    normalized,
+  )
+}
+
+function getHighValueToolSummary(text: string): string | null {
+  const summaryLine = getFirstMatchingNonEmptyLine(text, isHighValueToolSummaryLine)
+  return summaryLine
+    ? ensureTrailingPeriod(summaryLine.replace(/\s+/g, ' ').trim())
+    : null
+}
+
+function buildQueryToolFeedback(
+  source: unknown,
+): { content: string; level: 'info' | 'warning' } | null {
+  const text = getToolResultSourceText(source) ?? ''
+  const toolName = getToolUseResultToolName(source)
+  const scaleSummary = getQueryToolScaleSummary(text)
+  if (!scaleSummary && !isQueryToolName(toolName)) {
+    return null
+  }
+  const summary = getHighValueToolSummary(text) ?? scaleSummary
+  if (!summary) {
+    return null
+  }
+  const outputPath = extractFullOutputSavedPaths(text)[0] ?? getToolUseResultOutputPath(source)
+  return {
+    content: outputPath ? `${summary} Full output saved to ${outputPath}.` : summary,
+    level: 'info',
+  }
+}
+
+function humanizeToolFailureDetail(detail: string): string {
+  const normalized = detail.replace(/\s+/g, ' ').trim()
+  if (/EISDIR:\s*illegal operation on a directory,\s*read/i.test(normalized)) {
+    return 'Target is a directory, not a file.'
+  }
+  if (
+    /(?:line (?:numbers?|range)|offset).*(?:invalid|illegal|out of range)|start_line_one_indexed|end_line_one_indexed/i.test(
+      normalized,
+    )
+  ) {
+    return 'Requested line range is invalid.'
+  }
+  if (/\bENOENT\b|No such file or directory|File does not exist/i.test(normalized)) {
+    return 'File or directory not found.'
+  }
+  if (/\b(?:EACCES|EPERM)\b|Permission denied/i.test(normalized)) {
+    return 'Permission denied.'
+  }
+  if (/\bENOTDIR\b/i.test(normalized)) {
+    return 'A path segment is not a directory.'
+  }
+  return ensureTrailingPeriod(
+    normalized.replace(/^(?:Error:|Agent execution error:)\s*/, ''),
+  )
+}
+
+function buildGenericToolFailureFeedback(
+  source: unknown,
+): { content: string; level: 'info' | 'warning' } | null {
+  const returnDisplay = getToolUseResultReturnDisplayObject(source)
+  if (returnDisplay?.type === 'agent_result' || returnDisplay?.type === 'todo_write') {
+    return null
+  }
+
+  const text = getToolResultSourceText(source)
+  if (!text) {
+    return null
+  }
+
+  const detail =
+    getFirstMatchingNonEmptyLine(text, line =>
+      /^(?:ENOENT|EACCES|EPERM|ENOTDIR|EISDIR|Error:|Agent execution error:|Command failed:?|Cannot\b|Failed\b)/.test(
+        line.replace(/\s+/g, ' ').trim(),
+      ),
+    )
+      ?.replace(/\s+/g, ' ')
+      .trim() ??
+    (getToolUseResultIsError(source) ? getFallbackToolErrorDetail(text) : null)
+  if (!detail && !getToolUseResultIsError(source)) {
+    return null
+  }
+
+  const toolName = getToolUseResultToolName(source)
+  const humanized = detail ? humanizeToolFailureDetail(detail) : null
+  return {
+    content: toolName
+      ? humanized
+        ? `${toolName} failed: ${humanized}`
+        : `${toolName} failed.`
+      : humanized ?? 'Tool failed.',
+    level: 'warning',
+  }
+}
+
+function buildOutputPathFeedback(
+  source: unknown,
+): { content: string; level: 'info' | 'warning' } | null {
+  const text = getToolResultSourceText(source) ?? ''
+  const outputPath =
+    getToolUseResultOutputPath(source) ?? extractFullOutputSavedPaths(text)[0] ?? null
+  return outputPath
+    ? {
+        content: `Full output saved to ${outputPath}.`,
+        level: 'info',
+      }
+    : null
+}
+
+function extractFullOutputSavedPaths(text: string): string[] {
+  return [...text.matchAll(/Full output saved to:\s*(\S+)/g)]
+    .map(match => match[1]?.trim())
+    .filter((path): path is string => !!path)
+}
+
+function extractHighValueToolResultFeedback(sdkMessage: {
+  type: string
+  tool_use_result?: unknown
+  message?: { content?: unknown }
+}): Array<{ content: string; level: 'info' | 'warning' }> {
+  if (sdkMessage.type !== 'user') {
+    return []
+  }
+
+  const content = sdkMessage.message?.content
+  if (!Array.isArray(content)) {
+    return []
+  }
+
+  const toolResultBlocks = content.filter(block => block.type === 'tool_result')
+  if (toolResultBlocks.length === 0) {
+    return []
+  }
+
+  const feedback: Array<{ content: string; level: 'info' | 'warning' }> = []
+  const seen = new Set<string>()
+  const addFeedback = (
+    item: { content: string; level: 'info' | 'warning' } | null,
+  ) => {
+    if (!item) {
+      return
+    }
+    const key = `${item.level}:${item.content}`
+    if (seen.has(key)) {
+      return
+    }
+    seen.add(key)
+    feedback.push(item)
+  }
+
+  addFeedback(buildTodoWriteFeedback(sdkMessage.tool_use_result))
+  addFeedback(buildAgentResultFeedback(sdkMessage.tool_use_result))
+  const topQueryFeedback = buildQueryToolFeedback(sdkMessage.tool_use_result)
+  addFeedback(topQueryFeedback)
+  addFeedback(buildGenericToolFailureFeedback(sdkMessage.tool_use_result))
+  if (!topQueryFeedback?.content.includes('Full output saved to ')) {
+    addFeedback(buildOutputPathFeedback(sdkMessage.tool_use_result))
+  }
+
+  for (const block of toolResultBlocks) {
+    addFeedback(buildTodoWriteFeedback(getToolResultBlockText(block)))
+    addFeedback(buildAgentResultFeedback(getToolResultBlockText(block)))
+    const queryFeedback = buildQueryToolFeedback(block)
+    addFeedback(queryFeedback)
+    addFeedback(buildGenericToolFailureFeedback(block))
+    if (!queryFeedback?.content.includes('Full output saved to ')) {
+      addFeedback(buildOutputPathFeedback(block))
+    }
+  }
+
+  return feedback
+}
+
 // How long to wait for a response before showing a warning
 const RESPONSE_TIMEOUT_MS = 60000 // 60 seconds
 // Extended timeout during compaction — compact API calls take 5-30s and
@@ -205,19 +863,42 @@ export function useRemoteSession({
         // Track remote subagent lifecycle for the "N in background" counter.
         // All task types (Agent/teammate/workflow/bash) flow through
         // registerTask() → task_started, and complete via task_notification.
-        // Return early — these are status signals, not renderable messages.
         if (sdkMessage.type === 'system') {
           if (sdkMessage.subtype === 'task_started') {
             runningTaskIdsRef.current.add(sdkMessage.task_id)
             writeTaskCount()
+            const taskStartedMessage = buildTaskStartedMessage(sdkMessage)
+            if (taskStartedMessage) {
+              setMessages(prev => [
+                ...prev,
+                createSystemMessage(taskStartedMessage, 'info'),
+              ])
+            }
             return
           }
           if (sdkMessage.subtype === 'task_notification') {
             runningTaskIdsRef.current.delete(sdkMessage.task_id)
             writeTaskCount()
+            const taskNotificationMessage = buildTaskNotificationMessage(sdkMessage)
+            if (taskNotificationMessage) {
+              setMessages(prev => [
+                ...prev,
+                createSystemMessage(
+                  taskNotificationMessage.content,
+                  taskNotificationMessage.level,
+                ),
+              ])
+            }
             return
           }
           if (sdkMessage.subtype === 'task_progress') {
+            const taskProgressMessage = buildTaskProgressMessage(sdkMessage)
+            if (taskProgressMessage) {
+              setMessages(prev => [
+                ...prev,
+                createSystemMessage(taskProgressMessage, 'info'),
+              ])
+            }
             return
           }
           // Track compaction state. The CLI emits status='compacting' at
@@ -267,6 +948,13 @@ export function useRemoteSession({
           }
         }
 
+        const highValueFeedbackMessages =
+          sdkMessage.type === 'user'
+            ? extractHighValueToolResultFeedback(sdkMessage).map(
+                ({ content, level }) => createSystemMessage(content, level),
+              )
+            : []
+
         // Convert SDK message to REPL message. In viewerOnly mode, the
         // remote agent runs BriefTool (SendUserMessage) — its tool_use block
         // renders empty (userFacingName() === ''), actual content is in the
@@ -305,7 +993,11 @@ export function useRemoteSession({
             }
           }
 
-          setMessages(prev => [...prev, converted.message])
+          setMessages(prev => [
+            ...prev,
+            ...highValueFeedbackMessages,
+            converted.message,
+          ])
           // Note: Don't stop loading on assistant messages - the agent may still be
           // working (tool use loops). Loading stops only on session end or permission request.
         } else if (converted.type === 'stream_event') {
@@ -325,6 +1017,8 @@ export function useRemoteSession({
               `[useRemoteSession] Stream event received but streaming callbacks not provided`,
             )
           }
+        } else if (highValueFeedbackMessages.length > 0) {
+          setMessages(prev => [...prev, ...highValueFeedbackMessages])
         }
         // 'ignored' messages are silently dropped
       },
@@ -547,7 +1241,9 @@ export function useRemoteSession({
             )
             // Add a warning message to the conversation
             const warningMessage = createSystemMessage(
-              'Remote session may be unresponsive. Attempting to reconnect…',
+              isCompactingRef.current
+                ? 'Remote session is still compacting context. Waiting a bit longer before reconnecting…'
+                : 'Remote session may be unresponsive. Attempting to reconnect…',
               'warning',
             )
             setMessages(prev => [...prev, warningMessage])

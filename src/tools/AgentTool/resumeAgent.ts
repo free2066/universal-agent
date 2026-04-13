@@ -288,8 +288,9 @@ export async function resumeAgentBackground({
       }),
     ),
   ).catch(err => {
+    const msg = errorMessage(err)
     logForDebugging(
-      `[resumeAgent] runWithAgentContext threw unexpectedly for agent ${agentBackgroundTask.agentId}: ${errorMessage(err)}`,
+      `[resumeAgent] runWithAgentContext threw unexpectedly for agent ${agentBackgroundTask.agentId}: ${msg}`,
       { level: 'error' },
     )
     failAgentTask(agentBackgroundTask.agentId, msg, rootSetAppState)

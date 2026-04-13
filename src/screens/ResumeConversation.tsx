@@ -218,6 +218,20 @@ export function ResumeConversation({
           result_3.messages.push(createSystemMessage(warning, 'warning'));
         }
       }
+      const resumeSummaryLines = [`Restored ${result_3.resumeSummary.restoredMessageCount} conversation ${result_3.resumeSummary.restoredMessageCount === 1 ? 'message' : 'messages'}.`];
+      if (result_3.resumeSummary.resumedFromInterruption) {
+        resumeSummaryLines.push('Detected an interrupted turn and prepared it to continue from where it stopped.');
+      }
+      if (result_3.resumeSummary.restoredFileHistory) {
+        resumeSummaryLines.push('Restored recent file history.');
+      }
+      if (result_3.resumeSummary.restoredSkills) {
+        resumeSummaryLines.push('Restored previously loaded skills.');
+      }
+      if (result_3.resumeSummary.restoredContextSummary) {
+        resumeSummaryLines.push('Restored compacted context summary.');
+      }
+      result_3.messages.push(createSystemMessage(resumeSummaryLines.join(' '), result_3.resumeSummary.resumedFromInterruption ? 'warning' : 'info'));
       if (result_3.sessionId && !forkSession) {
         switchSession(asSessionId(result_3.sessionId), log_0.fullPath ? dirname(log_0.fullPath) : null);
         await renameRecordingForSession();

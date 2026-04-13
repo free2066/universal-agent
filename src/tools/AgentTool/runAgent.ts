@@ -972,7 +972,18 @@ function resolveSkillName(
     }
   }
 
-  // 3. Suffix match — find a skill whose name ends with \":skillName\"\n  const suffix = `:${skillName}`\n  const matches = allSkills.filter(cmd => cmd.name.endsWith(suffix))\n  if (matches.length > 1) {\n    logForDebugging(\n      `[Agent: ${agentDefinition.agentType}] Ambiguous skill '${skillName}': multiple matches found (${matches.map(c => c.name).join(', ')}), using first`,\n      { level: 'warn' },\n    )\n  }\n  if (matches.length > 0) {\n    return matches[0]!.name\n  }
+  // 3. Suffix match — find a skill whose name ends with ":skillName"
+  const suffix = `:${skillName}`
+  const matches = allSkills.filter(cmd => cmd.name.endsWith(suffix))
+  if (matches.length > 1) {
+    logForDebugging(
+      `[Agent: ${agentDefinition.agentType}] Ambiguous skill '${skillName}': multiple matches found (${matches.map(c => c.name).join(', ')}), using first`,
+      { level: 'warn' },
+    )
+  }
+  if (matches.length > 0) {
+    return matches[0]!.name
+  }
 
   return null
 }

@@ -2,6 +2,9 @@
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
+  SDKFilesPersistedEvent,
+  SDKHookResponseMessage,
+  SDKHookStartedMessage,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
@@ -18,6 +21,23 @@ import type {
 import { logForDebugging } from '../utils/debug.js'
 import { fromSDKCompactMetadata } from '../utils/messages/mappers.js'
 import { createUserMessage } from '../utils/messages.js'
+
+let lastRateLimitEventKey: string | null = null
+
+function getRateLimitEventKey(
+  info: Extract<SDKMessage, { type: 'rate_limit_event' }>['rate_limit_info'],
+): string {
+  return [
+    info.status,
+    info.rateLimitType ?? '',
+    info.isUsingOverage ? '1' : '0',
+    info.overageStatus ?? '',
+  ].join(':')
+}
+
+function resetRateLimitEventState(): void {
+  lastRateLimitEventKey = null
+}
 
 /**
  * Converts SDKMessage from CCR to REPL Message types.
@@ -86,18 +106,60 @@ function convertInitMessage(msg: SDKSystemMessage): SystemMessage {
 /**
  * Convert an SDKStatusMessage to a SystemMessage
  */
+function humanizeStatus(status: string): string {
+  return status
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .replace(/^./, char => char.toUpperCase())
+}
+
+function formatElapsedSeconds(elapsedSeconds: number): string {
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 0) {
+    return '0s'
+  }
+
+  if (elapsedSeconds < 60) {
+    return `${Math.round(elapsedSeconds)}s`
+  }
+
+  const minutes = Math.floor(elapsedSeconds / 60)
+  const seconds = Math.round(elapsedSeconds % 60)
+  if (seconds === 0) {
+    return `${minutes}m`
+  }
+  return `${minutes}m ${seconds}s`
+}
+
+function formatResetSuffix(resetAt?: number): string {
+  if (resetAt === undefined || !Number.isFinite(resetAt)) {
+    return ''
+  }
+
+  const resetTime = new Date(resetAt * 1000)
+  if (Number.isNaN(resetTime.getTime())) {
+    return ''
+  }
+
+  return ` Resets at ${resetTime.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  })}.`
+}
+
 function convertStatusMessage(msg: SDKStatusMessage): SystemMessage | null {
   if (!msg.status) {
     return null
   }
 
+  const content =
+    msg.status === 'compacting'
+      ? 'Compacting conversation to stay within context limits…'
+      : `Working… ${humanizeStatus(msg.status)}`
+
   return {
     type: 'system',
     subtype: 'informational',
-    content:
-      msg.status === 'compacting'
-        ? 'Compacting conversation…'
-        : `Status: ${msg.status}`,
+    content,
     level: 'info',
     uuid: msg.uuid,
     timestamp: new Date().toISOString(),
@@ -115,7 +177,7 @@ function convertToolProgressMessage(
   return {
     type: 'system',
     subtype: 'informational',
-    content: `Tool ${msg.tool_name} running for ${msg.elapsed_time_seconds}s…`,
+    content: `Tool ${msg.tool_name} is still running (${formatElapsedSeconds(msg.elapsed_time_seconds)})…`,
     level: 'info',
     uuid: msg.uuid,
     timestamp: new Date().toISOString(),
@@ -129,14 +191,154 @@ function convertToolProgressMessage(
 function convertCompactBoundaryMessage(
   msg: SDKCompactBoundaryMessage,
 ): SystemMessage {
+  const compactMetadata = fromSDKCompactMetadata(msg.compact_metadata)
+  const summarizedCount = compactMetadata?.messagesSummarized
+  const content = summarizedCount
+    ? `Conversation compacted to stay within context limits · summarized ${summarizedCount} earlier ${summarizedCount === 1 ? 'message' : 'messages'}`
+    : 'Conversation compacted to stay within context limits'
+
   return {
     type: 'system',
     subtype: 'compact_boundary',
-    content: 'Conversation compacted',
+    content,
     level: 'info',
     uuid: msg.uuid,
     timestamp: new Date().toISOString(),
-    compactMetadata: fromSDKCompactMetadata(msg.compact_metadata),
+    compactMetadata,
+  }
+}
+
+function convertRateLimitEventMessage(
+  msg: Extract<SDKMessage, { type: 'rate_limit_event' }>,
+): SystemMessage | null {
+  const info = msg.rate_limit_info
+  const rateLimitEventKey = getRateLimitEventKey(info)
+  if (rateLimitEventKey === lastRateLimitEventKey) {
+    return null
+  }
+  lastRateLimitEventKey = rateLimitEventKey
+
+  if (info.isUsingOverage) {
+    return {
+      type: 'system',
+      subtype: 'informational',
+      content:
+        info.overageStatus === 'allowed_warning'
+          ? 'Using extra usage and approaching the spending limit.'
+          : 'Using extra usage to keep requests running.',
+      level: info.overageStatus === 'allowed_warning' ? 'warning' : 'info',
+      uuid: msg.uuid,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  if (info.status === 'allowed_warning') {
+    const utilization =
+      typeof info.utilization === 'number'
+        ? ` (${Math.round(info.utilization * 100)}% used)`
+        : ''
+    return {
+      type: 'system',
+      subtype: 'informational',
+      content: `Approaching the current usage limit${utilization}.${formatResetSuffix(info.resetsAt)}`.trim(),
+      level: 'warning',
+      uuid: msg.uuid,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  if (info.status === 'rejected') {
+    const prefix =
+      info.rateLimitType === 'overage'
+        ? 'Extra usage limit reached.'
+        : 'Requests are currently rate limited.'
+    return {
+      type: 'system',
+      subtype: 'informational',
+      content: `${prefix}${formatResetSuffix(info.resetsAt)}`.trim(),
+      level: 'warning',
+      uuid: msg.uuid,
+      timestamp: new Date().toISOString(),
+    }
+  }
+
+  return null
+}
+
+function convertHookStartedMessage(
+  msg: Extract<SDKMessage, { type: 'system'; subtype: 'hook_started' }>,
+): SystemMessage | null {
+  // Only show a brief loading-style message to let the user know something is happening remotely
+  return {
+    type: 'system',
+    subtype: 'informational',
+    content: `Running hook: ${msg.hook_name}…`,
+    level: 'info',
+    uuid: msg.uuid,
+    timestamp: new Date().toISOString(),
+  }
+}
+
+function convertHookResponseMessage(
+  msg: Extract<SDKMessage, { type: 'system'; subtype: 'hook_response' }>,
+): SystemMessage | null {
+  // We primarily want to surface errors so users aren't left wondering why a hook silently failed.
+  // Success responses are generally too noisy unless the user is actively debugging.
+  if (msg.outcome === 'error') {
+    const errorDetails = msg.stderr || msg.output || 'Unknown error'
+    // Trim excessively long hook output so it doesn't flood the transcript
+    const trimmedDetails =
+      errorDetails.length > 500
+        ? `${errorDetails.slice(0, 500)}… (output truncated)`
+        : errorDetails
+
+    return {
+      type: 'system',
+      subtype: 'informational',
+      content: `Hook "${msg.hook_name}" (${msg.hook_event}) failed:
+${trimmedDetails}`,
+      level: 'warning',
+      uuid: msg.uuid,
+      timestamp: new Date().toISOString(),
+    }
+  }
+  return null
+}
+
+function convertFilesPersistedEventMessage(
+  msg: Extract<SDKMessage, { type: 'system'; subtype: 'files_persisted' }>,
+): SystemMessage | null {
+  if (msg.failed && msg.failed.length > 0) {
+    const failures = msg.failed
+      .map(f => `${f.filename}: ${f.error}`)
+      .join('\n')
+    return {
+      type: 'system',
+      subtype: 'informational',
+      content: `Failed to persist ${msg.failed.length} file(s):\n${failures}`,
+      level: 'warning',
+      uuid: msg.uuid,
+      timestamp: new Date().toISOString(),
+    }
+  }
+  return null
+}
+
+function convertToolUseSummaryMessage(
+  msg: Extract<SDKMessage, { type: 'tool_use_summary' }>,
+): SystemMessage | null {
+  const summary = msg.summary?.trim()
+  if (!summary) {
+    return null
+  }
+
+  return {
+    type: 'system',
+    subtype: 'informational',
+    content: `Completed tool work: ${summary}`,
+    level: 'info',
+    uuid: msg.uuid,
+    timestamp: new Date().toISOString(),
   }
 }
 
@@ -219,6 +421,7 @@ export function convertSDKMessage(
       return { type: 'stream_event', event: convertStreamEvent(msg) }
 
     case 'result':
+      resetRateLimitEventState()
       // Only show result messages for errors. Success results are noise
       // in multi-turn sessions (isLoading=false is sufficient signal).
       if (msg.subtype !== 'success') {
@@ -228,6 +431,7 @@ export function convertSDKMessage(
 
     case 'system':
       if (msg.subtype === 'init') {
+        resetRateLimitEventState()
         return { type: 'message', message: convertInitMessage(msg) }
       }
       if (msg.subtype === 'status') {
@@ -242,7 +446,70 @@ export function convertSDKMessage(
           message: convertCompactBoundaryMessage(msg),
         }
       }
-      // hook_response and other subtypes
+      if (msg.subtype === 'hook_started') {
+        const startedMsg = convertHookStartedMessage(msg)
+        return startedMsg
+          ? { type: 'message', message: startedMsg }
+          : { type: 'ignored' }
+      }
+      if (msg.subtype === 'hook_response') {
+        const responseMsg = convertHookResponseMessage(msg)
+        return responseMsg
+          ? { type: 'message', message: responseMsg }
+          : { type: 'ignored' }
+      }
+      if (msg.subtype === 'files_persisted') {
+        const persistedMsg = convertFilesPersistedEventMessage(msg)
+        return persistedMsg
+          ? { type: 'message', message: persistedMsg }
+          : { type: 'ignored' }
+      }
+      if (msg.subtype === 'auth_status') {
+        const aMsg = msg as Extract<SDKMessage, { subtype: 'auth_status' }>
+        if (aMsg.status === 'not_authenticated' || aMsg.status === 'expired') {
+          return {
+            type: 'message',
+            message: {
+              type: 'system',
+              subtype: 'informational',
+              content: 'Remote session authentication expired or not authenticated. Please re-authenticate.',
+              level: 'warning',
+              uuid: msg.uuid,
+              timestamp: new Date().toISOString(),
+            },
+          }
+        }
+        return { type: 'ignored' }
+      }
+      if (msg.subtype === 'api_error') {
+        const apiMsg = msg as Extract<SDKMessage, { subtype: 'api_error' }>
+        return {
+          type: 'message',
+          message: {
+            type: 'system',
+            subtype: 'informational',
+            content: `Remote API error: ${apiMsg.error}`,
+            level: 'warning',
+            uuid: msg.uuid,
+            timestamp: new Date().toISOString(),
+          },
+        }
+      }
+      if (msg.subtype === 'api_retry') {
+        const arMsg = msg as Extract<SDKMessage, { subtype: 'api_retry' }>
+        return {
+          type: 'message',
+          message: {
+            type: 'system',
+            subtype: 'informational',
+            content: `Retrying API request: ${arMsg.error} (Attempt ${arMsg.attempt}/${arMsg.max_attempts})`,
+            level: 'warning',
+            uuid: msg.uuid,
+            timestamp: new Date().toISOString(),
+          },
+        }
+      }
+      // other subtypes
       logForDebugging(
         `[sdkMessageAdapter] Ignoring system message subtype: ${msg.subtype}`,
       )
@@ -256,15 +523,19 @@ export function convertSDKMessage(
       logForDebugging('[sdkMessageAdapter] Ignoring auth_status message')
       return { type: 'ignored' }
 
-    case 'tool_use_summary':
-      // Tool use summaries are SDK-only events, not displayed in REPL
-      logForDebugging('[sdkMessageAdapter] Ignoring tool_use_summary message')
-      return { type: 'ignored' }
+    case 'tool_use_summary': {
+      const summaryMsg = convertToolUseSummaryMessage(msg)
+      return summaryMsg
+        ? { type: 'message', message: summaryMsg }
+        : { type: 'ignored' }
+    }
 
-    case 'rate_limit_event':
-      // Rate limit events are SDK-only events, not displayed in REPL
-      logForDebugging('[sdkMessageAdapter] Ignoring rate_limit_event message')
-      return { type: 'ignored' }
+    case 'rate_limit_event': {
+      const rateLimitMsg = convertRateLimitEventMessage(msg)
+      return rateLimitMsg
+        ? { type: 'message', message: rateLimitMsg }
+        : { type: 'ignored' }
+    }
 
     default: {
       // Gracefully ignore unknown message types. The backend may send new
