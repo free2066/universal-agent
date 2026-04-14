@@ -696,6 +696,18 @@ export class MultiModelAnthropicAdapter {
       )
       apiErr.status = err?.status || 503
       apiErr.code = err?.code || 'ECONNREFUSED'
+      // MA-10: Properly handle headers from different LLM clients.
+      // Some providers return headers as a plain object instead of Headers instance.
+      // Convert to Headers if needed, otherwise leave undefined to avoid withRetry crash.
+      if (err?.headers) {
+        if (err.headers instanceof globalThis.Headers || (typeof err.headers.get === 'function')) {
+          apiErr.headers = err.headers
+        } else if (typeof err.headers === 'object') {
+          // Convert plain object to Headers instance
+          apiErr.headers = new globalThis.Headers(err.headers as Record<string, string>)
+        }
+        // else: leave undefined, which is safe for optional chaining
+      }
       throw apiErr
     }
 
