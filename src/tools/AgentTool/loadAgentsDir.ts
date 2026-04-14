@@ -394,7 +394,7 @@ export const getAgentDefinitionsWithOverrides = memoize(
       return {
         activeAgents: builtInAgents,
         allAgents: builtInAgents,
-        failedFiles: [{ path: 'unknown', error: errorMessage }],
+        failedFiles: [{ path: 'unknown', error: errorMessage(error) }],
       }
     }
   },

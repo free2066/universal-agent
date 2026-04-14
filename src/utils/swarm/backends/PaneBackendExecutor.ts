@@ -202,7 +202,7 @@ export class PaneBackendExecutor implements TeammateExecutor {
       return {
         success: false,
         agentId,
-        error: errorMessage,
+        error: errorMessage(error),
       }
     }
   }
