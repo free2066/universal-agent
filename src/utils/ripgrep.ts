@@ -83,6 +83,7 @@ async function downloadRipgrep(): Promise<string | null> {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const tempFile = path.join(UA_RIPGREP_DIR, `ripgrep-download-${Date.now()}-${attempt}.tar.gz`)
+    let extractDir = ''
     
     try {
       logForDebugging(`[ripgrep] download attempt ${attempt}/${maxRetries}`)
@@ -124,7 +125,7 @@ async function downloadRipgrep(): Promise<string | null> {
       logForDebugging(`[ripgrep] downloaded ${buffer.length} bytes`)
 
       // Extract the archive
-      const extractDir = path.join(UA_RIPGREP_DIR, `ripgrep-extract-${Date.now()}-${attempt}`)
+      extractDir = path.join(UA_RIPGREP_DIR, `ripgrep-extract-${Date.now()}-${attempt}`)
       mkdirSync(extractDir, { recursive: true })
 
       if (platform.file.endsWith('.zip')) {
