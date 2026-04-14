@@ -415,7 +415,33 @@ export const AgentTool = buildTool({
       const found = (() => {
         // 1. Exact match (original logic)
         const exact = agents.find(agent => agent.agentType === effectiveType);
-        if (exact) return exact;
+        if (exact) {
+          // UA: If preferredNamespace is set and the exact match is from a different namespace,
+          // check if the preferredNamespace has the same agent type. If so, use it instead
+          // and log a warning to help debug skill issues.
+          const preferredNamespace = toolUseContext.options.preferredAgentNamespace;
+          if (preferredNamespace && effectiveType && !effectiveType.startsWith(preferredNamespace + ':')) {
+            // Extract the short name from effectiveType (e.g., "explore" from "omo-agents:explore")
+            const colonIdx = effectiveType.indexOf(':');
+            const shortName = colonIdx >= 0 ? effectiveType.substring(colonIdx + 1) : effectiveType;
+            
+            // Check if preferredNamespace has an agent with the same short name
+            const preferredAgent = agents.find(agent =>
+              agent.agentType.toLowerCase() === (preferredNamespace + ':' + shortName).toLowerCase()
+            );
+            
+            if (preferredAgent) {
+              // Log warning and use preferredNamespace agent instead
+              logForDebugging(
+                `[UA WARNING] Skill requested '${effectiveType}' but preferredAgentNamespace='${preferredNamespace}'. ` +
+                `Auto-correcting to '${preferredAgent.agentType}'. ` +
+                `Skill should use full namespace to avoid ambiguity.`
+              );
+              return preferredAgent;
+            }
+          }
+          return exact;
+        }
 
         // 2. Case-insensitive short-name fallback.
         // LLMs sometimes output bare names without namespace prefix, e.g.

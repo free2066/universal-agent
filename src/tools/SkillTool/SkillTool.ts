@@ -212,6 +212,39 @@ async function executeForkedSkill(
       ? { ...baseAgent, effort: command.effort }
       : baseAgent
 
+  // UA: If this skill has a preferredAgentNamespace, inject a warning into the prompt
+  // to ensure the LLM uses agents from the correct namespace.
+  const preferredAgentNamespace = command.pluginInfo?.pluginManifest.name
+  let effectivePromptMessages = promptMessages
+  if (preferredAgentNamespace) {
+    // Check if the skill prompt already mentions the namespace
+    const promptText = promptMessages.map(m => m.content).join('')
+    if (!promptText.includes(preferredAgentNamespace + ':')) {
+      // Inject namespace reminder into the first user message
+      const namespaceWarning = `\n\n[IMPORTANT] This skill is from the '${preferredAgentNamespace}' plugin. ` +
+        `When using Task() or agent tools, you MUST use agents from this namespace. ` +
+        `Examples: Task(subagent_type="${preferredAgentNamespace}:explore"), ` +
+        `Task(subagent_type="${preferredAgentNamespace}:analyst"). ` +
+        `Do NOT use agents from other namespaces like 'omo-agents' or 'omo-agents:'. ` +
+        `Using the wrong namespace may cause unexpected behavior.\n`
+
+      effectivePromptMessages = promptMessages.map((msg, idx) => {
+        if (idx === promptMessages.length - 1 && msg.role === 'user') {
+          // Add warning to the last user message (usually where LLM sees it)
+          return {
+            ...msg,
+            content: typeof msg.content === 'string' 
+              ? msg.content + namespaceWarning 
+              : msg.content,
+          }
+        }
+        return msg
+      })
+
+      logForDebugging(`[SkillTool] Injected namespace reminder for '${preferredAgentNamespace}' into skill prompt`)
+    }
+  }
+
   // Collect messages from the forked agent
   const agentMessages: Message[] = []
 
@@ -220,8 +253,7 @@ async function executeForkedSkill(
   )
 
   try {
-    // Run the sub-agent
-    const preferredAgentNamespace = command.pluginInfo?.pluginManifest.name
+    // Run the sub-agent (preferredAgentNamespace already defined above)
     for await (const message of runAgent({
       agentDefinition,
       promptMessages,
