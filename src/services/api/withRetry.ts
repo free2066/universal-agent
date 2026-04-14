@@ -104,13 +104,13 @@ const HEARTBEAT_INTERVAL_MS = 30_000
  * 关闭需要设置环境变量 CLAUDE_CODE_UNATTENDED_RETRY=false
  */
 function isPersistentRetryEnabled(): boolean {
-  if (feature('UNATTENDED_RETRY')) {
-    // feature gate 开启时，使用环境变量控制
-    // 关闭需要显式设置为 "false"
-    return process.env.CLAUDE_CODE_UNATTENDED_RETRY !== 'false'
+  const envValue = process.env.CLAUDE_CODE_UNATTENDED_RETRY
+  // 未设置或非 false 值都开启持久重试模式
+  if (envValue === undefined || envValue !== 'false') {
+    return true
   }
-  // 默认开启持久重试模式（UA 修改）
-  return true
+  // 只有显式设置为 'false' 才关闭
+  return false
 }
 
 function isTransientCapacityError(error: unknown): boolean {

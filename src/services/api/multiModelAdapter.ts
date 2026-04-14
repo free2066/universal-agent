@@ -14,6 +14,7 @@ import { appendFile } from 'fs/promises'
 import { resolve as pathResolve, normalize as pathNormalize } from 'path'
 import { createLLMClient } from '../../models/llm/factory.js'
 import { getModelPromptRules } from '../modelPrompt/index.js'
+import { sleep } from '../../utils/sleep.js'
 
 // MA-6: Validate UA_DEBUG_LOG path once at module load to prevent path traversal.
 // Reject /proc, /sys, /etc and other dangerous system directories.
@@ -33,6 +34,15 @@ function uaLogAsync(msg: string): void {
   if (!_UA_LOG_PATH) return
   const line = `[${new Date().toISOString()}] ${msg}\n`
   appendFile(_UA_LOG_PATH, line).catch(() => {})
+}
+
+// UA 修改：持久重试模式 - 默认开启持久重试
+function isPersistentRetryEnabled(): boolean {
+  const envValue = process.env.CLAUDE_CODE_UNATTENDED_RETRY
+  if (envValue === undefined || envValue !== 'false') {
+    return true
+  }
+  return false
 }
 
 /** Convert Anthropic BetaMessageStreamParams → UA ChatOptions messages array (NO system) */
@@ -567,11 +577,22 @@ export class MultiModelAnthropicAdapter {
         const outputTokensFn = () => Math.ceil(outputLen / 4)
 
         // Wrap streamChat in a retry helper so 429 rate-limit errors from the
-        // streaming request are retried (15s → 30s → 60s → give up) before the
-        // rejection propagates into buildRealStreamResult and surfaces to the user.
-        const RETRY_DELAYS_STREAM = [15_000, 30_000, 60_000]
-        const attemptStream = (attempt: number): Promise<any> =>
-          this.llmClient.streamChat(chatOptions, onChunk).then(
+        // streaming request are retried before the rejection propagates.
+        // UA 修改：支持持久重试模式
+        const persistent = isPersistentRetryEnabled()
+        const baseDelays = [15_000, 30_000, 60_000]
+        const getStreamDelay = (attempt: number): number => {
+          if (persistent) {
+            // 持久模式：指数退避，最大 5 分钟
+            return Math.min(15_000 * Math.pow(2, attempt), 5 * 60 * 1000)
+          }
+          // 普通模式：固定延迟数组
+          return baseDelays[attempt] ?? 60_000
+        }
+        
+        const attemptStream = async (attempt: number): Promise<any> => {
+          const delay = getStreamDelay(attempt)
+          return this.llmClient.streamChat(chatOptions, onChunk).then(
             (r: any) => {
               chatResponse = r
               notifyResolve?.()
@@ -583,9 +604,24 @@ export class MultiModelAnthropicAdapter {
               // MA-5: only retry BEFORE any tokens were sent to CC.
               // If chunkQueue has content, CC already consumed those tokens; retrying
               // would send duplicate events and corrupt the response.
-              if (is429 && attempt < RETRY_DELAYS_STREAM.length && chunkQueue.length === 0) {
-                const delay = RETRY_DELAYS_STREAM[attempt]
-                process.stderr.write(`[UA:429] stream rate limited, retry ${attempt + 1}/${RETRY_DELAYS_STREAM.length} in ${delay / 1000}s...\n`)
+              if (is429 && chunkQueue.length === 0) {
+                const retryNum = attempt + 1
+                if (persistent) {
+                  process.stderr.write(`[UA:429] stream rate limited, persistent retry ${retryNum}, waiting ${delay / 1000}s...\n`)
+                  // 分段睡眠，定期输出心跳
+                  let remaining = delay
+                  while (remaining > 0) {
+                    const chunk = Math.min(remaining, 30_000)
+                    await sleep(chunk)
+                    remaining -= chunk
+                    if (remaining > 0) {
+                      process.stderr.write(`[UA:429] stream still waiting... ${remaining / 1000}s remaining\n`)
+                    }
+                  }
+                } else {
+                  process.stderr.write(`[UA:429] stream rate limited, retry ${retryNum}/${baseDelays.length} in ${delay / 1000}s...\n`)
+                  await new Promise<void>(res => setTimeout(res, delay))
+                }
                 // Reset queue for the fresh attempt
                 chunkQueue.length = 0
                 outputLen = 0
@@ -596,13 +632,13 @@ export class MultiModelAnthropicAdapter {
                 const oldResolve = notifyResolve
                 notifyPromise = new Promise<void>(res => { notifyResolve = res })
                 oldResolve?.()
-                await new Promise<void>(res => setTimeout(res, delay))
                 return attemptStream(attempt + 1)
               }
               notifyResolve?.()
               throw e
             },
           )
+        }
 
         const streamChatPromise = attemptStream(0)
 
@@ -626,18 +662,49 @@ export class MultiModelAnthropicAdapter {
       }
     } catch (err: any) {
       // ── 429 Rate-limit auto-retry ──────────────────────────────────────────
-      // Delays: 15s → 30s → 60s → give up (4th attempt throws normally)
-      // retryCount is passed as a method parameter (not via params) to keep
-      // the params object clean and avoid polluting the LLM client payload.
-      const RETRY_DELAYS = [15_000, 30_000, 60_000]
+      // UA 修改：支持持久重试模式，避免长时间任务因限流中断
+      // 普通模式：15s → 30s → 60s → give up (最多 3 次重试)
+      // 持久模式：无限重试，每 30 秒输出心跳进度
       const is429 = err?.status === 429 || (err?.message ?? '').includes('429')
-      if (is429 && retryCount < RETRY_DELAYS.length) {
-        const delay = RETRY_DELAYS[retryCount]!
-        process.stderr.write(
-          `[UA:429] rate limited on ${this.modelName}, retry ${retryCount + 1}/${RETRY_DELAYS.length} in ${delay / 1000}s...\n`,
-        )
-        await new Promise<void>(resolve => setTimeout(resolve, delay))
-        return this._callModel(params, options, retryCount + 1)
+      if (is429) {
+        const persistent = isPersistentRetryEnabled()
+        const maxRetries = persistent ? Infinity : 3
+        const baseDelays = [15_000, 30_000, 60_000]
+        
+        if (retryCount < maxRetries) {
+          // 持久模式：使用指数退避，最大 5 分钟
+          // 普通模式：使用固定延迟数组
+          let delay: number
+          if (persistent) {
+            // 指数退避：15s → 30s → 60s → 120s → ... → 最大 5 分钟
+            delay = Math.min(15_000 * Math.pow(2, retryCount), 5 * 60 * 1000)
+          } else {
+            delay = baseDelays[retryCount] ?? 60_000
+          }
+          
+          const retryNum = retryCount + 1
+          if (persistent) {
+            process.stderr.write(
+              `[UA:429] rate limited on ${this.modelName}, persistent retry ${retryNum}, waiting ${delay / 1000}s...\n`,
+            )
+            // 分段睡眠，定期输出心跳
+            let remaining = delay
+            while (remaining > 0) {
+              const chunk = Math.min(remaining, 30_000)
+              await sleep(chunk)
+              remaining -= chunk
+              if (remaining > 0) {
+                process.stderr.write(`[UA:429] still waiting... ${remaining / 1000}s remaining\n`)
+              }
+            }
+          } else {
+            process.stderr.write(
+              `[UA:429] rate limited on ${this.modelName}, retry ${retryNum}/3 in ${delay / 1000}s...\n`,
+            )
+            await new Promise<void>(resolve => setTimeout(resolve, delay))
+          }
+          return this._callModel(params, options, retryCount + 1)
+        }
       }
       // ── /429 auto-retry ────────────────────────────────────────────────────
 
