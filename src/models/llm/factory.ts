@@ -58,6 +58,56 @@ function resolveModelName(model: string): string {
   return resolved || model;
 }
 
+/**
+ * Agent 模型自动映射配置
+ * 从 ~/.uagent/models.json 的 agentModels 加载
+ * 格式: { "claude-haiku-4-5": "glm-5", "claude-opus-4-6": "mimov2pro", ... }
+ * 
+ * 这样 OMC 更新时，agent 文件里的 claude-* 模型会自动替换为用户配置的模型
+ */
+let agentModelMapCache: Map<string, string> | null = null;
+
+function getAgentModelMap(): Map<string, string> {
+  if (agentModelMapCache) return agentModelMapCache;
+
+  agentModelMapCache = new Map();
+
+  try {
+    const configPath = resolve(homedir(), '.uagent', 'models.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+
+    // 从 agentModels 配置读取映射
+    if (config.agentModels && typeof config.agentModels === 'object') {
+      for (const [fromModel, toModel] of Object.entries(config.agentModels)) {
+        if (fromModel && toModel) {
+          agentModelMapCache.set(fromModel.toLowerCase(), String(toModel));
+        }
+      }
+    }
+  } catch {
+    // 忽略读取错误
+  }
+
+  return agentModelMapCache;
+}
+
+/**
+ * 解析 agent 模型名称：
+ * - 如果 models.json 配置了 agentModels 映射表，用配置的模型替换
+ * - 例如: "claude-haiku-4-5" → "glm-5" → "ep-vquxqj-..."
+ * - 这样 OMC 更新 agent 时无需手动修改模型配置
+ */
+export function resolveAgentModel(model: string): string {
+  const agentMap = getAgentModelMap();
+  const mapped = agentMap.get(model.toLowerCase());
+  if (mapped) {
+    // 先映射，再解析友好名称
+    return resolveModelName(mapped);
+  }
+  // 没有配置映射，直接解析友好名称
+  return resolveModelName(model);
+}
+
 export function createLLMClient(model: string): LLMClient {
   if (!model) return new OpenAIClient(model);
 

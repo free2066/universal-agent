@@ -13,6 +13,7 @@ import {
   McpServerConfigSchema,
 } from '../../services/mcp/types.js'
 import type { ToolUseContext } from '../../Tool.js'
+import { resolveAgentModel } from '../../models/llm/factory.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
 import {
@@ -574,7 +575,11 @@ export function parseAgentFromMarkdown(
     let model: string | undefined
     if (typeof modelRaw === 'string' && modelRaw.trim().length > 0) {
       const trimmed = modelRaw.trim()
-      model = trimmed.toLowerCase() === 'inherit' ? 'inherit' : trimmed
+      // 如果是 "inherit"，保持原样；否则使用 agentModelMap 映射
+      // 这样 OMC 更新的 claude-* 模型会自动替换为用户配置的模型
+      model = trimmed.toLowerCase() === 'inherit' 
+        ? 'inherit' 
+        : resolveAgentModel(trimmed)
     }
 
     // Parse background flag
