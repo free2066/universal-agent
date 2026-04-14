@@ -273,7 +273,7 @@ export async function* withRetry<T>(
       ) {
         // If the 429 is specifically because extra usage (overage) is not
         // available, permanently disable fast mode with a specific message.
-        const overageReason = error.headers?.get(
+        const overageReason = error.headers?.get?.(
           'anthropic-ratelimit-unified-overage-disabled-reason',
         )
         if (overageReason != null) {
