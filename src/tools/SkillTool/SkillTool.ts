@@ -221,11 +221,16 @@ async function executeForkedSkill(
 
   try {
     // Run the sub-agent
+    const preferredAgentNamespace = command.pluginInfo?.pluginManifest.name
     for await (const message of runAgent({
       agentDefinition,
       promptMessages,
       toolUseContext: {
         ...context,
+        options: {
+          ...context.options,
+          preferredAgentNamespace,
+        },
         getAppState: modifiedGetAppState,
       },
       canUseTool,
