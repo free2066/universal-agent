@@ -74,31 +74,59 @@ async function downloadRipgrep(): Promise<string | null> {
 
   logForDebugging(`[ripgrep] downloading from: ${url}`)
 
-  try {
-    // Create target directory
-    mkdirSync(UA_RIPGREP_DIR, { recursive: true })
+  // Create target directory
+  mkdirSync(UA_RIPGREP_DIR, { recursive: true })
 
-    // Download the file
-    const tempFile = path.join(UA_RIPGREP_DIR, `ripgrep-download-${Date.now()}.tar.gz`)
+  // Retry download up to 3 times with exponential backoff
+  const maxRetries = 3
+  let lastError: Error | null = null
 
-    await new Promise<void>((resolve, reject) => {
-      // Use curl for reliable downloads (available on macOS/Linux by default)
-      try {
-        execSync(`curl -L -o "${tempFile}" "${url}"`, {
-          stdio: 'pipe',
-          timeout: 120_000, // 2 minute timeout
-        })
-        resolve()
-      } catch (error) {
-        reject(error)
-      }
-    })
-
-    // Extract the archive
-    const extractDir = path.join(UA_RIPGREP_DIR, `ripgrep-extract-${Date.now()}`)
-    mkdirSync(extractDir, { recursive: true })
-
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const tempFile = path.join(UA_RIPGREP_DIR, `ripgrep-download-${Date.now()}-${attempt}.tar.gz`)
+    
     try {
+      logForDebugging(`[ripgrep] download attempt ${attempt}/${maxRetries}`)
+
+      // Use Bun's native fetch with retry logic
+      let response: Response | null = null
+      for (let fetchAttempt = 1; fetchAttempt <= 3; fetchAttempt++) {
+        try {
+          response = await fetch(url, {
+            signal: AbortSignal.timeout(120_000),
+          })
+          break
+        } catch (fetchError) {
+          if (fetchAttempt === 3) throw fetchError
+          await new Promise(r => setTimeout(r, 1000 * fetchAttempt))
+        }
+      }
+
+      if (!response || !response.ok) {
+        const statusText = response?.statusText || 'unknown'
+        const statusCode = response?.status || 0
+        throw new Error(`HTTP ${statusCode} ${statusText} for ${url}`)
+      }
+
+      // Write to file using streams for memory efficiency
+      const { writeFileSync } = require('fs')
+      const arrayBuffer = await response.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+      
+      // Verify minimum size (ripgrep binary should be > 1MB)
+      if (buffer.length < 1_000_000) {
+        const content = buffer.toString('utf8', 0, Math.min(200, buffer.length))
+        if (content.includes('<!') || content.includes('Not Found') || content.includes('404') || content.includes('error')) {
+          throw new Error(`Downloaded file is not a valid ripgrep archive (size: ${buffer.length}, preview: ${content})`)
+        }
+      }
+      
+      writeFileSync(tempFile, buffer)
+      logForDebugging(`[ripgrep] downloaded ${buffer.length} bytes`)
+
+      // Extract the archive
+      const extractDir = path.join(UA_RIPGREP_DIR, `ripgrep-extract-${Date.now()}-${attempt}`)
+      mkdirSync(extractDir, { recursive: true })
+
       if (platform.file.endsWith('.zip')) {
         // Windows: unzip
         execSync(`unzip -o "${tempFile}" -d "${extractDir}"`, { stdio: 'pipe' })
@@ -107,11 +135,10 @@ async function downloadRipgrep(): Promise<string | null> {
         execSync(`tar -xzf "${tempFile}" -C "${extractDir}"`, { stdio: 'pipe' })
       }
 
-      // Move the rg binary to the final location
-      const extractedRg = path.join(extractDir, platform.dir, process.platform === 'win32' ? 'rg.exe' : 'rg')
-      
-      if (!existsSync(extractedRg)) {
-        throw new Error(`Extracted ripgrep not found at: ${extractedRg}`)
+      // Find the rg binary in extracted directory
+      const extractedRg = findExtractedRg(extractDir, platform.dir)
+      if (!extractedRg || !existsSync(extractedRg)) {
+        throw new Error(`Extracted ripgrep not found in: ${extractDir}`)
       }
 
       chmodSync(extractedRg, 0o755)
@@ -124,19 +151,70 @@ async function downloadRipgrep(): Promise<string | null> {
       execSync(`mv "${extractedRg}" "${UA_RIPGREP_PATH}"`, { stdio: 'pipe' })
       
       logForDebugging(`[ripgrep] successfully downloaded and installed to: ${UA_RIPGREP_PATH}`)
-    } finally {
+      
       // Cleanup temp files
+      cleanupTempFiles(tempFile, extractDir)
+      
+      return UA_RIPGREP_PATH
+    } catch (error) {
+      lastError = error as Error
+      logForDebugging(`[ripgrep] download attempt ${attempt} failed: ${lastError.message}`)
+      
+      // Cleanup on failure
       try { unlinkSync(tempFile) } catch { /* ignore */ }
-      try {
-        execSync(`rm -rf "${extractDir}"`, { stdio: 'pipe' })
-      } catch { /* ignore */ }
+      try { execSync(`rm -rf "${extractDir}"`, { stdio: 'pipe' }) } catch { /* ignore */ }
+      
+      // Wait before retry (exponential backoff: 2s, 4s, 8s)
+      if (attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 1000
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
     }
-
-    return UA_RIPGREP_PATH
-  } catch (error) {
-    logForDebugging(`[ripgrep] auto-download failed: ${error}`)
-    return null
   }
+
+  logForDebugging(`[ripgrep] auto-download failed after ${maxRetries} attempts: ${lastError?.message}`)
+  return null
+}
+
+/**
+ * Find the extracted ripgrep binary in the extraction directory
+ * Handles both nested and flat directory structures
+ */
+function findExtractedRg(extractDir: string, expectedDir: string): string | null {
+  const { readdirSync } = require('fs')
+  
+  // Try expected path first
+  const expectedPath = path.join(extractDir, expectedDir, process.platform === 'win32' ? 'rg.exe' : 'rg')
+  if (existsSync(expectedPath)) {
+    return expectedPath
+  }
+  
+  // Try flat structure (rg binary at root of extract dir)
+  const flatPath = path.join(extractDir, process.platform === 'win32' ? 'rg.exe' : 'rg')
+  if (existsSync(flatPath)) {
+    return flatPath
+  }
+  
+  // Search recursively for rg binary
+  try {
+    const entries = readdirSync(extractDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const found = findExtractedRg(path.join(extractDir, entry.name), '')
+        if (found) return found
+      }
+    }
+  } catch { /* ignore */ }
+  
+  return null
+}
+
+/**
+ * Clean up temporary files from download
+ */
+function cleanupTempFiles(tempFile: string, extractDir: string): void {
+  try { unlinkSync(tempFile) } catch { /* ignore */ }
+  try { execSync(`rm -rf "${extractDir}"`, { stdio: 'pipe' }) } catch { /* ignore */ }
 }
 
 // Cache for the downloaded ripgrep path
