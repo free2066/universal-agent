@@ -8,6 +8,7 @@ import {
   parseUserSpecifiedModel,
 } from './model.js'
 import { getAPIProvider } from './providers.js'
+import { resolveAgentModel } from '../../models/llm/factory.js'
 
 export const AGENT_MODEL_OPTIONS = [...MODEL_ALIASES, 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
@@ -68,11 +69,13 @@ export function getAgentModel(
 
   // Prioritize tool-specified model if provided
   if (toolSpecifiedModel) {
-    if (aliasMatchesParentTier(toolSpecifiedModel, parentModel)) {
+    // UA: 先通过 resolveAgentModel 映射 claude-* 别名到用户配置的模型
+    const resolvedToolModel = resolveAgentModel(toolSpecifiedModel)
+    if (aliasMatchesParentTier(resolvedToolModel, parentModel)) {
       return parentModel
     }
-    const model = parseUserSpecifiedModel(toolSpecifiedModel)
-    return applyParentRegionPrefix(model, toolSpecifiedModel)
+    const model = parseUserSpecifiedModel(resolvedToolModel)
+    return applyParentRegionPrefix(model, resolvedToolModel)
   }
 
   const agentModelWithExp = agentModel ?? getDefaultSubagentModel()
