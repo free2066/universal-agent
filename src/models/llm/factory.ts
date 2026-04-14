@@ -30,7 +30,7 @@ function getModelNameCache(): Map<string, string> {
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
     
     if (config.profiles && Array.isArray(config.profiles)) {
-      for (const profile of config.profiles) {
+      for (const profile of config.profiles as Array<{ name?: string; displayName?: string; modelName?: string }>) {
         // 映射 name 和 displayName（如果有）指向实际模型名
         if (profile.name && profile.modelName) {
           modelNameCache.set(profile.name.toLowerCase(), profile.modelName);
@@ -78,9 +78,9 @@ function getAgentModelMap(): Map<string, string> {
 
     // 从 agentModels 配置读取映射
     if (config.agentModels && typeof config.agentModels === 'object') {
-      for (const [fromModel, toModel] of Object.entries(config.agentModels)) {
+      for (const [fromModel, toModel] of Object.entries(config.agentModels as Record<string, string>)) {
         if (fromModel && toModel) {
-          agentModelMapCache.set(fromModel.toLowerCase(), String(toModel));
+          agentModelMapCache.set(fromModel.toLowerCase(), toModel);
         }
       }
     }
