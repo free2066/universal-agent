@@ -98,10 +98,19 @@ const PERSISTENT_MAX_BACKOFF_MS = 5 * 60 * 1000
 const PERSISTENT_RESET_CAP_MS = 6 * 60 * 60 * 1000
 const HEARTBEAT_INTERVAL_MS = 30_000
 
+/**
+ * Check if persistent retry mode is enabled.
+ * UA 修改：默认开启持久重试模式，避免 429 限流导致任务中断。
+ * 关闭需要设置环境变量 CLAUDE_CODE_UNATTENDED_RETRY=false
+ */
 function isPersistentRetryEnabled(): boolean {
-  return feature('UNATTENDED_RETRY')
-    ? isEnvTruthy(process.env.CLAUDE_CODE_UNATTENDED_RETRY)
-    : false
+  if (feature('UNATTENDED_RETRY')) {
+    // feature gate 开启时，使用环境变量控制
+    // 关闭需要显式设置为 "false"
+    return process.env.CLAUDE_CODE_UNATTENDED_RETRY !== 'false'
+  }
+  // 默认开启持久重试模式（UA 修改）
+  return true
 }
 
 function isTransientCapacityError(error: unknown): boolean {
