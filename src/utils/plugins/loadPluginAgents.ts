@@ -11,6 +11,7 @@ import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
+import { resolveAgentModel } from '../../models/llm/factory.js'
 import { logForDebugging } from '../debug.js'
 import { EFFORT_LEVELS, parseEffortValue } from '../effort.js'
 import {
@@ -102,7 +103,10 @@ async function loadAgentFromFile(
     let model: string | undefined
     if (typeof modelRaw === 'string' && modelRaw.trim().length > 0) {
       const trimmed = modelRaw.trim()
-      model = trimmed.toLowerCase() === 'inherit' ? 'inherit' : trimmed
+      // 如果是 "inherit"，保持原样；否则使用 agentModelMap 映射
+      model = trimmed.toLowerCase() === 'inherit' 
+        ? 'inherit' 
+        : resolveAgentModel(trimmed)
     }
     const backgroundRaw = frontmatter.background
     const background =
