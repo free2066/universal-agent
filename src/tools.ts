@@ -117,6 +117,9 @@ const TerminalCaptureTool = feature('TERMINAL_PANEL')
 const WebBrowserTool = feature('WEB_BROWSER_TOOL')
   ? require('./tools/WebBrowserTool/WebBrowserTool.js').WebBrowserTool
   : null
+const BrowserSandboxTool = feature('BROWSER_SANDBOX')
+  ? require('./tools/BrowserSandboxTool/BrowserSandboxTool.js').BrowserSandboxTool
+  : null
 const coordinatorModeModule = feature('COORDINATOR_MODE')
   ? (require('./coordinator/coordinatorMode.js') as typeof import('./coordinator/coordinatorMode.js'))
   : null
@@ -215,6 +218,7 @@ export function getAllBaseTools(): Tools {
     ...(process.env.USER_TYPE === 'ant' ? [TungstenTool] : []),
     ...(SuggestBackgroundPRTool ? [SuggestBackgroundPRTool] : []),
     ...(WebBrowserTool ? [WebBrowserTool] : []),
+    ...(BrowserSandboxTool ? [BrowserSandboxTool] : []),
     ...(isTodoV2Enabled()
       ? [TaskCreateTool, TaskGetTool, TaskUpdateTool, TaskListTool]
       : []),

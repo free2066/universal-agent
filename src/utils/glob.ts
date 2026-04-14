@@ -233,6 +233,12 @@ async function globNative({
         continue
       }
 
+      // Skip symlinks — ripgrep's default does not follow symlinks, and following
+      // them risks infinite recursion on circular directory symlinks.
+      if (entry.isSymbolicLink()) {
+        continue
+      }
+
       const stats = await getEntryStats(absolutePath)
       if (!stats) {
         continue

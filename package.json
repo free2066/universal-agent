@@ -1,6 +1,6 @@
 {
   "name": "universal-agent",
-  "version": "1.2.87",
+  "version": "1.2.88",
   "description": "🤖 A universal multi-domain AI Agent CLI - claude-code core engine with multi-LLM support (OpenAI, Gemini, Ollama, Anthropic)",
   "type": "module",
   "bin": {

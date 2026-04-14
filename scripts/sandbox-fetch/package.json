@@ -1,0 +1,13 @@
+{
+  "name": "sandbox-fetch",
+  "version": "1.0.0",
+  "description": "Browser sandbox with CDP network interception for universal-agent",
+  "type": "module",
+  "main": "sandbox-fetch.mjs",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
