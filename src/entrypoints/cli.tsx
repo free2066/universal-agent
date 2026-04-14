@@ -268,24 +268,34 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     // vendor/ directory does not exist. Use `which rg` as a fallback to cover
     // paths not in the static whitelist (e.g. ~/.local/bin/rg, /snap/bin/rg).
     // CLI-6: do NOT auto-install via brew — this installs software without user consent.
+    // Instead, auto-download ripgrep to ~/.uagent/bin/rg (non-blocking).
     try {
       const { existsSync: _ex, execSync: _execSync } = require('fs'), { execSync } = require('child_process')
       const rgPaths = ['/opt/homebrew/bin/rg', '/usr/local/bin/rg', '/usr/bin/rg', '/snap/bin/rg',
-        `${process.env.HOME ?? ''}/.local/bin/rg`, `${process.env.HOME ?? ''}/.cargo/bin/rg`]
+        `${process.env.HOME ?? ''}/.local/bin/rg`, `${process.env.HOME ?? ''}/.cargo/bin/rg`,
+        `${process.env.HOME ?? ''}/.uagent/bin/rg`]
       const rgExists = rgPaths.some((p: string) => {
         try { return require('fs').existsSync(p) } catch { return false }
       }) || (() => {
         try { execSync('which rg', { encoding: 'utf8', stdio: 'pipe' }); return true } catch { return false }
       })()
       if (!rgExists) {
-        uaLog(`[ripgrep] rg not found`)
-        process.stderr.write('[uagent] Warning: ripgrep (rg) not found. Please install it:\n')
-        if (process.platform === 'darwin') {
-          process.stderr.write('  brew install ripgrep\n')
-        } else {
-          process.stderr.write('  apt install ripgrep  # or: cargo install ripgrep\n')
-        }
-        uaLog(`[ripgrep] suggested manual install to user`)
+        uaLog(`[ripgrep] rg not found, triggering auto-download to ~/.uagent/bin/rg`)
+        // Trigger async download in background (non-blocking)
+        // This uses setImmediate to not block the startup
+        setImmediate(async () => {
+          try {
+            const { ensureRipgrep } = await import('../utils/ripgrep.js')
+            const downloaded = await ensureRipgrep()
+            if (downloaded) {
+              uaLog(`[ripgrep] auto-download succeeded: ${downloaded}`)
+            } else {
+              uaLog(`[ripgrep] auto-download failed, GrepTool will fall back to bash grep`)
+            }
+          } catch (e) {
+            uaLog(`[ripgrep] auto-download error: ${e}`)
+          }
+        })
       } else {
         uaLog(`[ripgrep] rg found`)
       }

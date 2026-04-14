@@ -1,5 +1,8 @@
 import type { ChildProcess, ExecFileException } from 'child_process'
 import { execFile, spawn } from 'child_process'
+import { createWriteStream } from 'fs'
+import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'fs'
+import { execSync } from 'child_process'
 import memoize from 'lodash-es/memoize.js'
 import { homedir } from 'os'
 import * as path from 'path'
@@ -13,6 +16,152 @@ import { findExecutable } from './findExecutable.js'
 import { logError } from './log.js'
 import { getPlatform } from './platform.js'
 import { countCharInString } from './stringUtils.js'
+
+// uagent local ripgrep installation directory
+const UA_RIPGREP_DIR = path.join(homedir(), '.uagent', 'bin')
+const UA_RIPGREP_PATH = path.join(UA_RIPGREP_DIR, 'rg')
+
+/**
+ * Platform-specific ripgrep download information
+ */
+interface RipgrepPlatformInfo {
+  file: string
+  dir: string
+}
+
+/**
+ * Get the ripgrep platform info for the current platform
+ */
+function getRipgrepPlatform(): RipgrepPlatformInfo | null {
+  const p = process.platform
+  const arch = process.arch
+
+  if (p === 'darwin' && arch === 'arm64') {
+    return { file: 'ripgrep-13.0.0-aarch64-apple-darwin.tar.gz', dir: 'ripgrep-13.0.0-aarch64-apple-darwin' }
+  }
+  if (p === 'darwin' && arch === 'x64') {
+    return { file: 'ripgrep-13.0.0-x86_64-apple-darwin.tar.gz', dir: 'ripgrep-13.0.0-x86_64-apple-darwin' }
+  }
+  if (p === 'linux' && arch === 'x64') {
+    return { file: 'ripgrep-13.0.0-x86_64-unknown-linux-musl.tar.gz', dir: 'ripgrep-13.0.0-x86_64-unknown-linux-musl' }
+  }
+  if (p === 'win32' && arch === 'x64') {
+    return { file: 'ripgrep-13.0.0-x86_64-pc-windows-msvc.zip', dir: 'ripgrep-13.0.0-x86_64-pc-windows-msvc' }
+  }
+  return null
+}
+
+/**
+ * Download and extract ripgrep to the user's local bin directory
+ * Returns the path to the downloaded rg binary, or null if download failed
+ */
+async function downloadRipgrep(): Promise<string | null> {
+  const platform = getRipgrepPlatform()
+  if (!platform) {
+    logForDebugging(`[ripgrep] unsupported platform: ${process.platform}/${process.arch}`)
+    return null
+  }
+
+  // Check if already downloaded
+  if (existsSync(UA_RIPGREP_PATH)) {
+    logForDebugging(`[ripgrep] using cached local ripgrep at: ${UA_RIPGREP_PATH}`)
+    return UA_RIPGREP_PATH
+  }
+
+  const version = '13.0.0'
+  const baseUrl = 'https://github.com/BurntSushi/ripgrep/releases/download'
+  const url = `${baseUrl}/${version}/${platform.file}`
+
+  logForDebugging(`[ripgrep] downloading from: ${url}`)
+
+  try {
+    // Create target directory
+    mkdirSync(UA_RIPGREP_DIR, { recursive: true })
+
+    // Download the file
+    const tempFile = path.join(UA_RIPGREP_DIR, `ripgrep-download-${Date.now()}.tar.gz`)
+
+    await new Promise<void>((resolve, reject) => {
+      // Use curl for reliable downloads (available on macOS/Linux by default)
+      try {
+        execSync(`curl -L -o "${tempFile}" "${url}"`, {
+          stdio: 'pipe',
+          timeout: 120_000, // 2 minute timeout
+        })
+        resolve()
+      } catch (error) {
+        reject(error)
+      }
+    })
+
+    // Extract the archive
+    const extractDir = path.join(UA_RIPGREP_DIR, `ripgrep-extract-${Date.now()}`)
+    mkdirSync(extractDir, { recursive: true })
+
+    try {
+      if (platform.file.endsWith('.zip')) {
+        // Windows: unzip
+        execSync(`unzip -o "${tempFile}" -d "${extractDir}"`, { stdio: 'pipe' })
+      } else {
+        // Unix: tar
+        execSync(`tar -xzf "${tempFile}" -C "${extractDir}"`, { stdio: 'pipe' })
+      }
+
+      // Move the rg binary to the final location
+      const extractedRg = path.join(extractDir, platform.dir, process.platform === 'win32' ? 'rg.exe' : 'rg')
+      
+      if (!existsSync(extractedRg)) {
+        throw new Error(`Extracted ripgrep not found at: ${extractedRg}`)
+      }
+
+      chmodSync(extractedRg, 0o755)
+      
+      // Rename to final path
+      if (existsSync(UA_RIPGREP_PATH)) {
+        unlinkSync(UA_RIPGREP_PATH)
+      }
+      
+      execSync(`mv "${extractedRg}" "${UA_RIPGREP_PATH}"`, { stdio: 'pipe' })
+      
+      logForDebugging(`[ripgrep] successfully downloaded and installed to: ${UA_RIPGREP_PATH}`)
+    } finally {
+      // Cleanup temp files
+      try { unlinkSync(tempFile) } catch { /* ignore */ }
+      try {
+        execSync(`rm -rf "${extractDir}"`, { stdio: 'pipe' })
+      } catch { /* ignore */ }
+    }
+
+    return UA_RIPGREP_PATH
+  } catch (error) {
+    logForDebugging(`[ripgrep] auto-download failed: ${error}`)
+    return null
+  }
+}
+
+// Cache for the downloaded ripgrep path
+let cachedLocalRipgrep: string | null = null
+
+/**
+ * Ensure ripgrep is available by downloading it if needed
+ * Returns the path to ripgrep, or null if not available
+ */
+export async function ensureRipgrep(): Promise<string | null> {
+  // Check cached value first
+  if (cachedLocalRipgrep !== null) {
+    return cachedLocalRipgrep
+  }
+
+  // Check if already exists
+  if (existsSync(UA_RIPGREP_PATH)) {
+    cachedLocalRipgrep = UA_RIPGREP_PATH
+    return cachedLocalRipgrep
+  }
+
+  // Try to download
+  cachedLocalRipgrep = await downloadRipgrep()
+  return cachedLocalRipgrep
+}
 
 const __filename = fileURLToPath(import.meta.url)
 // we use node:path.join instead of node:url.resolve because the former doesn't encode spaces
@@ -62,7 +211,6 @@ const getRipgrepConfig = memoize((): RipgrepConfig => {
   // NOTE: do NOT pass knownPaths to findExecutable — its second argument is
   // extra CLI args, not search paths. Use existsSync for direct path checks.
   {
-    const { existsSync } = require('fs') as typeof import('fs')
     const knownRgPaths =
       process.platform === 'win32'
         ? [] as string[]
@@ -74,6 +222,14 @@ const getRipgrepConfig = memoize((): RipgrepConfig => {
     }
   }
 
+  // Try uagent's locally downloaded ripgrep (from ~/.uagent/bin/rg)
+  // This is checked synchronously here; async download happens during startup
+  if (existsSync(UA_RIPGREP_PATH)) {
+    logForDebugging(`[ripgrep] using local rg at: ${UA_RIPGREP_PATH}`)
+    return { mode: 'system', command: UA_RIPGREP_PATH, args: [] }
+  }
+
+  // Fall back to bundled vendor ripgrep (if present)
   const rgRoot = path.resolve(__dirname, 'vendor', 'ripgrep')
   const command =
     process.platform === 'win32'
