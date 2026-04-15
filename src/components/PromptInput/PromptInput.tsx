@@ -95,6 +95,7 @@ import { findThinkingTriggerPositions, getRainbowColor, isUltrathinkEnabled } fr
 import { findTokenBudgetPositions } from '../../utils/tokenBudget.js';
 import { findUltraplanTriggerPositions, findUltrareviewTriggerPositions } from '../../utils/ultraplan/keyword.js';
 import { AutoModeOptInDialog } from '../AutoModeOptInDialog.js';
+import { BypassPermissionsOptInDialog } from '../BypassPermissionsOptInDialog.js';
 import { BridgeDialog } from '../BridgeDialog.js';
 import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
 import { getVisibleAgentTasks, useCoordinatorTaskCount } from '../CoordinatorAgentStatus.js';
@@ -413,6 +414,9 @@ function PromptInput({
   const [showAutoModeOptIn, setShowAutoModeOptIn] = useState(false);
   const [previousModeBeforeAuto, setPreviousModeBeforeAuto] = useState<PermissionMode | null>(null);
   const autoModeOptInTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // UA 新增：bypassPermissions 模式确认对话框状态
+  const [showBypassPermissionsOptIn, setShowBypassPermissionsOptIn] = useState(false);
+  const [previousModeBeforeBypass, setPreviousModeBeforeBypass] = useState<PermissionMode | null>(null);
 
   // Check if cursor is on the first line of input
   const isCursorOnFirstLine = useMemo(() => {
@@ -1513,6 +1517,24 @@ function PromptInput({
       }
     }
 
+    // UA 新增：检测切换到 bypassPermissions 模式，显示确认对话框
+    if (nextMode === 'bypassPermissions' && process.env.USER_TYPE !== 'ant') {
+      // 存储之前的模式，以便用户拒绝时恢复
+      setPreviousModeBeforeBypass(toolPermissionContext.mode);
+      // 显示确认对话框
+      setShowBypassPermissionsOptIn(true);
+      if (helpOpen) {
+        setHelpOpen(false);
+      }
+      return;
+    }
+
+    // 关闭 bypassPermissions 确认对话框（如果正在切换到其他模式）
+    if (showBypassPermissionsOptIn) {
+      setShowBypassPermissionsOptIn(false);
+      setPreviousModeBeforeBypass(null);
+    }
+
     // Now that we know this is NOT the first-time auto mode path,
     // call cyclePermissionMode to apply side effects (e.g. strip
     // dangerous permissions, activate classifier)
@@ -1554,7 +1576,7 @@ function PromptInput({
     if (helpOpen) {
       setHelpOpen(false);
     }
-  }, [toolPermissionContext, teamContext, viewingAgentTaskId, viewedTeammate, setAppState, setToolPermissionContext, helpOpen, showAutoModeOptIn]);
+  }, [toolPermissionContext, teamContext, viewingAgentTaskId, viewedTeammate, setAppState, setToolPermissionContext, helpOpen, showAutoModeOptIn, showBypassPermissionsOptIn]);
 
   // Handler for auto mode opt-in dialog acceptance
   const handleAutoModeOptInAccept = useCallback(() => {
@@ -1616,6 +1638,51 @@ function PromptInput({
       }
     }
   }, [previousModeBeforeAuto, toolPermissionContext, setAppState, setToolPermissionContext]);
+
+  // UA 新增：Handler for bypassPermissions mode opt-in dialog acceptance
+  const handleBypassPermissionsOptInAccept = useCallback(() => {
+    setShowBypassPermissionsOptIn(false);
+    setPreviousModeBeforeBypass(null);
+
+    // 应用 bypassPermissions 模式
+    const newContext = transitionPermissionMode(previousModeBeforeBypass ?? toolPermissionContext.mode, 'bypassPermissions', toolPermissionContext);
+    setAppState(prev => ({
+      ...prev,
+      toolPermissionContext: {
+        ...newContext,
+        mode: 'bypassPermissions'
+      }
+    }));
+    setToolPermissionContext({
+      ...newContext,
+      mode: 'bypassPermissions'
+    });
+
+    if (helpOpen) {
+      setHelpOpen(false);
+    }
+  }, [helpOpen, previousModeBeforeBypass, toolPermissionContext, setAppState, setToolPermissionContext]);
+
+  // UA 新增：Handler for bypassPermissions mode opt-in dialog decline
+  const handleBypassPermissionsOptInDecline = useCallback(() => {
+    setShowBypassPermissionsOptIn(false);
+    setPreviousModeBeforeBypass(null);
+
+    // 恢复之前的模式
+    if (previousModeBeforeBypass) {
+      setAppState(prev => ({
+        ...prev,
+        toolPermissionContext: {
+          ...prev.toolPermissionContext,
+          mode: previousModeBeforeBypass
+        }
+      }));
+      setToolPermissionContext({
+        ...toolPermissionContext,
+        mode: previousModeBeforeBypass
+      });
+    }
+  }, [previousModeBeforeBypass, toolPermissionContext, setAppState, setToolPermissionContext]);
 
   // Handler for chat:imagePaste - paste image from clipboard
   const handleImagePaste = useCallback(() => {
@@ -2121,7 +2188,9 @@ function PromptInput({
   // Must be called before early returns below to satisfy rules-of-hooks.
   // Memoized so the portal useEffect doesn't churn on every PromptInput render.
   const autoModeOptInDialog = useMemo(() => feature('TRANSCRIPT_CLASSIFIER') && showAutoModeOptIn ? <AutoModeOptInDialog onAccept={handleAutoModeOptInAccept} onDecline={handleAutoModeOptInDecline} /> : null, [showAutoModeOptIn, handleAutoModeOptInAccept, handleAutoModeOptInDecline]);
-  useSetPromptOverlayDialog(isFullscreenEnvEnabled() ? autoModeOptInDialog : null);
+  // UA 新增：bypassPermissions 模式确认对话框
+  const bypassPermissionsOptInDialog = useMemo(() => showBypassPermissionsOptIn ? <BypassPermissionsOptInDialog onAccept={handleBypassPermissionsOptInAccept} onDecline={handleBypassPermissionsOptInDecline} /> : null, [showBypassPermissionsOptIn, handleBypassPermissionsOptInAccept, handleBypassPermissionsOptInDecline]);
+  useSetPromptOverlayDialog(isFullscreenEnvEnabled() ? (autoModeOptInDialog || bypassPermissionsOptInDialog) : null);
   if (showBashesDialog) {
     return <BackgroundTasksDialog onDone={() => setShowBashesDialog(false)} toolUseContext={getToolUseContext(messages, [], new AbortController(), mainLoopModel)} initialDetailTaskId={typeof showBashesDialog === 'string' ? showBashesDialog : undefined} />;
   }
@@ -2274,6 +2343,7 @@ function PromptInput({
         </Box>}
       <PromptInputFooter apiKeyStatus={apiKeyStatus} debug={debug} exitMessage={exitMessage} vimMode={isVimModeEnabled() ? vimMode : undefined} mode={mode} autoUpdaterResult={autoUpdaterResult} isAutoUpdating={isAutoUpdating} verbose={verbose} onAutoUpdaterResult={onAutoUpdaterResult} onChangeIsUpdating={setIsAutoUpdating} suggestions={suggestions} selectedSuggestion={selectedSuggestion} maxColumnWidth={maxColumnWidth} toolPermissionContext={effectiveToolPermissionContext} helpOpen={helpOpen} suppressHint={input.length > 0} isLoading={isLoading} tasksSelected={tasksSelected} teamsSelected={teamsSelected} bridgeSelected={bridgeSelected} tmuxSelected={tmuxSelected} teammateFooterIndex={teammateFooterIndex} ideSelection={ideSelection} mcpClients={mcpClients} isPasting={isPasting} isInputWrapped={isInputWrapped} messages={messages} isSearching={isSearchingHistory} historyQuery={historyQuery} setHistoryQuery={setHistoryQuery} historyFailedMatch={historyFailedMatch} onOpenTasksDialog={isFullscreenEnvEnabled() ? handleOpenTasksDialog : undefined} />
       {isFullscreenEnvEnabled() ? null : autoModeOptInDialog}
+      {isFullscreenEnvEnabled() ? null : bypassPermissionsOptInDialog}
       {isFullscreenEnvEnabled() ?
     // position=absolute takes zero layout height so the spinner
     // doesn't shift when a notification appears/disappears. Yoga

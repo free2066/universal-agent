@@ -425,19 +425,12 @@ export function useReplBridge(messages: Message[], setMessages: (action: React.S
               // These mirror print.ts handleSetPermissionMode; the bridge
               // can't import the checks directly (bootstrap-isolation), so
               // it relies on this verdict to emit the error response.
-              if (mode === 'bypassPermissions') {
-                if (isBypassPermissionsModeDisabled()) {
-                  return {
-                    ok: false,
-                    error: 'Cannot set permission mode to bypassPermissions because it is disabled by settings or configuration'
-                  };
-                }
-                if (!store.getState().toolPermissionContext.isBypassPermissionsModeAvailable) {
-                  return {
-                    ok: false,
-                    error: 'Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions'
-                  };
-                }
+              // UA 修改：外部用户也可以切换到 bypassPermissions 模式
+              if (mode === 'bypassPermissions' && isBypassPermissionsModeDisabled()) {
+                return {
+                  ok: false,
+                  error: 'Cannot set permission mode to bypassPermissions because it is disabled by settings or configuration'
+                };
               }
               if (feature('TRANSCRIPT_CLASSIFIER') && mode === 'auto' && !isAutoModeGateEnabled()) {
                 const reason = getAutoModeUnavailableReason();

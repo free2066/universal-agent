@@ -53,6 +53,7 @@ export function getNextPermissionMode(
       return 'plan'
 
     case 'plan':
+      // UA 修改：外部用户也支持切换到 bypassPermissions
       if (toolPermissionContext.isBypassPermissionsModeAvailable) {
         return 'bypassPermissions'
       }
