@@ -37,7 +37,7 @@ import { getGlobalConfig } from '../config.js'
 // UA: module-level cache for UA_EXTRA_MODELS in model selector
 let _uaExtraOptsCache: Array<{ name: string; displayName: string; contextLength?: number }> | null | undefined = undefined
 function getUAExtraOpts(): Array<{ name: string; displayName: string; contextLength?: number }> | null {
-  if (_uaExtraOptsCache !== undefined) return _uaExtraOptsCache
+  // UA: 每次都重新读取，避免 bootstrap 阶段时序问题
   try {
     const raw = process.env.UA_EXTRA_MODELS
     if (!raw) { _uaExtraOptsCache = null; return null }

@@ -52,7 +52,7 @@ export function modelSupports1M(model: string): boolean {
 // UA: module-level cache for UA_EXTRA_MODELS (context window lookups)
 let _uaExtraCtxCache: Array<{ name: string; contextLength?: number; inputLimit?: number }> | null | undefined = undefined
 function getUAExtraCtxModels(): Array<{ name: string; contextLength?: number; inputLimit?: number }> | null {
-  if (_uaExtraCtxCache !== undefined) return _uaExtraCtxCache
+  // UA: 每次都重新读取，避免 bootstrap 阶段时序问题
   try {
     const raw = process.env.UA_EXTRA_MODELS
     if (!raw) { _uaExtraCtxCache = null; return null }

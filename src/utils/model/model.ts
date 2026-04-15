@@ -409,7 +409,7 @@ function maskModelCodename(baseName: string): string {
 // Intentionally never invalidated: env vars are read once at startup and treated as immutable.
 let _uaExtraModelsCache: Array<{ name: string; displayName: string }> | null | undefined = undefined
 function getUAExtraModels(): Array<{ name: string; displayName: string }> | null {
-  if (_uaExtraModelsCache !== undefined) return _uaExtraModelsCache
+  // UA: 每次都重新读取，避免 bootstrap 阶段时序问题
   try {
     const raw = process.env.UA_EXTRA_MODELS
     if (!raw) { _uaExtraModelsCache = null; return null }
@@ -425,6 +425,10 @@ export function renderModelName(model: ModelName): string {
   const publicName = getPublicModelDisplayName(model)
   if (publicName) {
     return publicName
+  }
+  // UA: 优先使用 UA_MODEL_DISPLAY_NAME（bootstrap 阶段设置）
+  if (process.env.UA_MODEL_DISPLAY_NAME) {
+    return process.env.UA_MODEL_DISPLAY_NAME
   }
   // UA: 从 UA_EXTRA_MODELS 里查找友好名（覆盖切换后的模型）
   const uaProfiles = getUAExtraModels()
