@@ -324,14 +324,13 @@ export const AgentTool = buildTool({
           });
           if (fuzzy.length === 1) normalizedSubagentType = fuzzy[0]!.agentType;
           else if (fuzzy.length > 1) {
-            const preferredNamespace = toolUseContext.options.preferredAgentNamespace;
-            const preferredMatches = preferredNamespace
-              ? fuzzy.filter(agent =>
-                  agent.agentType
-                    .toLowerCase()
-                    .startsWith(preferredNamespace.toLowerCase() + ':'),
-                )
-              : [];
+            // UA: 使用 preferredAgentNamespace 或默认 omo-agents 命名空间
+            const preferredNamespace = toolUseContext.options.preferredAgentNamespace ?? 'omo-agents';
+            const preferredMatches = fuzzy.filter(agent =>
+              agent.agentType
+                .toLowerCase()
+                .startsWith(preferredNamespace.toLowerCase() + ':'),
+            );
             if (preferredMatches.length === 1) {
               normalizedSubagentType = preferredMatches[0]!.agentType;
             } else {
@@ -461,16 +460,15 @@ export const AgentTool = buildTool({
             return fuzzyMatches[0];
           }
           if (fuzzyMatches.length > 1) {
-            const preferredNamespace = toolUseContext.options.preferredAgentNamespace;
-            const preferredMatches = preferredNamespace
-              ? fuzzyMatches.filter(agent =>
-                  agent.agentType
-                    .toLowerCase()
-                    .startsWith(preferredNamespace.toLowerCase() + ':'),
-                )
-              : [];
+            // UA: 使用 preferredAgentNamespace 或默认 omo-agents 命名空间
+            const preferredNamespace = toolUseContext.options.preferredAgentNamespace ?? 'omo-agents';
+            const preferredMatches = fuzzyMatches.filter(agent =>
+              agent.agentType
+                .toLowerCase()
+                .startsWith(preferredNamespace.toLowerCase() + ':'),
+            );
             if (preferredMatches.length === 1) {
-              logForDebugging(`[UA] subagent_type '${effectiveType}' normalized to '${preferredMatches[0]!.agentType}' via preferred namespace '${preferredNamespace}'`);
+              logForDebugging(`[UA] subagent_type '${effectiveType}' normalized to '${preferredMatches[0]!.agentType}' via namespace '${preferredNamespace}'`);
               return preferredMatches[0];
             }
             throw new Error(
