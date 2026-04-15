@@ -33,7 +33,62 @@ export function statusLineShouldDisplay(settings: ReadonlySettings): boolean {
   // Assistant mode: statusline fields (model, permission mode, cwd) reflect the
   // REPL/daemon process, not what the agent child is actually running. Hide it.
   if (feature('KAIROS') && getKairosActive()) return false;
-  return settings?.statusLine !== undefined;
+  // UA: 默认启用状态栏，只有明确禁用时才隐藏
+  return settings?.statusLine !== null;
+}
+// UA: 内置默认状态栏渲染
+function renderDefaultStatusLine(input: StatusLineCommandInput): string {
+  const parts: string[] = []
+  
+  // 模型名
+  const modelShort = input.model?.display_name || input.model?.id || 'unknown'
+  parts.push(`\x1b[48;5;235m\x1b[38;5;252m ${modelShort} \x1b[0m`)
+  
+  // thinking/effort
+  const effort = input.effort
+  if (effort && effort !== 'none') {
+    parts.push(`\x1b[38;5;141m | thinking: ${effort}\x1b[0m`)
+  }
+  
+  // 项目目录
+  const cwd = input.workspace?.current_dir || ''
+  const project = cwd.split('/').filter(Boolean).pop() || cwd
+  parts.push(`\x1b[2m | \x1b[0m\x1b[38;5;253m${project}\x1b[0m`)
+  
+  // 上下文大小
+  const ctx = input.context_window ?? {}
+  const curUsage = ctx.current_usage ?? {}
+  const sessionCtx = (curUsage.input_tokens ?? 0) + (curUsage.cache_creation_input_tokens ?? 0) + (curUsage.cache_read_input_tokens ?? 0)
+  const displayTok = sessionCtx > 0 ? sessionCtx : (ctx.total_input_tokens ?? 0)
+  const ctxSize = ctx.context_window_size ?? 200000
+  const usedPct = ctxSize > 0 ? Math.round((displayTok / ctxSize) * 100) : 0
+  
+  function fmtK(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
+    return `${n}`
+  }
+  parts.push(`\x1b[2m | \x1b[0m\x1b[38;5;246m${fmtK(displayTok)}\x1b[0m`)
+  
+  // 剩余容量
+  const remainPct = 100 - usedPct
+  const pctColor = remainPct >= 30 ? 35 : remainPct >= 10 ? 220 : 196
+  parts.push(`\x1b[2m | \x1b[0m\x1b[38;5;${pctColor}m${remainPct}%\x1b[0m`)
+  
+  // 执行模式
+  const permMode = input.permission_mode ?? ''
+  if (permMode === 'acceptEdits' || permMode === 'autoEdit') {
+    parts.push(`\x1b[2m | \x1b[0m\x1b[38;5;214mautoEdit\x1b[0m`)
+  } else if (permMode === 'bypassPermissions') {
+    parts.push(`\x1b[2m | \x1b[0m\x1b[38;5;196m\x1b[1myolo\x1b[0m`)
+  }
+  
+  // 会话 ID
+  const sessionId = input.session_id ?? ''
+  const idShort = sessionId ? sessionId.slice(0, 8) : '--------'
+  parts.push(`\x1b[2m | \x1b[0m\x1b[38;5;99m🆔 ${idShort}\x1b[0m`)
+  
+  return parts.join('')
 }
 function buildStatusLineCommandInput(permissionMode: PermissionMode, exceeds200kTokens: boolean, settings: ReadonlySettings, messages: Message[], addedDirs: string[], mainLoopModel: ModelName, vimMode?: VimMode, effortLevel?: string): StatusLineCommandInput {
   const agentType = getMainThreadAgentType();
@@ -218,7 +273,12 @@ function StatusLineInner({
       }
       const effortLevel = getDisplayedEffortLevel(mainLoopModelRef.current, effortValueRef.current);
       const statusInput = buildStatusLineCommandInput(permissionModeRef.current, exceeds200kTokens, settingsRef.current, msgs, Array.from(addedDirsRef.current.keys()), mainLoopModelRef.current, vimModeRef.current, effortLevel);
-      const text = await executeStatusLineCommand(statusInput, controller.signal, undefined, logResult);
+      // UA: 先尝试使用外部配置的状态栏命令
+      let text = await executeStatusLineCommand(statusInput, controller.signal, undefined, logResult);
+      // UA: 如果没有配置外部命令，使用内置默认状态栏
+      if (text === undefined) {
+        text = renderDefaultStatusLine(statusInput);
+      }
       if (!controller.signal.aborted) {
         setAppState(prev => {
           if (prev.statusLineText === text) return prev;
