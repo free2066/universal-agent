@@ -19,3 +19,46 @@
 3. **Flywheel**：采集生产数据（用户 prompt / 路由结果），自动补充评测用例
 
 **优先使用 GSB 对比评测**（Better/Same/Worse），无需 ground truth，成本低。
+
+### [ ] LLM Council 多模型并行分析择优（Phase 1）
+
+**背景**：参考 Jarvis 文档的 LLM Council 设计理念，让多个模型并行分析同一问题，通过评分机制择优输出，提高复杂任务的准确率。
+
+**核心机制（三阶段）**：
+1. **并行生成**：同时向 2-5 个模型发送相同 prompt
+2. **交叉评分**：各模型相互评分（correctness, completeness, code_quality）
+3. **择优决策**：highest_score / majority_vote / chairman_decision
+
+**实现清单**：
+- [ ] `src/config/councilConfig.ts` - Council 配置系统
+- [ ] `src/tools/CouncilTool/CouncilExecutor.ts` - 执行器
+- [ ] `src/tools/CouncilTool/CouncilTool.ts` - 工具定义
+- [ ] 评分 Prompt 工程
+- [ ] CLI 参数支持 `--council`
+- [ ] 单元测试
+
+**预计工时**：14 小时（约 2 天）
+
+### [ ] Agent Gateway 统一调度入口（Phase 2）
+
+**背景**：增强 universal-agent 作为统一 Agent 网关的能力，支持远程部署和 A2A 通信，无需依赖 CLI。
+
+**架构设计**：
+```
+API Gateway Layer (REST/gRPC/WebSocket)
+         ↓
+    Agent Router (请求分析 + 智能路由)
+         ↓
+    Agent Pool (CodeGen/Review/Council/...)
+```
+
+**实现清单**：
+- [ ] `src/services/gateway/AgentGateway.ts` - 核心服务
+- [ ] 请求路由逻辑
+- [ ] `src/services/gateway/A2AServer.ts` - WebSocket 服务
+- [ ] REST API 封装
+- [ ] Docker 部署配置
+
+**预计工时**：15 小时（约 2 天）
+
+**详细计划**：见 `.codeflicker/mem-bank/threads/universal-agent-46c34a/09gistm9vjwn01264omj/plan/LLM-Council与Agent-Gateway实现_nekkpe/plan.md`
