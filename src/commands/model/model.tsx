@@ -59,6 +59,27 @@ function ModelPickerWrapper(t0) {
         mainLoopModel: model,
         mainLoopModelForSession: null
       }));
+      // UA: 更新 UA_MODEL_DISPLAY_NAME 环境变量
+      if (model) {
+        const uaExtra = process.env.UA_EXTRA_MODELS
+        if (uaExtra) {
+          try {
+            const profiles = JSON.parse(uaExtra)
+            const match = Array.isArray(profiles) ? profiles.find((p: any) => p.name === model) : null
+            if (match?.displayName) {
+              process.env.UA_MODEL_DISPLAY_NAME = match.displayName
+            } else {
+              delete process.env.UA_MODEL_DISPLAY_NAME
+            }
+          } catch {}
+        }
+      } else {
+        delete process.env.UA_MODEL_DISPLAY_NAME
+      }
+      // UA: 持久化到 settings.json
+      try {
+        updateSettingsForSource('userSettings', { model: model ?? undefined })
+      } catch {}
       let message = `Set model to ${chalk.bold(renderModelLabel(model))}`;
       if (effort !== undefined) {
         message = message + ` with ${chalk.bold(effort)} effort`;
@@ -210,6 +231,25 @@ function SetModelAndClose({
         updateSettingsForSource('userSettings', { model: modelValue ?? undefined })
       } catch (err) {
         logForDebugging(`[model-switch] Failed to persist model setting: ${(err as Error).message}`, { level: 'warn' })
+      }
+      // UA: 更新 UA_MODEL_DISPLAY_NAME 环境变量（从 UA_EXTRA_MODELS 查找）
+      if (modelValue) {
+        const uaExtra = process.env.UA_EXTRA_MODELS
+        if (uaExtra) {
+          try {
+            const profiles = JSON.parse(uaExtra)
+            const match = Array.isArray(profiles) ? profiles.find((p: any) => p.name === modelValue) : null
+            if (match?.displayName) {
+              process.env.UA_MODEL_DISPLAY_NAME = match.displayName
+            } else {
+              // 如果找不到 displayName，清除之前设置的值
+              delete process.env.UA_MODEL_DISPLAY_NAME
+            }
+          } catch {}
+        }
+      } else {
+        // 切换到 default 时清除
+        delete process.env.UA_MODEL_DISPLAY_NAME
       }
       // UA: 记录模型切换日志，帮助排查切换后 credentials 不对的问题
       if (process.env.UA_DEBUG_LOG) {
