@@ -62,10 +62,20 @@ type Handler<T = unknown> = (event: SyncEvent<T>) => void
 const EVENTS_DIR = path.join(os.homedir(), '.uagent', 'events')
 const MAX_BUFFERED_EVENTS_ON_FAILURE = 1000
 
+/** Cached date string for todayFile (refreshed every minute) */
+let _cachedDate: string | null = null
+let _cachedTimestamp: number = 0
+
 function todayFile(): string {
+  const now = Date.now()
+  // Cache for up to 1 minute (date changes are rare, and 1-min delay is acceptable for logs)
+  if (_cachedDate && now - _cachedTimestamp < 60000) {
+    return path.join(EVENTS_DIR, `${_cachedDate}.jsonl`)
+  }
   const d = new Date()
-  const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  return path.join(EVENTS_DIR, `${stamp}.jsonl`)
+  _cachedDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  _cachedTimestamp = now
+  return path.join(EVENTS_DIR, `${_cachedDate}.jsonl`)
 }
 
 export class SyncEventBus {
