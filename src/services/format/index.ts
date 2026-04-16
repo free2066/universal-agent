@@ -28,6 +28,9 @@ type FormatterCommand = {
 // Cache: "ext|cwd" -> formatter commands or null (false = unavailable)
 const formatterCache = new Map<string, FormatterCommand[] | false>()
 
+// Cache: command name -> available (true/false)
+const commandExistsCache = new Map<string, boolean>()
+
 /** Find a file by walking up the directory tree */
 function findUp(filename: string, startDir: string): string | null {
   let dir = startDir
@@ -42,12 +45,17 @@ function findUp(filename: string, startDir: string): string | null {
   return null
 }
 
-/** Check if a binary exists in PATH */
+/** Check if a binary exists in PATH (cached) */
 function commandExists(cmd: string): boolean {
+  const cached = commandExistsCache.get(cmd)
+  if (cached !== undefined) return cached
+
   try {
     execFileSync('which', [cmd], { stdio: 'ignore', timeout: 2000 })
+    commandExistsCache.set(cmd, true)
     return true
   } catch {
+    commandExistsCache.set(cmd, false)
     return false
   }
 }
@@ -335,4 +343,5 @@ export async function formatFile(filePath: string, timeoutMs = 8000): Promise<vo
  */
 export function clearFormatterCache(): void {
   formatterCache.clear()
+  commandExistsCache.clear()
 }
