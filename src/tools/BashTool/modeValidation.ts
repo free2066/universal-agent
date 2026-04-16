@@ -4,6 +4,11 @@ import { splitCommand_DEPRECATED } from '../../utils/bash/commands.js'
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js'
 import type { BashTool } from './BashTool.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const WHITESPACE_RE = /\s+/
+
 const ACCEPT_EDITS_ALLOWED_COMMANDS = [
   'mkdir',
   'touch',
@@ -25,7 +30,7 @@ function validateCommandForMode(
   toolPermissionContext: ToolPermissionContext,
 ): PermissionResult {
   const trimmedCmd = cmd.trim()
-  const [baseCmd] = trimmedCmd.split(/\s+/)
+  const [baseCmd] = trimmedCmd.split(WHITESPACE_RE)
 
   if (!baseCmd) {
     return {

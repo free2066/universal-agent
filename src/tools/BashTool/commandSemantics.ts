@@ -7,6 +7,11 @@
 
 import { splitCommand_DEPRECATED } from '../../utils/bash/commands.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const WHITESPACE_RE = /\s+/
+
 export type CommandSemantic = (
   exitCode: number,
   stdout: string,
@@ -102,7 +107,7 @@ function getCommandSemantic(command: string): CommandSemantic {
  * Extract just the command name (first word) from a single command string.
  */
 function extractBaseCommand(command: string): string {
-  return command.trim().split(/\s+/)[0] || ''
+  return command.trim().split(WHITESPACE_RE)[0] || ''
 }
 
 /**

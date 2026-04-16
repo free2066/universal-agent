@@ -3,6 +3,11 @@ import memoize from 'lodash-es/memoize.js'
 import { homedir } from 'os'
 import { join } from 'path'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const WHITESPACE_RE = /\s+/
+
 // Memoized: 150+ callers, many on hot paths. Keyed off CLAUDE_CONFIG_DIR so
 // tests that change the env var get a fresh value without explicit cache.clear.
 export const getClaudeConfigHomeDir = memoize(
@@ -31,7 +36,7 @@ export function hasNodeOption(flag: string): boolean {
   if (!nodeOptions) {
     return false
   }
-  return nodeOptions.split(/\s+/).includes(flag)
+  return nodeOptions.split(WHITESPACE_RE).includes(flag)
 }
 
 export function isEnvTruthy(envVar: string | boolean | undefined): boolean {

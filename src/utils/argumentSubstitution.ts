@@ -17,10 +17,13 @@ import { tryParseShellCommand } from './bash/shellQuote.js'
 // ============================================================================
 
 /** Matches numeric-only strings (conflicts with $0, $1 shorthand) */
-const NUMERIC_ONLY_REGEX = /^\\d+$/
+const NUMERIC_ONLY_REGEX = /^\d+$/
 
 /** Matches single quotes for shell escaping */
 const SINGLE_QUOTE_REGEX = /'/g
+
+/** Matches whitespace for argument splitting */
+const WHITESPACE_RE = /\s+/
 
 function escapeArgumentForPromptShell(arg: string): string {
   if (arg.length === 0) {
@@ -47,7 +50,7 @@ export function parseArguments(args: string): string[] {
   const result = tryParseShellCommand(args, key => `$${key}`)
   if (!result.success) {
     // Fall back to simple whitespace split if parsing fails
-    return args.split(/\s+/).filter(Boolean)
+    return args.split(WHITESPACE_RE).filter(Boolean)
   }
 
   // Filter to only string tokens (ignore shell operators, etc.)
@@ -79,7 +82,7 @@ export function parseArgumentNames(
     return argumentNames.filter(isValidName)
   }
   if (typeof argumentNames === 'string') {
-    return argumentNames.split(/\s+/).filter(isValidName)
+    return argumentNames.split(WHITESPACE_RE).filter(isValidName)
   }
   return []
 }

@@ -17,6 +17,16 @@
  * so `robocopy` reporting "files copied successfully" (exit 1) shows as an error.
  */
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const CALL_OPERATOR_RE = /^[&.]\s+/
+const WHITESPACE_RE = /\s+/
+const QUOTE_RE = /^["']|["']$/g
+const PATH_SEP_RE = /[\\/]/
+const PIPE_SEP_RE = /[;|]/
+const EXE_SUFFIX_RE = /\.exe$/
+
 export type CommandSemantic = (
   exitCode: number,
   stdout: string,
@@ -100,14 +110,14 @@ const COMMAND_SEMANTICS: Map<string, CommandSemantic> = new Map([
 function extractBaseCommand(segment: string): string {
   // Strip PowerShell call operators: & "cmd", . "cmd"
   // (& and . at segment start followed by whitespace invoke the next token)
-  const stripped = segment.trim().replace(/^[&.]\s+/, '')
-  const firstToken = stripped.split(/\s+/)[0] || ''
+  const stripped = segment.trim().replace(CALL_OPERATOR_RE, '')
+  const firstToken = stripped.split(WHITESPACE_RE)[0] || ''
   // Strip surrounding quotes if command was invoked as & "grep.exe"
-  const unquoted = firstToken.replace(/^["']|["']$/g, '')
+  const unquoted = firstToken.replace(QUOTE_RE, '')
   // Strip path: C:\bin\grep.exe → grep.exe, .\rg.exe → rg.exe
-  const basename = unquoted.split(/[\\/]/).pop() || unquoted
+  const basename = unquoted.split(PATH_SEP_RE).pop() || unquoted
   // Strip .exe suffix (Windows is case-insensitive)
-  return basename.toLowerCase().replace(/\.exe$/, '')
+  return basename.toLowerCase().replace(EXE_SUFFIX_RE, '')
 }
 
 /**
@@ -119,7 +129,7 @@ function extractBaseCommand(segment: string): string {
  * for exit-code interpretation (false negatives just fall back to default).
  */
 function heuristicallyExtractBaseCommand(command: string): string {
-  const segments = command.split(/[;|]/).filter(s => s.trim())
+  const segments = command.split(PIPE_SEP_RE).filter(s => s.trim())
   const last = segments[segments.length - 1] || command
   return extractBaseCommand(last)
 }
