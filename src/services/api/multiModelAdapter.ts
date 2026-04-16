@@ -656,8 +656,15 @@ export class MultiModelAnthropicAdapter {
         }
 
         const inputLen = messages.reduce((s: number, m: any) => s + JSON.stringify(m).length, 0)
-        const inputTokensFn = () => chatResponse?.usage?.input_tokens ?? Math.ceil(inputLen / 4)
-        const outputTokensFn = () => chatResponse?.usage?.output_tokens ?? Math.ceil(outputLen / 4)
+        // Fix: GLM-5 returns input_tokens=0, need to check for falsy values
+        const inputTokensFn = () => {
+          const usageInput = chatResponse?.usage?.input_tokens
+          return usageInput && usageInput > 0 ? usageInput : Math.ceil(inputLen / 4)
+        }
+        const outputTokensFn = () => {
+          const usageOutput = chatResponse?.usage?.output_tokens
+          return usageOutput && usageOutput > 0 ? usageOutput : Math.ceil(outputLen / 4)
+        }
 
         // Wrap streamChat in a retry helper so 429 rate-limit errors from the
         // streaming request are retried before the rejection propagates.
@@ -859,8 +866,11 @@ export class MultiModelAnthropicAdapter {
       ? chatResponse.content.length
       : JSON.stringify(chatResponse?.toolCalls || []).length
     const inputLen = messages.reduce((s, m) => s + JSON.stringify(m).length, 0)
-    const inputTokens = chatResponse?.usage?.input_tokens ?? Math.ceil(inputLen / 4)
-    const outputTokens = chatResponse?.usage?.output_tokens ?? Math.ceil(contentLen / 4)
+    // Fix: GLM-5 returns input_tokens=0, need to check for falsy values
+    const usageInput = chatResponse?.usage?.input_tokens
+    const usageOutput = chatResponse?.usage?.output_tokens
+    const inputTokens = usageInput && usageInput > 0 ? usageInput : Math.ceil(inputLen / 4)
+    const outputTokens = usageOutput && usageOutput > 0 ? usageOutput : Math.ceil(contentLen / 4)
 
     return { chatResponse, inputTokens, outputTokens }
   }
