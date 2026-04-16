@@ -60,6 +60,7 @@ export class OpenAIClient implements LLMClient {
       const choice = response.choices[0];
       if (!choice) throw new Error('No choices returned from OpenAI');
       const msg = choice.message;
+      const usage = response.usage;
 
       if (msg.tool_calls?.length) {
         return {
@@ -70,10 +71,21 @@ export class OpenAIClient implements LLMClient {
             name: tc.function.name,
             arguments: safeParseJSON(tc.function.arguments, tc.function.name),
           })),
+          usage: usage ? {
+            input_tokens: usage.prompt_tokens ?? 0,
+            output_tokens: usage.completion_tokens ?? 0,
+          } : undefined,
         };
       }
 
-      return { type: 'text', content: msg.content || '' };
+      return {
+        type: 'text',
+        content: msg.content || '',
+        usage: usage ? {
+          input_tokens: usage.prompt_tokens ?? 0,
+          output_tokens: usage.completion_tokens ?? 0,
+        } : undefined,
+      };
     });
   }
 
@@ -100,6 +112,7 @@ export class OpenAIClient implements LLMClient {
           model: this.model,
           messages,
           stream: true,
+          stream_options: { include_usage: true }, // Request usage data in stream
           ...extraOpts,
           ...(hasTools ? {
             tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
@@ -109,10 +122,20 @@ export class OpenAIClient implements LLMClient {
         { signal },
       )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
 
-      let textContent = '';
-      const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+      // Extract usage from stream if available (OpenAI supports stream_options.include_usage)
+      // Some providers like GLM may not return usage in stream
+      let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
 
       for await (const chunk of stream) {
+        // Extract usage from chunk if present (last chunk may contain usage)
+        const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+        if (chunkUsage) {
+          streamUsage = {
+            input_tokens: chunkUsage.prompt_tokens ?? 0,
+            output_tokens: chunkUsage.completion_tokens ?? 0,
+          };
+        }
+
         const delta = chunk.choices[0]?.delta as {
           content?: string;
           reasoning_content?: string;
@@ -158,10 +181,10 @@ export class OpenAIClient implements LLMClient {
             name: tc.name,
             arguments: safeParseJSON(tc.args, tc.name),
           }));
-        return { type: 'tool_calls', content: textContent, toolCalls };
+        return { type: 'tool_calls', content: textContent, toolCalls, usage: streamUsage };
       }
 
-      return { type: 'text', content: textContent };
+      return { type: 'text', content: textContent, usage: streamUsage };
     });
   }
 
@@ -230,6 +253,7 @@ export class DeepSeekClient extends OpenAIClient {
         if (!choice) throw new Error('No choices from DeepSeek');
         const msg = choice.message;
         const textContent = typeof msg.content === 'string' ? msg.content || '' : ''
+        const usage = response.usage;
         if (msg.tool_calls?.length) {
           return {
             type: 'tool_calls',
@@ -239,9 +263,20 @@ export class DeepSeekClient extends OpenAIClient {
               name: tc.function.name,
               arguments: safeParseJSON(tc.function.arguments, tc.function.name),
             })),
+            usage: usage ? {
+              input_tokens: usage.prompt_tokens ?? 0,
+              output_tokens: usage.completion_tokens ?? 0,
+            } : undefined,
           };
         }
-        return { type: 'text', content: textContent };
+        return {
+          type: 'text',
+          content: textContent,
+          usage: usage ? {
+            input_tokens: usage.prompt_tokens ?? 0,
+            output_tokens: usage.completion_tokens ?? 0,
+          } : undefined,
+        };
       });
     }
     return super.chat(options);
@@ -255,18 +290,29 @@ export class DeepSeekClient extends OpenAIClient {
           ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([inferSignal, options.signal]) : inferSignal)
           : inferSignal;
         const messages = this.convertMessages(options);
+        // Extract usage from stream if available
+        let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
         const stream = (await this.client.chat.completions.create(
           {
             model: this.model,
             messages,
             stream: true,
+            stream_options: { include_usage: true },
           } as OpenAI.ChatCompletionCreateParamsStreaming,
           { signal },
-
         )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
         let textContent = '';
         const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
         for await (const chunk of stream) {
+          // Extract usage from chunk if present
+          const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+          if (chunkUsage) {
+            streamUsage = {
+              input_tokens: chunkUsage.prompt_tokens ?? 0,
+              output_tokens: chunkUsage.completion_tokens ?? 0,
+            };
+          }
+
           const delta = chunk.choices[0]?.delta as {
             content?: string;
             reasoning_content?: string;
@@ -295,9 +341,9 @@ export class DeepSeekClient extends OpenAIClient {
           const toolCalls = Array.from(toolCallMap.entries())
             .sort((a, b) => a[0] - b[0])
             .map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) }));
-          return { type: 'tool_calls', content: textContent, toolCalls };
+          return { type: 'tool_calls', content: textContent, toolCalls, usage: streamUsage };
         }
-        return { type: 'text', content: textContent };
+        return { type: 'text', content: textContent, usage: streamUsage };
       });
     }
     return super.streamChat(options, onChunk);
