@@ -209,13 +209,16 @@ export function getTaskListId(): string {
   return getTeamName() || leaderTeamName || getSessionId()
 }
 
+// Precompiled regex for path component sanitization
+const PATH_SANITIZE_RE = /[^a-zA-Z0-9_-]/g
+
 /**
  * Sanitizes a string for safe use in file paths.
  * Removes path traversal characters and other potentially dangerous characters.
  * Only allows alphanumeric characters, hyphens, and underscores.
  */
 export function sanitizePathComponent(input: string): string {
-  return input.replace(/[^a-zA-Z0-9_-]/g, '-')
+  return input.replace(PATH_SANITIZE_RE, '-')
 }
 
 export function getTasksDir(taskListId: string): string {

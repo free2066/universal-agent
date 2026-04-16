@@ -169,13 +169,16 @@ export function restoreWorktreeSession(session: WorktreeSession | null): void {
   currentWorktreeSession = session
 }
 
+// Precompiled regex for tmux session name sanitization
+const TMUX_SANITIZE_RE = /[/.]/g
+
 export function generateTmuxSessionName(
   repoPath: string,
   branch: string,
 ): string {
   const repoName = basename(repoPath)
   const combined = `${repoName}_${branch}`
-  return combined.replace(/[/.]/g, '_')
+  return combined.replace(TMUX_SANITIZE_RE, '_')
 }
 
 type WorktreeCreateResult =

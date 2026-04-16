@@ -5,13 +5,16 @@ import { djb2Hash } from './hash.js'
 
 const paths = envPaths('claude-cli')
 
+// Precompiled regex for path sanitization
+const PATH_SANITIZE_CHAR_RE = /[^a-zA-Z0-9]/g
+
 // Local sanitizePath using djb2Hash — NOT the shared version from
 // sessionStoragePortable.ts which uses Bun.hash (wyhash) when available.
 // Cache directory names must remain stable across upgrades so existing cache
 // data (error logs, MCP logs) is not orphaned.
 const MAX_SANITIZED_LENGTH = 200
 function sanitizePath(name: string): string {
-  const sanitized = name.replace(/[^a-zA-Z0-9]/g, '-')
+  const sanitized = name.replace(PATH_SANITIZE_CHAR_RE, '-')
   if (sanitized.length <= MAX_SANITIZED_LENGTH) {
     return sanitized
   }

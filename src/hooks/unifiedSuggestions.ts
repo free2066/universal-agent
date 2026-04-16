@@ -97,11 +97,11 @@ function generateAgentSuggestions(
     }
 
     const queryLower = query.toLowerCase()
-    return agentSources.filter(
-      agent =>
-        agent.agentType.toLowerCase().includes(queryLower) ||
-        agent.displayText.toLowerCase().includes(queryLower),
-    )
+    return agentSources.filter(agent => {
+      const agentTypeLower = agent.agentType.toLowerCase()
+      const displayTextLower = agent.displayText.toLowerCase()
+      return agentTypeLower.includes(queryLower) || displayTextLower.includes(queryLower)
+    })
   } catch (error) {
     logError(error as Error)
     return []

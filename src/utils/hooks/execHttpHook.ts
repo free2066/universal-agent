@@ -76,6 +76,9 @@ function urlMatchesPattern(url: string, pattern: string): boolean {
   return regex.test(url)
 }
 
+// Precompiled regex for sanitizing header values (prevent CRLF injection)
+const CRLF_NUL_REGEX = /[\r\n\x00]/g
+
 /**
  * Strip CR, LF, and NUL bytes from a header value to prevent HTTP header
  * injection (CRLF injection) via env var values or hook-configured header
@@ -83,8 +86,7 @@ function urlMatchesPattern(url: string, pattern: string): boolean {
  * inject a second header into the request.
  */
 function sanitizeHeaderValue(value: string): string {
-  // eslint-disable-next-line no-control-regex
-  return value.replace(/[\r\n\x00]/g, '')
+  return value.replace(CRLF_NUL_REGEX, '')
 }
 
 /**

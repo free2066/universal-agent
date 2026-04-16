@@ -53,32 +53,29 @@ export function tryQuoteShellArgs(args: unknown[]): ShellQuoteResult {
 
       const type = typeof arg
 
-      if (type === 'string') {
-        return arg as string
+      switch (type) {
+        case 'string':
+          return arg as string
+        case 'number':
+        case 'boolean':
+          return String(arg)
+        case 'object':
+          throw new Error(
+            `Cannot quote argument at index ${index}: object values are not supported`,
+          )
+        case 'symbol':
+          throw new Error(
+            `Cannot quote argument at index ${index}: symbol values are not supported`,
+          )
+        case 'function':
+          throw new Error(
+            `Cannot quote argument at index ${index}: function values are not supported`,
+          )
+        default:
+          throw new Error(
+            `Cannot quote argument at index ${index}: unsupported type ${type}`,
+          )
       }
-      if (type === 'number' || type === 'boolean') {
-        return String(arg)
-      }
-
-      if (type === 'object') {
-        throw new Error(
-          `Cannot quote argument at index ${index}: object values are not supported`,
-        )
-      }
-      if (type === 'symbol') {
-        throw new Error(
-          `Cannot quote argument at index ${index}: symbol values are not supported`,
-        )
-      }
-      if (type === 'function') {
-        throw new Error(
-          `Cannot quote argument at index ${index}: function values are not supported`,
-        )
-      }
-
-      throw new Error(
-        `Cannot quote argument at index ${index}: unsupported type ${type}`,
-      )
     })
 
     const quoted = shellQuoteQuote(validated)

@@ -2,12 +2,15 @@
  * General string utility functions and classes for safe string accumulation
  */
 
+// Precompiled regex patterns for escapeRegExp
+const REGEX_SPECIAL_CHARS_RE = /[.*+?^${}()|[\]\\]/g
+
 /**
  * Escapes special regex characters in a string so it can be used as a literal
  * pattern in a RegExp constructor.
  */
 export function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return str.replace(REGEX_SPECIAL_CHARS_RE, '\\$&')
 }
 
 /**
@@ -65,12 +68,15 @@ export function countCharInString(
   return count
 }
 
+// Precompiled regex for full-width digit normalization
+const FULLWIDTH_DIGITS_RE = /[０-９]/g
+
 /**
  * Normalize full-width (zenkaku) digits to half-width digits.
  * Useful for accepting input from Japanese/CJK IMEs.
  */
 export function normalizeFullWidthDigits(input: string): string {
-  return input.replace(/[０-９]/g, ch =>
+  return input.replace(FULLWIDTH_DIGITS_RE, ch =>
     String.fromCharCode(ch.charCodeAt(0) - 0xfee0),
   )
 }

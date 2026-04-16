@@ -58,8 +58,11 @@ export function getLogDisplayTitle(
   return stripDisplayTags(title).trim()
 }
 
+// Precompiled regex for filename-safe date format
+const ISO_DATE_REPLACE_RE = /[:.]/g
+
 export function dateToFilename(date: Date): string {
-  return date.toISOString().replace(/[:.]/g, '-')
+  return date.toISOString().replace(ISO_DATE_REPLACE_RE, '-')
 }
 
 // In-memory error log for recent errors

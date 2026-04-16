@@ -47,13 +47,16 @@ export function extractInboundAttachments(msg: unknown): InboundAttachment[] {
   return parsed.success ? parsed.data : []
 }
 
+// Precompiled regex for filename sanitization
+const FILENAME_SANITIZE_RE = /[^a-zA-Z0-9._-]/g
+
 /**
  * Strip path components and keep only filename-safe chars. file_name comes
  * from the network (web composer), so treat it as untrusted even though the
  * composer controls it.
  */
 function sanitizeFileName(name: string): string {
-  const base = basename(name).replace(/[^a-zA-Z0-9._-]/g, '_')
+  const base = basename(name).replace(FILENAME_SANITIZE_RE, '_')
   return base || 'attachment'
 }
 

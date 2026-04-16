@@ -82,8 +82,11 @@ const TAG_FIELDS = [
   'versionBase',
 ]
 
+// Precompiled regex for camelCase to snake_case conversion
+const CAMEL_CASE_REGEX = /[A-Z]/g
+
 function camelToSnakeCase(str: string): string {
-  return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)
+  return str.replace(CAMEL_CASE_REGEX, letter => `_${letter.toLowerCase()}`)
 }
 
 type DatadogLog = {

@@ -16,13 +16,16 @@ import type {
 const MAX_ACTIVITIES = 10
 const MAX_STDERR_LINES = 10
 
+// Precompiled regex for session ID sanitization
+const SESSION_ID_SANITIZE_RE = /[^a-zA-Z0-9_-]/g
+
 /**
  * Sanitize a session ID for use in file names.
  * Strips any characters that could cause path traversal (e.g. `../`, `/`)
  * or other filesystem issues, replacing them with underscores.
  */
 export function safeFilenameId(id: string): string {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return id.replace(SESSION_ID_SANITIZE_RE, '_')
 }
 
 /**

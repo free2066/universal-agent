@@ -25,10 +25,8 @@ export const getPlatform = memoize((): Platform => {
           '/proc/version',
           { encoding: 'utf8' },
         )
-        if (
-          procVersion.toLowerCase().includes('microsoft') ||
-          procVersion.toLowerCase().includes('wsl')
-        ) {
+        const lower = procVersion.toLowerCase()
+        if (lower.includes('microsoft') || lower.includes('wsl')) {
           return 'wsl'
         }
       } catch (error) {
@@ -66,7 +64,8 @@ export const getWslVersion = memoize((): string | undefined => {
 
     // If no explicit WSL version but contains Microsoft, assume WSL1
     // This handles the original WSL1 format: "4.4.0-19041-Microsoft"
-    if (procVersion.toLowerCase().includes('microsoft')) {
+    const lower = procVersion.toLowerCase()
+    if (lower.includes('microsoft')) {
       return '1'
     }
 

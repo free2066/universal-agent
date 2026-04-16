@@ -207,7 +207,8 @@ export function convertEffortValueToLevel(value: EffortValue): EffortLevel {
     // rather than passing them through unchecked.
     return isEffortLevel(value) ? value : 'high'
   }
-  if (process.env.USER_TYPE === 'ant' && typeof value === 'number') {
+  // At this point value is number (EffortValue = EffortLevel | number)
+  if (process.env.USER_TYPE === 'ant') {
     if (value <= 50) return 'low'
     if (value <= 85) return 'medium'
     if (value <= 100) return 'high'
