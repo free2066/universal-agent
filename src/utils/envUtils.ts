@@ -18,6 +18,10 @@ export function getTeamsDir(): string {
   return join(getClaudeConfigHomeDir(), 'teams')
 }
 
+/** Truthy and falsy value sets for environment variable parsing (O(1) lookup) */
+const TRUTHY_VALUES = new Set(['1', 'true', 'yes', 'on'])
+const FALSY_VALUES = new Set(['0', 'false', 'no', 'off'])
+
 /**
  * Check if NODE_OPTIONS contains a specific flag.
  * Splits on whitespace and checks for exact match to avoid false positives.
@@ -34,7 +38,7 @@ export function isEnvTruthy(envVar: string | boolean | undefined): boolean {
   if (!envVar) return false
   if (typeof envVar === 'boolean') return envVar
   const normalizedValue = envVar.toLowerCase().trim()
-  return ['1', 'true', 'yes', 'on'].includes(normalizedValue)
+  return TRUTHY_VALUES.has(normalizedValue)
 }
 
 export function isEnvDefinedFalsy(
@@ -44,7 +48,7 @@ export function isEnvDefinedFalsy(
   if (typeof envVar === 'boolean') return !envVar
   if (!envVar) return false
   const normalizedValue = envVar.toLowerCase().trim()
-  return ['0', 'false', 'no', 'off'].includes(normalizedValue)
+  return FALSY_VALUES.has(normalizedValue)
 }
 
 /**
