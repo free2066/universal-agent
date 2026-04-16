@@ -4819,12 +4819,6 @@ export function removeInterruptedMessage(
   }
 }
 
-export type LoadInitialMessagesResult = {
-  messages: Message[]
-  turnInterruptionState?: TurnInterruptionState
-  agentSetting?: string
-}
-
 async function loadInitialMessages(
   setAppState: (f: (prev: AppState) => AppState) => void,
   options: {
@@ -5238,12 +5232,6 @@ export async function handleOrphanedPermissionResponse({
   return false
 }
 
-export type DynamicMcpState = {
-  clients: MCPServerConnection[]
-  tools: Tools
-  configs: Record<string, ScopedMcpServerConfig>
-}
-
 /**
  * Converts a process transport config to a scoped config.
  * The types are structurally compatible, so we just add the scope.
@@ -5255,25 +5243,6 @@ function toScopedConfig(
   // (it excludes IDE-specific types like sse-ide and ws-ide)
   // Adding scope makes it a valid ScopedMcpServerConfig
   return { ...config, scope: 'dynamic' } as ScopedMcpServerConfig
-}
-
-/**
- * State for SDK MCP servers that run in the SDK process.
- */
-export type SdkMcpState = {
-  configs: Record<string, McpSdkServerConfig>
-  clients: MCPServerConnection[]
-  tools: Tools
-}
-
-/**
- * Result of handleMcpSetServers - contains new state and response data.
- */
-export type McpSetServersResult = {
-  response: SDKControlMcpSetServersResponse
-  newSdkState: SdkMcpState
-  newDynamicState: DynamicMcpState
-  sdkServersChanged: boolean
 }
 
 /**

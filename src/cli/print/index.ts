@@ -31,22 +31,14 @@ export {
   canBatchWith,
 } from './utils.js'
 
-// Re-export main functions from print.ts
+// Re-export main functions from print.ts (only functions that are actually exported)
 export {
   runHeadless,
+  runHeadlessStreaming,
   createCanUseToolWithPermissionPrompt,
   getCanUseToolFn,
-  handleInitializeRequest,
-  handleRewindFiles,
-  handleSetPermissionMode,
-  handleChannelEnable,
-  reregisterChannelHandlerAfterReconnect,
-  emitLoadError,
   removeInterruptedMessage,
-  loadInitialMessages,
-  getStructuredIO,
   handleOrphanedPermissionResponse,
-  toScopedConfig,
   handleMcpSetServers,
   reconcileMcpServers,
 } from '../print.js'

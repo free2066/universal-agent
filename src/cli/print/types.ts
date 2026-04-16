@@ -5,10 +5,10 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/src/resources/messages.js'
 
 // ============================================================================
-// UUID Tracking Types
+// UUID Type (re-export from crypto for consistency)
 // ============================================================================
 
-export type UUID = string
+export type { UUID } from 'crypto'
 
 // ============================================================================
 // Prompt Types
@@ -22,7 +22,8 @@ export type PromptValue = string | ContentBlockParam[]
 
 export type LoadInitialMessagesResult = {
   messages: import('../../types/message.js').Message[]
-  permissionPromptTool: import('../../utils/queryHelpers.js').PermissionPromptTool | undefined
+  turnInterruptionState?: import('../../utils/conversationRecovery.js').TurnInterruptionState
+  agentSetting?: string
 }
 
 // ============================================================================
@@ -30,14 +31,20 @@ export type LoadInitialMessagesResult = {
 // ============================================================================
 
 export type DynamicMcpState = {
-  mcpServers: import('../../services/mcp/types.js').ScopedMcpServerConfig[]
+  clients: import('../../services/mcp/types.js').MCPServerConnection[]
+  tools: import('../../Tool.js').Tools
+  configs: Record<string, import('../../services/mcp/types.js').ScopedMcpServerConfig>
 }
 
 export type SdkMcpState = {
-  mcpServers: import('../../services/mcp/types.js').McpSdkServerConfig[]
+  configs: Record<string, import('../../services/mcp/types.js').McpSdkServerConfig>
+  clients: import('../../services/mcp/types.js').MCPServerConnection[]
+  tools: import('../../Tool.js').Tools
 }
 
 export type McpSetServersResult = {
-  dynamicState: DynamicMcpState | null
-  sdkState: SdkMcpState | null
+  response: import('../../entrypoints/sdk/controlTypes.js').SDKControlMcpSetServersResponse
+  newSdkState: SdkMcpState
+  newDynamicState: DynamicMcpState
+  sdkServersChanged: boolean
 }
