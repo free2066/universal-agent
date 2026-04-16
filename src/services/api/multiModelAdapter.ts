@@ -326,7 +326,7 @@ async function* createFakeStream(
   yield {
     type: 'message_delta',
     delta: { stop_reason: message.stop_reason, stop_sequence: null },
-    usage: { output_tokens: outputTokens },
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
   }
 
   yield { type: 'message_stop' }
@@ -489,14 +489,14 @@ function buildRealStreamResult(
       yield {
         type: 'message_delta',
         delta: { stop_reason: 'tool_use', stop_sequence: null },
-        usage: { output_tokens: outputTokens },
+        usage: { input_tokens: inputTokens, output_tokens: outputTokens },
       }
     } else {
       yield { type: 'content_block_stop', index: 0 }
       yield {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn', stop_sequence: null },
-        usage: { output_tokens: outputTokens },
+        usage: { input_tokens: inputTokens, output_tokens: outputTokens },
       }
     }
 
