@@ -7,6 +7,44 @@ import { checkGitAvailable } from './gitAvailability.js'
 import { getMarketplace } from './marketplaceManager.js'
 import type { KnownMarketplace, MarketplaceSource } from './schemas.js'
 
+// ============================================================================
+// Regex pattern caching for marketplace matching
+// ============================================================================
+
+/** Cache for compiled host pattern regexes */
+const hostPatternCache = new Map<string, RegExp>()
+
+/** Cache for compiled path pattern regexes */
+const pathPatternCache = new Map<string, RegExp>()
+
+/** Get or create a cached regex for host pattern matching */
+function getHostPatternRegex(pattern: string): RegExp | null {
+  let regex = hostPatternCache.get(pattern)
+  if (!regex) {
+    try {
+      regex = new RegExp(pattern)
+      hostPatternCache.set(pattern, regex)
+    } catch {
+      return null
+    }
+  }
+  return regex
+}
+
+/** Get or create a cached regex for path pattern matching */
+function getPathPatternRegex(pattern: string): RegExp | null {
+  let regex = pathPatternCache.get(pattern)
+  if (!regex) {
+    try {
+      regex = new RegExp(pattern)
+      pathPatternCache.set(pattern, regex)
+    } catch {
+      return null
+    }
+  }
+  return regex
+}
+
 /**
  * Format plugin failure details for user display
  * @param failures - Array of failures with names and reasons
@@ -284,10 +322,13 @@ function doesSourceMatchHostPattern(
   }
 
   try {
-    const regex = new RegExp(pattern.hostPattern)
+    const regex = getHostPatternRegex(pattern.hostPattern)
+    if (!regex) {
+      logError(new Error(`Invalid hostPattern regex: ${pattern.hostPattern}`))
+      return false
+    }
     return regex.test(host)
   } catch {
-    // Invalid regex - log and return false
     logError(new Error(`Invalid hostPattern regex: ${pattern.hostPattern}`))
     return false
   }
@@ -311,7 +352,11 @@ function doesSourceMatchPathPattern(
   }
 
   try {
-    const regex = new RegExp(pattern.pathPattern)
+    const regex = getPathPatternRegex(pattern.pathPattern)
+    if (!regex) {
+      logError(new Error(`Invalid pathPattern regex: ${pattern.pathPattern}`))
+      return false
+    }
     return regex.test(source.path)
   } catch {
     logError(new Error(`Invalid pathPattern regex: ${pattern.pathPattern}`))
