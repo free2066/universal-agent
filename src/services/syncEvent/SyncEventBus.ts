@@ -18,10 +18,10 @@
 
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import crypto from 'crypto'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
+import { HOME_DIR } from '../../utils/env.js'
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Types
@@ -59,7 +59,7 @@ type Handler<T = unknown> = (event: SyncEvent<T>) => void
 // ──────────────────────────────────────────────────────────────────────────────
 
 /** Directory where JSONL event log files are stored */
-const EVENTS_DIR = path.join(os.homedir(), '.uagent', 'events')
+const EVENTS_DIR = path.join(HOME_DIR, '.uagent', 'events')
 const MAX_BUFFERED_EVENTS_ON_FAILURE = 1000
 
 /** Cached date string for todayFile (refreshed every minute) */

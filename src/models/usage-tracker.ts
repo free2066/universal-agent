@@ -65,8 +65,18 @@ const UAGENT_DIR = resolve(HOME_DIR, '.uagent');
 const USAGE_DIR = resolve(UAGENT_DIR, 'usage');
 const LIMITS_FILE = resolve(UAGENT_DIR, 'limits.json');
 
+// Cached date key (refreshed every minute)
+let _cachedTodayKey: string | null = null;
+let _cachedTodayTimestamp: number = 0;
+
 function todayKey(): string {
-  return new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  const now = Date.now();
+  if (_cachedTodayKey && now - _cachedTodayTimestamp < 60000) {
+    return _cachedTodayKey;
+  }
+  _cachedTodayKey = new Date(now).toISOString().slice(0, 10);
+  _cachedTodayTimestamp = now;
+  return _cachedTodayKey;
 }
 
 // ── UsageTracker ──────────────────────────────────────────────────────────────

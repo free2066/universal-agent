@@ -23,9 +23,9 @@ import { promisify } from 'util'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
+import { HOME_DIR } from '../../utils/env.js'
 
 const execAsync = promisify(exec)
 
@@ -78,7 +78,7 @@ export class SnapshotService {
       .update(this.workTree)
       .digest('hex')
       .slice(0, 16)
-    this.gitDir = path.join(os.homedir(), '.uagent', 'snapshots', projectId)
+    this.gitDir = path.join(HOME_DIR, '.uagent', 'snapshots', projectId)
   }
 
   // ──────────────────────────────────────────────────────────

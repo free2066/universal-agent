@@ -17,8 +17,8 @@
 
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import { logForDebugging } from '../../utils/debug.js'
+import { HOME_DIR } from '../../utils/env.js'
 
 // ──────────────────────────────────────────────────────────
 //  Types
@@ -53,7 +53,7 @@ export class SessionDB {
   private readonly sessionsDir: string
 
   constructor(baseDir?: string) {
-    this.sessionsDir = baseDir ?? path.join(os.homedir(), '.uagent', 'sessions')
+    this.sessionsDir = baseDir ?? path.join(HOME_DIR, '.uagent', 'sessions')
     fs.mkdirSync(this.sessionsDir, { recursive: true })
   }
 

@@ -44,8 +44,10 @@ type StoredPastedContent = {
 // Note: The original text paste implementation would consider input like
 // "line1\nline2\nline3" to have +2 lines, not 3 lines. We preserve that
 // behavior here.
+const NEWLINE_RE = /\r\n|\r|\n/g
+
 export function getPastedTextRefNumLines(text: string): number {
-  return (text.match(/\r\n|\r|\n/g) || []).length
+  return (text.match(NEWLINE_RE) || []).length
 }
 
 export function formatPastedTextRef(id: number, numLines: number): string {
@@ -59,12 +61,13 @@ export function formatImageRef(id: number): string {
   return `[Image #${id}]`
 }
 
+// Precompiled regex for reference parsing
+const REFERENCE_PATTERN_RE = /\[(Pasted text|Image|\.\.\.Truncated text) #(\d+)(?: \+\d+ lines)?(\.)*\]/g
+
 export function parseReferences(
   input: string,
 ): Array<{ id: number; match: string; index: number }> {
-  const referencePattern =
-    /\[(Pasted text|Image|\.\.\.Truncated text) #(\d+)(?: \+\d+ lines)?(\.)*\]/g
-  const matches = [...input.matchAll(referencePattern)]
+  const matches = [...input.matchAll(REFERENCE_PATTERN_RE)]
   return matches
     .map(match => ({
       id: parseInt(match[2] || '0'),

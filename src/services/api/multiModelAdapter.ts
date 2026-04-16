@@ -89,10 +89,24 @@ const _UA_LOG_PATH: string | null = (() => {
   } catch { return null }
 })()
 
+// Cached timestamp prefix (refreshed every second)
+let _cachedTimestamp: string | null = null
+let _cachedTimestampTime: number = 0
+
+function getTimestampPrefix(): string {
+  const now = Date.now()
+  if (_cachedTimestamp && now - _cachedTimestampTime < 1000) {
+    return _cachedTimestamp
+  }
+  _cachedTimestamp = new Date(now).toISOString()
+  _cachedTimestampTime = now
+  return _cachedTimestamp
+}
+
 /** Async, non-blocking debug log helper. Silently swallows write errors. */
 function uaLogAsync(msg: string): void {
   if (!_UA_LOG_PATH) return
-  const line = `[${new Date().toISOString()}] ${msg}\n`
+  const line = `[${getTimestampPrefix()}] ${msg}\n`
   appendFile(_UA_LOG_PATH, line).catch(() => {})
 }
 

@@ -77,10 +77,10 @@ export function getModelCapability(model: string): ModelCapability | undefined {
   if (!isModelCapabilitiesEligible()) return undefined
   const cached = loadCache(getCachePath())
   if (!cached || cached.length === 0) return undefined
-  const m = model.toLowerCase()
-  const exact = cached.find(c => c.id.toLowerCase() === m)
+  const mLower = model.toLowerCase()
+  const exact = cached.find(c => c.id.toLowerCase() === mLower)
   if (exact) return exact
-  return cached.find(c => m.includes(c.id.toLowerCase()))
+  return cached.find(c => mLower.includes(c.id.toLowerCase()))
 }
 
 export async function refreshModelCapabilities(): Promise<void> {

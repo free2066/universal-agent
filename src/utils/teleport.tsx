@@ -399,7 +399,9 @@ export async function validateSessionRepository(sessionData: SessionResource): P
   // HTTPS remotes may include a non-standard port (e.g. ghe.corp.com:8443),
   // which would cause a false mismatch.
   const stripPort = (host: string): string => host.replace(/:\d+$/, '');
-  const repoMatch = currentRepo.toLowerCase() === sessionRepo.toLowerCase();
+  const currentRepoLower = currentRepo.toLowerCase()
+  const sessionRepoLower = sessionRepo.toLowerCase()
+  const repoMatch = currentRepoLower === sessionRepoLower
   const hostMatch = !currentParsed || !sessionParsed || stripPort(currentParsed.host.toLowerCase()) === stripPort(sessionParsed.host.toLowerCase());
   if (repoMatch && hostMatch) {
     return {

@@ -4,7 +4,6 @@ import { execa } from 'execa'
 import capitalize from 'lodash-es/capitalize.js'
 import memoize from 'lodash-es/memoize.js'
 import { createConnection } from 'net'
-import * as os from 'os'
 import { basename, join, sep as pathSeparator, resolve } from 'path'
 import { logEvent } from 'src/services/analytics/index.js'
 import { getIsScrollDraining, getOriginalCwd } from '../bootstrap/state.js'
@@ -14,7 +13,7 @@ import type {
   MCPServerConnection,
 } from '../services/mcp/types.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
-import { env } from './env.js'
+import { env, HOME_DIR } from './env.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
 import {
   execFileNoThrow,
@@ -1390,7 +1389,7 @@ const detectHostIP = memoize(
 
 async function installFromArtifactory(command: string): Promise<string> {
   // Read auth token from ~/.npmrc
-  const npmrcPath = join(os.homedir(), '.npmrc')
+  const npmrcPath = join(HOME_DIR, '.npmrc')
   let authToken: string | null = null
   const fs = getFsImplementation()
 

@@ -14,7 +14,6 @@
  */
 
 import { promises as fs } from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import {
@@ -24,6 +23,7 @@ import {
 import { logForDebugging } from '../debug.js'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
 import { errorMessage, getErrnoCode } from '../errors.js'
+import { HOME_DIR } from '../env.js'
 import { execFileNoThrow } from '../execFileNoThrow.js'
 import { getInitialSettings } from '../settings/settings.js'
 import { which } from '../which.js'
@@ -38,7 +38,7 @@ const MACOS_APP_NAME = 'Claude Code URL Handler.app'
 // Shared between register* (writes these paths/values) and
 // isProtocolHandlerCurrent (reads them back). Keep the writer and reader
 // in lockstep — drift here means the check returns a perpetual false.
-const MACOS_APP_DIR = path.join(os.homedir(), 'Applications', MACOS_APP_NAME)
+const MACOS_APP_DIR = path.join(HOME_DIR, 'Applications', MACOS_APP_NAME)
 const MACOS_SYMLINK_PATH = path.join(
   MACOS_APP_DIR,
   'Contents',

@@ -15,11 +15,11 @@
 
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import crypto from 'crypto'
 import { minimatch } from 'minimatch'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
+import { HOME_DIR } from '../../utils/env.js'
 
 // ──────────────────────────────────────────────────────────────────────────────
 //  Types
@@ -63,7 +63,7 @@ export interface PermissionRequest {
 //  PermissionService
 // ──────────────────────────────────────────────────────────────────────────────
 
-const PERMISSIONS_FILE = path.join(os.homedir(), '.uagent', 'permissions.json')
+const PERMISSIONS_FILE = path.join(HOME_DIR, '.uagent', 'permissions.json')
 
 export class PermissionService {
   private rules: PermissionRule[] = []
