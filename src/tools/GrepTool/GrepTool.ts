@@ -39,7 +39,7 @@ const COMMA_RE = /,/
 // ============================================================================
 // Search result cache (performance optimization)
 // ============================================================================
-const GREP_CACHE_TTL = 60_000 // 60 seconds
+const GREP_CACHE_TTL = 20_000 // 20 seconds
 interface GrepCacheEntry {
   key: string
   result: Output
