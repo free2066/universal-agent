@@ -16,7 +16,8 @@
 
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
+
+import { HOME_DIR } from '../../utils/env.js'
 
 // Simple in-process cache — avoids repeated disk reads per request
 const promptCache = new Map<string, string | null>()
@@ -27,8 +28,8 @@ const BUILTIN_DIR = path.resolve(
   '../../builtin-plugins/omo-agents/model-prompts',
 )
 
-// User override directory
-const USER_DIR = path.join(os.homedir(), '.uagent', 'model-prompts')
+// User override directory (use cached HOME_DIR)
+const USER_DIR = path.join(HOME_DIR, '.uagent', 'model-prompts')
 
 /**
  * Determine the prompt "family" key for a given model name.

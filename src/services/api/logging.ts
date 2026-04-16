@@ -105,6 +105,10 @@ const GATEWAY_HOST_SUFFIXES: Partial<Record<KnownGateway, string[]>> = {
   ],
 }
 
+// Pre-cache entries for O(1) lookup (avoid repeated Object.entries calls)
+const GATEWAY_FINGERPRINT_ENTRIES = Object.entries(GATEWAY_FINGERPRINTS)
+const GATEWAY_HOST_SUFFIX_ENTRIES = Object.entries(GATEWAY_HOST_SUFFIXES)
+
 function detectGateway({
   headers,
   baseUrl,
@@ -116,7 +120,7 @@ function detectGateway({
     // Header names are already lowercase from the Headers API
     const headerNames: string[] = []
     headers.forEach((_, key) => headerNames.push(key))
-    const gwEntry = Object.entries(GATEWAY_FINGERPRINTS).find(([, { prefixes }]) =>
+    const gwEntry = GATEWAY_FINGERPRINT_ENTRIES.find(([, { prefixes }]) =>
       prefixes.some(p => headerNames.some(h => h.startsWith(p))),
     )
     if (gwEntry) return gwEntry[0] as KnownGateway
@@ -125,7 +129,7 @@ function detectGateway({
   if (baseUrl) {
     try {
       const host = new URL(baseUrl).hostname.toLowerCase()
-      const gwEntry = Object.entries(GATEWAY_HOST_SUFFIXES).find(([, suffixes]) =>
+      const gwEntry = GATEWAY_HOST_SUFFIX_ENTRIES.find(([, suffixes]) =>
         suffixes.some(s => host.endsWith(s)),
       )
       if (gwEntry) return gwEntry[0] as KnownGateway

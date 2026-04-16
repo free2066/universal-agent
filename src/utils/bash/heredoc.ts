@@ -70,6 +70,9 @@ const HEREDOC_START_PATTERN =
   // eslint-disable-next-line custom-rules/no-lookbehind-regex -- gated by command.includes('<<') at extractHeredocs() entry
   /(?<!<)<<(?!<)(-)?[ \t]*(?:(['"])(\\?\w+)\2|\\?(\w+))/
 
+/** Pre-compiled global version for iteration (reuse via lastIndex reset) */
+const HEREDOC_START_PATTERN_GLOBAL = new RegExp(HEREDOC_START_PATTERN.source, 'g')
+
 export type HeredocInfo = {
   /** The full heredoc text including << operator, delimiter, content, and closing delimiter */
   fullText: string
@@ -168,7 +171,8 @@ export function extractHeredocs(
   }
 
   // Create a global version of the pattern for iteration
-  const heredocStartPattern = new RegExp(HEREDOC_START_PATTERN.source, 'g')
+  const heredocStartPattern = HEREDOC_START_PATTERN_GLOBAL
+  heredocStartPattern.lastIndex = 0
 
   const heredocMatches: HeredocInfo[] = []
   // Security: When quotedOnly skips an unquoted heredoc, we still need to

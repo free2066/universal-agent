@@ -28,6 +28,15 @@ type FormatterCommand = {
 // Cache: "ext|cwd" -> formatter commands or null (false = unavailable)
 const formatterCache = new Map<string, FormatterCommand[] | false>()
 
+// ============================================================================
+// Extension sets for O(1) lookup (instead of O(n) array.includes)
+// ============================================================================
+const JS_TS_EXTS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts'])
+const PRETTIER_EXTS = new Set(['.json', '.jsonc', '.yaml', '.yml', '.md', '.mdx', '.html', '.css', '.scss', '.less'])
+const ELIXIR_EXTS = new Set(['.ex', '.exs', '.heex', '.leex'])
+const C_CPP_EXTS = new Set(['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'])
+const SHELL_EXTS = new Set(['.sh', '.bash', '.zsh'])
+
 // Cache: command name -> available (true/false)
 const commandExistsCache = new Map<string, boolean>()
 
@@ -102,7 +111,7 @@ function detectFormatter(filePath: string): FormatterCommand[] | false {
   let formatter: FormatterCommand[] | false = false
 
   // JavaScript / TypeScript family
-  if (['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts'].includes(ext)) {
+  if (JS_TS_EXTS.has(ext)) {
     // Biome (faster, project-level config)
     if (findUp('biome.json', dir) || findUp('biome.jsonc', dir)) {
       if (commandExists('biome')) {
@@ -117,7 +126,7 @@ function detectFormatter(filePath: string): FormatterCommand[] | false {
   }
 
   // JSON / YAML / Markdown / HTML / CSS (also prettier)
-  else if (['.json', '.jsonc', '.yaml', '.yml', '.md', '.mdx', '.html', '.css', '.scss', '.less'].includes(ext)) {
+  else if (PRETTIER_EXTS.has(ext)) {
     if (hasDep(dir, 'prettier') || commandExists('prettier')) {
       formatter = prettierCommands()
     }
@@ -147,7 +156,7 @@ function detectFormatter(filePath: string): FormatterCommand[] | false {
   }
 
   // Elixir
-  else if (['.ex', '.exs', '.heex', '.leex'].includes(ext)) {
+  else if (ELIXIR_EXTS.has(ext)) {
     if (commandExists('mix')) {
       formatter = [{ command: 'mix', args: ['format', '$FILE'] }]
     }
@@ -170,7 +179,7 @@ function detectFormatter(filePath: string): FormatterCommand[] | false {
   }
 
   // C / C++
-  else if (['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'].includes(ext)) {
+  else if (C_CPP_EXTS.has(ext)) {
     if (findUp('.clang-format', dir) && commandExists('clang-format')) {
       formatter = [{ command: 'clang-format', args: ['-i', '$FILE'] }]
     }
@@ -184,7 +193,7 @@ function detectFormatter(filePath: string): FormatterCommand[] | false {
   }
 
   // Shell
-  else if (['.sh', '.bash', '.zsh'].includes(ext)) {
+  else if (SHELL_EXTS.has(ext)) {
     if (commandExists('shfmt')) {
       formatter = [{ command: 'shfmt', args: ['-w', '$FILE'] }]
     }

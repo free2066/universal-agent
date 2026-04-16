@@ -27,6 +27,43 @@ import {
 import { currentLimits } from '../claudeAiLimits.js'
 import { isSpeculationEnabled, startSpeculation } from './speculation.js'
 
+// ============================================================================
+// Precompiled regex patterns for shouldFilterSuggestion (performance)
+// ============================================================================
+const SILENCE_PATTERN_RE = /\bsilence is\b|\bstay(s|ing)? silent\b/
+const SILENCE_WRAP_RE = /^\W*silence\W*$/
+const META_WRAPPED_RE = /^\(.*\)$|^\[.*\]$/
+const PREFIXED_LABEL_RE = /^\w+:\s/
+const WHITESPACE_RE = /\s+/
+const MULTIPLE_SENTENCES_RE = /[.!?]\s+[A-Z]/
+const HAS_FORMATTING_RE = /[\n*]|\*\*/
+const EVALUATIVE_RE = /thanks|thank you|looks good|sounds good|that works|that worked|that's all|nice|great|perfect|makes sense|awesome|excellent/
+const CLAUDE_VOICE_RE = /^(let me|i'll|i've|i'm|i can|i would|i think|i notice|here's|here is|here are|that's|this is|this will|you can|you should|you could|sure,|of course|certainly)/i
+
+/** Allowed single-word suggestions that don't get filtered */
+const ALLOWED_SINGLE_WORDS = new Set([
+  // Affirmatives
+  'yes',
+  'yeah',
+  'yep',
+  'yea',
+  'yup',
+  'sure',
+  'ok',
+  'okay',
+  // Actions
+  'push',
+  'commit',
+  'deploy',
+  'stop',
+  'continue',
+  'check',
+  'exit',
+  'quit',
+  // Negation
+  'no',
+])
+
 let currentAbortController: AbortController | null = null
 
 export type PromptVariant = 'user_intent' | 'stated_intent'
@@ -362,8 +399,9 @@ export function shouldFilterSuggestion(
     return true
   }
 
-  const lower = suggestion.toLowerCase()
-  const wordCount = suggestion.trim().split(/\s+/).length
+  const trimmed = suggestion.trim()
+  const lower = trimmed.toLowerCase()
+  const wordCount = trimmed.split(WHITESPACE_RE).length
 
   const filters: Array<[string, () => boolean]> = [
     ['done', () => lower === 'done'],
@@ -375,14 +413,14 @@ export function shouldFilterSuggestion(
         lower.startsWith('nothing to suggest') ||
         lower.startsWith('no suggestion') ||
         // Model spells out the prompt's "stay silent" instruction
-        /\bsilence is\b|\bstay(s|ing)? silent\b/.test(lower) ||
+        SILENCE_PATTERN_RE.test(lower) ||
         // Model outputs bare "silence" wrapped in punctuation/whitespace
-        /^\W*silence\W*$/.test(lower),
+        SILENCE_WRAP_RE.test(lower),
     ],
     [
       'meta_wrapped',
       // Model wraps meta-reasoning in parens/brackets: (silence — ...), [no suggestion]
-      () => /^\(.*\)$|^\[.*\]$/.test(suggestion),
+      () => META_WRAPPED_RE.test(suggestion),
     ],
     [
       'error_message',
@@ -393,7 +431,7 @@ export function shouldFilterSuggestion(
         lower.startsWith('invalid api key') ||
         lower.startsWith('image was too large'),
     ],
-    ['prefixed_label', () => /^\w+:\s/.test(suggestion)],
+    ['prefixed_label', () => PREFIXED_LABEL_RE.test(suggestion)],
     [
       'too_few_words',
       () => {
@@ -401,49 +439,15 @@ export function shouldFilterSuggestion(
         // Allow slash commands — these are valid user commands
         if (suggestion.startsWith('/')) return false
         // Allow common single-word inputs that are valid user commands
-        const ALLOWED_SINGLE_WORDS = new Set([
-          // Affirmatives
-          'yes',
-          'yeah',
-          'yep',
-          'yea',
-          'yup',
-          'sure',
-          'ok',
-          'okay',
-          // Actions
-          'push',
-          'commit',
-          'deploy',
-          'stop',
-          'continue',
-          'check',
-          'exit',
-          'quit',
-          // Negation
-          'no',
-        ])
         return !ALLOWED_SINGLE_WORDS.has(lower)
       },
     ],
     ['too_many_words', () => wordCount > 12],
     ['too_long', () => suggestion.length >= 100],
-    ['multiple_sentences', () => /[.!?]\s+[A-Z]/.test(suggestion)],
-    ['has_formatting', () => /[\n*]|\*\*/.test(suggestion)],
-    [
-      'evaluative',
-      () =>
-        /thanks|thank you|looks good|sounds good|that works|that worked|that's all|nice|great|perfect|makes sense|awesome|excellent/.test(
-          lower,
-        ),
-    ],
-    [
-      'claude_voice',
-      () =>
-        /^(let me|i'll|i've|i'm|i can|i would|i think|i notice|here's|here is|here are|that's|this is|this will|you can|you should|you could|sure,|of course|certainly)/i.test(
-          suggestion,
-        ),
-    ],
+    ['multiple_sentences', () => MULTIPLE_SENTENCES_RE.test(suggestion)],
+    ['has_formatting', () => HAS_FORMATTING_RE.test(suggestion)],
+    ['evaluative', () => EVALUATIVE_RE.test(lower)],
+    ['claude_voice', () => CLAUDE_VOICE_RE.test(suggestion)],
   ]
 
   for (const [reason, check] of filters) {
