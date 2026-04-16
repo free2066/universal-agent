@@ -548,6 +548,10 @@ type Range = { start: number; end: number }
 
 const CHANGE_THRESHOLD = 0.4
 
+// Pre-compiled regex patterns for tokenize function (performance optimization)
+const WORD_CHAR_REGEX = /[\p{L}\p{N}_]/u
+const WHITESPACE_REGEX = /\s/
+
 // Tokenize into word runs, whitespace runs, and single punctuation chars —
 // matches the Rust tokenize() which mirrors diffWordsWithSpace's splitting.
 function tokenize(text: string): string[] {
@@ -555,14 +559,14 @@ function tokenize(text: string): string[] {
   let i = 0
   while (i < text.length) {
     const ch = text[i]!
-    if (/[\p{L}\p{N}_]/u.test(ch)) {
+    if (WORD_CHAR_REGEX.test(ch)) {
       let j = i + 1
-      while (j < text.length && /[\p{L}\p{N}_]/u.test(text[j]!)) j++
+      while (j < text.length && WORD_CHAR_REGEX.test(text[j]!)) j++
       tokens.push(text.slice(i, j))
       i = j
-    } else if (/\s/.test(ch)) {
+    } else if (WHITESPACE_REGEX.test(ch)) {
       let j = i + 1
-      while (j < text.length && /\s/.test(text[j]!)) j++
+      while (j < text.length && WHITESPACE_REGEX.test(text[j]!)) j++
       tokens.push(text.slice(i, j))
       i = j
     } else {
