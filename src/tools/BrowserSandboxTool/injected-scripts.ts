@@ -48,7 +48,7 @@ export const INTERCEPT_SCRIPT = `
                   responseText: text, timestamp: startTime,
                   source: self === window ? 'sandbox-main' : 'sandbox-worker',
                   status: res.status, type: 'fetch' });
-        }).catch(function() {});
+        }).catch(function() { /* Silently ignore clone.text() errors - response body may not be readable */ });
         return res;
       }).catch(function(e) {
         store({ url: url, method: method, requestBody: body,
@@ -129,7 +129,7 @@ export const JS_INTERCEPTOR_SCRIPT = `
       clone.text().then(function(text) {
         store({ url: url, method: method, requestBody: body, responseText: text,
                 timestamp: start, source: 'sandbox-js', status: res.status });
-      }).catch(function() {});
+      }).catch(function() { /* Silently ignore clone.text() errors - response body may not be readable */ });
       return res;
     }).catch(function(e) {
       store({ url: url, method: method, requestBody: body, error: String(e),
@@ -179,7 +179,7 @@ export const COLLECTOR_SCRIPT = `
           if (!seen.has(key)) { main.push(r); seen.add(key); }
         });
       }
-    } catch(e) {}
+    } catch(e) { /* Silently ignore cross-origin iframe access errors */ }
 
     result.intercepted = main;
     result.dom = {

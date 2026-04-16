@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * src/services/api/multiModelAdapter.ts
  *
@@ -15,6 +14,20 @@ import { resolve as pathResolve, normalize as pathNormalize } from 'path'
 import { createLLMClient } from '../../models/llm/factory.js'
 import { getModelPromptRules } from '../modelPrompt/index.js'
 import { sleep } from '../../utils/sleep.js'
+import type {
+  ContentBlock,
+  ToolResultContentBlock,
+  AnthropicBetaMessageParam,
+  UAMessage,
+  UAToolDefinition,
+  AnthropicToolDefinition,
+  UAChatResponse,
+  AnthropicMessage,
+  SSEEvent,
+  AnthropicMessagesCreateParams,
+  AnthropicMessagesCreateOptions,
+  UAToolCall,
+} from './types.js'
 
 // MA-6: Validate UA_DEBUG_LOG path once at module load to prevent path traversal.
 // Reject /proc, /sys, /etc and other dangerous system directories.
@@ -46,8 +59,8 @@ function isPersistentRetryEnabled(): boolean {
 }
 
 /** Convert Anthropic BetaMessageStreamParams → UA ChatOptions messages array (NO system) */
-function convertAnthropicMessagesToUA(params: any): any[] {
-  const messages: any[] = []
+function convertAnthropicMessagesToUA(params: AnthropicMessagesCreateParams): UAMessage[] {
+  const messages: UAMessage[] = []
 
   // NOTE: system prompt is handled separately in _callModel as chatOptions.systemPrompt
   // Do NOT push system here to avoid duplication in OpenAIClient.convertMessages()
@@ -65,13 +78,14 @@ function convertAnthropicMessagesToUA(params: any): any[] {
       if (toolResults.length > 0) {
         if (textContent) messages.push({ role: 'user', content: textContent })
         for (const tr of toolResults) {
-          const resultContent = Array.isArray(tr.content)
-            ? tr.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-            : (typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content))
+          const trBlock = tr as ToolResultContentBlock
+          const resultContent = Array.isArray(trBlock.content)
+            ? trBlock.content.filter((b: ContentBlock) => b.type === 'text').map((b: ContentBlock & { text: string }) => b.text).join('\n')
+            : (typeof trBlock.content === 'string' ? trBlock.content : JSON.stringify(trBlock.content))
           messages.push({
             role: 'tool',
             content: resultContent,
-            toolCallId: tr.tool_use_id,
+            toolCallId: trBlock.tool_use_id,
           })
         }
       } else {
@@ -84,11 +98,14 @@ function convertAnthropicMessagesToUA(params: any): any[] {
         messages.push({
           role: 'assistant',
           content: textContent,
-          toolCalls: toolUses.map((tu: any) => ({
-            id: tu.id,
-            name: tu.name,
-            arguments: tu.input || {},
-          })),
+          toolCalls: toolUses.map((tu: ContentBlock) => {
+            const tuBlock = tu as ContentBlock & { id: string; name: string; input?: Record<string, unknown> }
+            return {
+              id: tuBlock.id,
+              name: tuBlock.name,
+              arguments: tuBlock.input || {},
+            }
+          }),
         })
       } else {
         messages.push({ role: 'assistant', content: textContent })
@@ -99,33 +116,33 @@ function convertAnthropicMessagesToUA(params: any): any[] {
   return messages
 }
 
-function extractTextContent(content: any): string {
+function extractTextContent(content: string | ContentBlock[]): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   // P3: join with '' not '\n' — Anthropic text blocks are semantically flat;
   // using '\n' can break JSON content or introduce spurious whitespace.
   return content
-    .filter((b: any) => b.type === 'text')
-    .map((b: any) => b.text || '')
+    .filter((b: ContentBlock) => b.type === 'text')
+    .map((b: ContentBlock & { text: string }) => b.text || '')
     .join('')
 }
 
-function extractToolUses(content: any): any[] {
+function extractToolUses(content: string | ContentBlock[]): ContentBlock[] {
   if (!Array.isArray(content)) return []
-  return content.filter((b: any) => b.type === 'tool_use')
+  return content.filter((b: ContentBlock) => b.type === 'tool_use')
 }
 
-function extractToolResults(content: any): any[] {
+function extractToolResults(content: string | ContentBlock[]): ContentBlock[] {
   if (!Array.isArray(content)) return []
-  return content.filter((b: any) => b.type === 'tool_result')
+  return content.filter((b: ContentBlock) => b.type === 'tool_result')
 }
 
 /** Convert Anthropic tool definitions → UA tool definitions */
-function convertTools(anthropicTools: any[]): any[] {
+function convertTools(anthropicTools: AnthropicToolDefinition[]): UAToolDefinition[] {
   if (!anthropicTools?.length) return []
   return anthropicTools
-    .filter((t: any) => t.name)
-    .map((t: any) => ({
+    .filter((t: AnthropicToolDefinition) => t.name)
+    .map((t: AnthropicToolDefinition) => ({
       name: t.name,
       description: t.description || '',
       parameters: t.input_schema || { type: 'object', properties: {} },
@@ -155,12 +172,12 @@ function normalizeToolName(name: string): string {
 
 /** Convert UA ChatResponse → Anthropic BetaMessage format */
 function convertResponseToAnthropicMessage(
-  response: any,
+  response: UAChatResponse,
   model: string,
   inputTokens = 0,
   outputTokens = 0,
-): any {
-  const content: any[] = []
+): AnthropicMessage {
+  const content: ContentBlock[] = []
 
   if (response.type === 'tool_calls') {
     if (response.content) {
@@ -200,11 +217,11 @@ function convertResponseToAnthropicMessage(
  * Anthropic SSE event shape CC's engine expects.
  */
 async function* createFakeStream(
-  response: any,
+  response: UAChatResponse,
   model: string,
   inputTokens: number,
   outputTokens: number,
-): AsyncGenerator<any> {
+): AsyncGenerator<SSEEvent> {
   const message = convertResponseToAnthropicMessage(response, model, inputTokens, outputTokens)
 
   yield {
@@ -259,11 +276,12 @@ async function* createFakeStream(
  * `.withResponse()` must return { data: AsyncIterable<events>, response: Response, request_id: string }
  */
 function buildStreamResult(
-  response: any,
+  response: UAChatResponse,
   model: string,
   inputTokens: number,
   outputTokens: number,
-): any {
+): // eslint-disable-next-line @typescript-eslint/no-explicit-any
+any {
   const fakeRequestId = `ua-${randomUUID()}`
   const finalMessage = convertResponseToAnthropicMessage(response, model, inputTokens, outputTokens)
 
@@ -286,7 +304,7 @@ function buildStreamResult(
   const result = Object.assign(
     {
       // MA-1: pass reject through so downstream Promise chains receive errors
-      then: (resolve: any, reject: any) => Promise.resolve(data).then(resolve, reject),
+      then: <T>(resolve: (value: unknown) => T | unknown, reject: (reason: unknown) => unknown) => Promise.resolve(data).then(resolve, reject),
       withResponse: () =>
         Promise.resolve({ data, response: fakeResponse, request_id: fakeRequestId }),
     },
@@ -503,20 +521,24 @@ function getModelSpecificPromptRules(modelName: string): string | null {
  */
 export class MultiModelAnthropicAdapter {
   private modelName: string
-  private llmClient: any
+  private llmClient: ReturnType<typeof createLLMClient>
 
   constructor(modelName: string) {
     this.modelName = modelName
     this.llmClient = createLLMClient(modelName)
   }
 
-  private async _callModel(params: any, options?: any, retryCount = 0): Promise<any> {
+  private async _callModel(
+    params: AnthropicMessagesCreateParams,
+    options?: AnthropicMessagesCreateOptions,
+    retryCount = 0,
+  ): Promise<{ chatResponse: UAChatResponse; inputTokens: number; outputTokens: number; _realStream?: unknown }> {
     // Extract system prompt and conversation messages separately
     // (UA LLM clients expect { systemPrompt, messages } not a merged array)
     let systemPrompt = ''
     if (params.system) {
       systemPrompt = Array.isArray(params.system)
-        ? params.system.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+        ? params.system.filter((b: ContentBlock) => b.type === 'text').map((b: ContentBlock & { text: string }) => b.text).join('\n')
         : String(params.system)
     }
 
@@ -532,7 +554,7 @@ export class MultiModelAnthropicAdapter {
     const messages = convertAnthropicMessagesToUA(params)
     const tools = convertTools(params.tools || [])
 
-    // Build UA-format ChatOptions
+    // Build UA-format ChatOptions (cast to any to avoid strict type mismatch)
     const chatOptions: any = {
       systemPrompt,
       messages,
