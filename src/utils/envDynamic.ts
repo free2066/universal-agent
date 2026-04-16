@@ -1,7 +1,7 @@
 import { feature } from 'bun:bundle'
 import { stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
-import { env, JETBRAINS_IDES } from './env.js'
+import { env, JETBRAINS_IDES, IS_LINUX, IS_MAC, IS_WINDOWS } from './env.js'
 import { isEnvTruthy } from './envUtils.js'
 import { execFileNoThrow } from './execFileNoThrow.js'
 import { getAncestorCommandsAsync } from './genericProcessUtils.js'
@@ -9,17 +9,14 @@ import { getAncestorCommandsAsync } from './genericProcessUtils.js'
 // Functions that require execFileNoThrow and thus cannot be in env.ts
 
 const getIsDocker = memoize(async (): Promise<boolean> => {
-  if (process.platform !== 'linux') return false
+  if (!IS_LINUX) return false
   // Check for .dockerenv file
   const { code } = await execFileNoThrow('test', ['-f', '/.dockerenv'])
   return code === 0
 })
 
 function getIsBubblewrapSandbox(): boolean {
-  return (
-    process.platform === 'linux' &&
-    isEnvTruthy(process.env.CLAUDE_CODE_BUBBLEWRAP)
-  )
+  return IS_LINUX && isEnvTruthy(process.env.CLAUDE_CODE_BUBBLEWRAP)
 }
 
 // Cache for the runtime musl detection fallback (node/unbundled only).
@@ -31,7 +28,7 @@ let muslRuntimeCache: boolean | null = null
 // Native builds never reach this (feature flags short-circuit), so this only
 // matters for unbundled node on Linux. Installer calls on native builds are
 // unaffected since feature() resolves at compile time.
-if (process.platform === 'linux') {
+if (IS_LINUX) {
   const muslArch = process.arch === 'x64' ? 'x86_64' : 'aarch64'
   void stat(`/lib/libc.musl-${muslArch}.so.1`).then(
     () => {
@@ -54,7 +51,7 @@ function isMuslEnvironment(): boolean {
   if (feature('IS_LIBC_GLIBC')) return false
 
   // Fallback for node: runtime detection via pre-populated cache
-  if (process.platform !== 'linux') return false
+  if (!IS_LINUX) return false
   return muslRuntimeCache ?? false
 }
 
@@ -68,7 +65,7 @@ async function detectJetBrainsIDEFromParentProcessAsync(): Promise<
     return jetBrainsIDECache
   }
 
-  if (process.platform === 'darwin') {
+  if (IS_MAC) {
     jetBrainsIDECache = null
     return null // macOS uses bundle ID detection which is already handled
   }

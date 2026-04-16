@@ -19,6 +19,9 @@ const ESCAPED_BACKSLASH_PLACEHOLDER_RE = new RegExp(
   'g',
 )
 
+// Precompiled regex for detecting unescaped asterisks
+const UNESCAPED_ASTERISK_RE = /(?<!\\)(?:\\\\)*\*/g
+
 // ============================================================================
 // Regex pattern cache for wildcard matching (performance optimization)
 // ============================================================================
@@ -62,25 +65,9 @@ export function hasWildcards(pattern: string): boolean {
   if (pattern.endsWith(':*')) {
     return false
   }
-  // Check for unescaped * anywhere in the pattern
-  // An asterisk is unescaped if it's not preceded by a backslash,
-  // or if it's preceded by an even number of backslashes (escaped backslashes)
-  for (let i = 0; i < pattern.length; i++) {
-    if (pattern[i] === '*') {
-      // Count backslashes before this asterisk
-      let backslashCount = 0
-      let j = i - 1
-      while (j >= 0 && pattern[j] === '\\') {
-        backslashCount++
-        j--
-      }
-      // If even number of backslashes (including 0), the asterisk is unescaped
-      if (backslashCount % 2 === 0) {
-        return true
-      }
-    }
-  }
-  return false
+  // Use precompiled regex to detect unescaped asterisks
+  UNESCAPED_ASTERISK_RE.lastIndex = 0
+  return UNESCAPED_ASTERISK_RE.test(pattern)
 }
 
 /**

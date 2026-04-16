@@ -25,6 +25,13 @@ import { readFileSync } from '../../fileRead.js'
 import { getFsImplementation } from '../../fsOperations.js'
 import { safeParseJSON } from '../../json.js'
 import { profileCheckpoint } from '../../startupProfiler.js'
+
+// ============================================================================
+// Regex cache for parseRegQueryStdout (performance optimization)
+// ============================================================================
+const REG_QUERY_CACHE = new Map<string, RegExp>()
+const MAX_REG_QUERY_CACHE = 50
+
 import {
   getManagedFilePath,
   getManagedSettingsDropInDir,
@@ -210,8 +217,17 @@ export function parseRegQueryStdout(
   valueName = 'Settings',
 ): string | null {
   const lines = stdout.split(/\r?\n/)
-  const escaped = valueName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = new RegExp(`^\\s+${escaped}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)$`, 'i')
+
+  // Use cached regex if available
+  let re = REG_QUERY_CACHE.get(valueName)
+  if (!re) {
+    const escaped = valueName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    re = new RegExp(`^\\s+${escaped}\\s+REG_(?:EXPAND_)?SZ\\s+(.*)$`, 'i')
+    if (REG_QUERY_CACHE.size < MAX_REG_QUERY_CACHE) {
+      REG_QUERY_CACHE.set(valueName, re)
+    }
+  }
+
   for (const line of lines) {
     const match = line.match(re)
     if (match && match[1]) {

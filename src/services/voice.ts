@@ -10,6 +10,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { isEnvTruthy, isRunningOnHomespace } from '../utils/envUtils.js'
 import { logError } from '../utils/log.js'
 import { getPlatform } from '../utils/platform.js'
+import { IS_MAC, IS_LINUX, IS_WINDOWS } from '../utils/env.js'
 
 // Lazy-loaded native audio module. audio-capture.node links against
 // CoreAudio.framework + AudioUnit.framework; dlopen is synchronous and
@@ -149,7 +150,7 @@ type PackageManagerInfo = {
 }
 
 function detectPackageManager(): PackageManagerInfo | null {
-  if (process.platform === 'darwin') {
+  if (IS_MAC) {
     if (hasCommand('brew')) {
       return {
         cmd: 'brew',
@@ -160,7 +161,7 @@ function detectPackageManager(): PackageManagerInfo | null {
     return null
   }
 
-  if (process.platform === 'linux') {
+  if (IS_LINUX) {
     if (hasCommand('apt-get')) {
       return {
         cmd: 'sudo',
@@ -199,7 +200,7 @@ export async function checkVoiceDependencies(): Promise<{
   }
 
   // Windows has no supported fallback — native module is required
-  if (process.platform === 'win32') {
+  if (IS_WINDOWS) {
     return {
       available: false,
       missing: ['Voice mode requires the native audio module (not loaded)'],
@@ -208,7 +209,7 @@ export async function checkVoiceDependencies(): Promise<{
   }
 
   // On Linux, arecord (ALSA utils) is a valid fallback recording backend
-  if (process.platform === 'linux' && hasCommand('arecord')) {
+  if (IS_LINUX && hasCommand('arecord')) {
     return { available: true, missing: [], installCommand: null }
   }
 
@@ -273,7 +274,7 @@ export async function checkRecordingAvailability(): Promise<RecordingAvailabilit
   }
 
   // Windows has no supported fallback
-  if (process.platform === 'win32') {
+  if (IS_WINDOWS) {
     return {
       available: false,
       reason:
@@ -288,7 +289,7 @@ export async function checkRecordingAvailability(): Promise<RecordingAvailabilit
   // the binary can exist while the device open() fails (WSL1, Win10-WSL2,
   // headless Linux). WSL2+WSLg (Win11 default) works via PulseAudio RDP
   // pipes — cpal fails (no /proc/asound/cards) but arecord succeeds.
-  if (process.platform === 'linux' && hasCommand('arecord')) {
+  if (IS_LINUX && hasCommand('arecord')) {
     const probe = await probeArecord()
     if (probe.ok) {
       return { available: true, reason: null }
@@ -343,7 +344,7 @@ export async function startRecording(
   const napi = await loadAudioNapi()
   const nativeAvailable =
     napi.isNativeAudioAvailable() &&
-    (process.platform !== 'linux' || (await linuxHasAlsaCards()))
+    (!IS_LINUX || (await linuxHasAlsaCards()))
   const useSilenceDetection = options?.silenceDetection !== false
   if (nativeAvailable) {
     // Ensure any previous recording is fully stopped
@@ -373,7 +374,7 @@ export async function startRecording(
   }
 
   // Windows has no supported fallback
-  if (process.platform === 'win32') {
+  if (IS_WINDOWS) {
     logForDebugging('[voice] Windows native recording unavailable, no fallback')
     return false
   }
@@ -383,11 +384,7 @@ export async function startRecording(
   // on headless Linux with both alsa-utils and SoX, the availability
   // check falls through to SoX (probe.ok=false, not WSL) but this path
   // would still pick broken arecord. Probe is memoized; zero latency.
-  if (
-    process.platform === 'linux' &&
-    hasCommand('arecord') &&
-    (await probeArecord()).ok
-  ) {
+  if (IS_LINUX && hasCommand('arecord') && (await probeArecord()).ok) {
     return startArecordRecording(onData, onEnd)
   }
 
