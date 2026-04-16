@@ -30,6 +30,12 @@ import {
   renderToolUseMessage,
 } from './UI.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const WHITESPACE_RE = /\s+/
+const COMMA_RE = /,/
+
 const inputSchema = lazySchema(() =>
   z.strictObject({
     pattern: z
@@ -391,7 +397,7 @@ export const GrepTool = buildTool({
     if (glob) {
       // Split on commas and spaces, but preserve patterns with braces
       const globPatterns: string[] = []
-      const rawPatterns = glob.split(/\s+/)
+      const rawPatterns = glob.split(WHITESPACE_RE)
 
       for (const rawPattern of rawPatterns) {
         // If pattern contains braces, don't split further
@@ -399,7 +405,7 @@ export const GrepTool = buildTool({
           globPatterns.push(rawPattern)
         } else {
           // Split on commas for patterns without braces
-          globPatterns.push(...rawPattern.split(',').filter(Boolean))
+          globPatterns.push(...rawPattern.split(COMMA_RE).filter(Boolean))
         }
       }
 

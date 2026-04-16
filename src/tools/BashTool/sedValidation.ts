@@ -4,6 +4,11 @@ import { splitCommand_DEPRECATED } from '../../utils/bash/commands.js'
 import { tryParseShellCommand } from '../../utils/bash/shellQuote.js'
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const WHITESPACE_RE = /\s+/
+
 /**
  * Helper: Validate flags against an allowlist
  * Handles both single flags and combined flags (e.g., -nE)
@@ -651,7 +656,7 @@ export function checkSedConstraints(
   for (const cmd of commands) {
     // Skip non-sed commands
     const trimmed = cmd.trim()
-    const baseCmd = trimmed.split(/\s+/)[0]
+    const baseCmd = trimmed.split(WHITESPACE_RE)[0]
     if (baseCmd !== 'sed') {
       continue
     }
