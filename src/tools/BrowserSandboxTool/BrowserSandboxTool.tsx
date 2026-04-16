@@ -127,13 +127,35 @@ let _cdpClient: CDPClient | null = null
 let _interceptionCollector: InterceptionCollector | null = null
 let _pageLoaded = false
 
+// ============================================================================
+// Pattern matching utilities (precompiled regex for performance)
+// ============================================================================
+
+/** Precompiled regexes for default patterns (avoid per-call compilation) */
+const DEFAULT_PATTERN_REGEXES: RegExp[] = (() => {
+  const patterns = getDefaultPatterns()
+  return patterns.map(p => {
+    const escaped = p
+      .replace(/\*\*/g, '\x00DBLSTAR\x00')
+      .replace(/\*/g, '\x00STAR\x00')
+      .replace(/[.+?()\[\]{}^$|\\]/g, '\\$&')
+      .replace(/\x00DBLSTAR\x00/g, '.*')
+      .replace(/\x00STAR\x00/g, '[^/]*')
+    return new RegExp(escaped)
+  })
+})()
+
 function getDefaultPatterns(): string[] {
   return ['**/api/**', '**/data/**', '**/query**', '**/*.json', '**/graphql**']
 }
 
 function matchesPattern(url: string, patterns: string[]): boolean {
+  // Use precompiled default patterns for performance
+  if (patterns === getDefaultPatterns()) {
+    return DEFAULT_PATTERN_REGEXES.some(re => re.test(url))
+  }
+  // Fallback for custom patterns
   for (const p of patterns) {
-    // Escape regex special chars, then replace glob tokens
     const escaped = p
       .replace(/\*\*/g, '\x00DBLSTAR\x00')
       .replace(/\*/g, '\x00STAR\x00')

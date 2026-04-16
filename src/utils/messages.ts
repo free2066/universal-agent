@@ -86,6 +86,14 @@ import { formatNumber, formatTokens } from './format.js'
 import { getPewterLedgerVariant } from './planModeV2.js'
 import { jsonStringify } from './slowOperations.js'
 
+// ============================================================================
+// Regex cache for extractTag function (performance optimization)
+// ============================================================================
+const TAG_REGEX_CACHE = new Map<
+  string,
+  { pattern: RegExp; openingTag: RegExp; closingTag: RegExp }
+>()
+
 // Hook attachments that have a hookName field (excludes HookPermissionDecisionAttachment)
 type HookAttachmentWithName = Exclude<
   HookAttachment,
@@ -638,23 +646,46 @@ export function extractTag(html: string, tagName: string): string | null {
 
   const escapedTag = escapeRegExp(tagName)
 
-  // Create regex pattern that handles:
-  // 1. Self-closing tags
-  // 2. Tags with attributes
-  // 3. Nested tags of the same type
-  // 4. Multiline content
-  const pattern = new RegExp(
-    `<${escapedTag}(?:\\s+[^>]*)?>` + // Opening tag with optional attributes
-      '([\\s\\S]*?)' + // Content (non-greedy match)
-      `<\\/${escapedTag}>`, // Closing tag
-    'gi',
-  )
+  // Cache compiled regexes for common tags (performance optimization)
+  const cacheKey = escapedTag
+  const cached = TAG_REGEX_CACHE.get(cacheKey)
+  let pattern: RegExp
+  let openingTag: RegExp
+  let closingTag: RegExp
+
+  if (cached) {
+    pattern = cached.pattern
+    openingTag = cached.openingTag
+    closingTag = cached.closingTag
+  } else {
+    // Create regex pattern that handles:
+    // 1. Self-closing tags
+    // 2. Tags with attributes
+    // 3. Nested tags of the same type
+    // 4. Multiline content
+    pattern = new RegExp(
+      `<${escapedTag}(?:\\s+[^>]*)?>` + // Opening tag with optional attributes
+        '([\\s\\S]*?)' + // Content (non-greedy match)
+        `<\\/${escapedTag}>`, // Closing tag
+      'gi',
+    )
+    openingTag = new RegExp(`<${escapedTag}(?:\\s+[^>]*?)?>`, 'gi')
+    closingTag = new RegExp(`<\\/${escapedTag}>`, 'gi')
+
+    // Cache for future use (limit cache size)
+    if (TAG_REGEX_CACHE.size < 32) {
+      TAG_REGEX_CACHE.set(cacheKey, { pattern, openingTag, closingTag })
+    }
+  }
+
+  // Reset lastIndex for global regexes
+  pattern.lastIndex = 0
+  openingTag.lastIndex = 0
+  closingTag.lastIndex = 0
 
   let match
   let depth = 0
   let lastIndex = 0
-  const openingTag = new RegExp(`<${escapedTag}(?:\\s+[^>]*?)?>`, 'gi')
-  const closingTag = new RegExp(`<\\/${escapedTag}>`, 'gi')
 
   while ((match = pattern.exec(html)) !== null) {
     // Check for nested tags

@@ -1400,6 +1400,7 @@ export function isCommandSafeViaFlagParsing(command: string): boolean {
 
 /**
  * Creates a regex pattern that matches safe invocations of a command.
+ * Uses a cache to avoid recompiling the same regex patterns.
  *
  * The regex ensures commands are invoked safely by blocking:
  * - Shell metacharacters that could lead to command injection or redirection
@@ -1410,9 +1411,27 @@ export function isCommandSafeViaFlagParsing(command: string): boolean {
  * @param command The command name (e.g., 'date', 'npm list', 'ip addr')
  * @returns RegExp that matches safe invocations of the command
  */
+const SAFE_COMMAND_REGEX_CACHE = new Map<string, RegExp>()
+const MAX_REGEX_CACHE_SIZE = 64
+
 function makeRegexForSafeCommand(command: string): RegExp {
-  // Create regex pattern: /^command(?:\s|$)[^<>()$`|{}&;\n\r]*$/
-  return new RegExp(`^${command}(?:\\s|$)[^<>()$\`|{}&;\\n\\r]*$`)
+  // Check cache first
+  let regex = SAFE_COMMAND_REGEX_CACHE.get(command)
+  if (regex) return regex
+
+  // Create and cache the regex
+  regex = new RegExp(`^${command}(?:\\s|$)[^<>()$\`|{}&;\\n\\r]*$`)
+
+  // Simple LRU eviction: clear half the cache when full
+  if (SAFE_COMMAND_REGEX_CACHE.size >= MAX_REGEX_CACHE_SIZE) {
+    const keys = Array.from(SAFE_COMMAND_REGEX_CACHE.keys())
+    for (let i = 0; i < keys.length / 2; i++) {
+      SAFE_COMMAND_REGEX_CACHE.delete(keys[i])
+    }
+  }
+
+  SAFE_COMMAND_REGEX_CACHE.set(command, regex)
+  return regex
 }
 
 // Simple commands that are safe for execution (converted to regex patterns using makeRegexForSafeCommand)

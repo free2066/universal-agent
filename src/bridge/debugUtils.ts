@@ -24,6 +24,8 @@ const SECRET_PATTERN = new RegExp(
 const REDACT_MIN_LENGTH = 16
 
 export function redactSecrets(s: string): string {
+  // Reset lastIndex for global regex to avoid state pollution across calls
+  SECRET_PATTERN.lastIndex = 0
   return s.replace(SECRET_PATTERN, (_match, field: string, value: string) => {
     if (value.length < REDACT_MIN_LENGTH) {
       return `"${field}":"[REDACTED]"`

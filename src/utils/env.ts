@@ -8,7 +8,24 @@ import { findExecutable } from './findExecutable.js'
 import { getFsImplementation } from './fsOperations.js'
 import { which } from './which.js'
 
+// ============================================================================
+// Platform constants (evaluated once at module load)
+// ============================================================================
+
 type Platform = 'win32' | 'darwin' | 'linux'
+
+/** Current platform - cached to avoid repeated process.platform access */
+const PLATFORM: Platform = process.platform as Platform
+
+/** Platform check constants for cleaner conditionals */
+const IS_MAC = PLATFORM === 'darwin'
+const IS_LINUX = PLATFORM === 'linux'
+const IS_WINDOWS = PLATFORM === 'win32'
+
+/** Cached home directory to avoid repeated os.homedir() calls */
+const HOME_DIR = homedir()
+
+export { PLATFORM, IS_MAC, IS_LINUX, IS_WINDOWS, HOME_DIR }
 
 // Config and data paths
 export const getGlobalClaudeFile = memoize((): string => {

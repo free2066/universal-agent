@@ -318,12 +318,28 @@ export function dedupClaudeAiMcpServers(
  *   "https://*.example.com/*" matches "https://api.example.com/path"
  *   "https://example.com:*\/*" matches any port
  */
+const URL_PATTERN_REGEX_CACHE = new Map<string, RegExp>()
+const MAX_URL_PATTERN_CACHE_SIZE = 32
+
 function urlPatternToRegex(pattern: string): RegExp {
+  // Check cache first
+  let regex = URL_PATTERN_REGEX_CACHE.get(pattern)
+  if (regex) return regex
+
   // Escape regex special characters except *
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
   // Replace * with regex equivalent (match any characters)
   const regexStr = escaped.replace(/\*/g, '.*')
-  return new RegExp(`^${regexStr}$`)
+  regex = new RegExp(`^${regexStr}$`)
+
+  // Cache for future use (simple LRU eviction)
+  if (URL_PATTERN_REGEX_CACHE.size >= MAX_URL_PATTERN_CACHE_SIZE) {
+    const firstKey = URL_PATTERN_REGEX_CACHE.keys().next().value
+    if (firstKey) URL_PATTERN_REGEX_CACHE.delete(firstKey)
+  }
+  URL_PATTERN_REGEX_CACHE.set(pattern, regex)
+
+  return regex
 }
 
 /**
