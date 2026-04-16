@@ -656,8 +656,8 @@ export class MultiModelAnthropicAdapter {
         }
 
         const inputLen = messages.reduce((s: number, m: any) => s + JSON.stringify(m).length, 0)
-        const inputTokensFn = () => Math.ceil(inputLen / 4)
-        const outputTokensFn = () => Math.ceil(outputLen / 4)
+        const inputTokensFn = () => chatResponse?.usage?.input_tokens ?? Math.ceil(inputLen / 4)
+        const outputTokensFn = () => chatResponse?.usage?.output_tokens ?? Math.ceil(outputLen / 4)
 
         // Wrap streamChat in a retry helper so 429 rate-limit errors from the
         // streaming request are retried before the rejection propagates.
@@ -859,8 +859,8 @@ export class MultiModelAnthropicAdapter {
       ? chatResponse.content.length
       : JSON.stringify(chatResponse?.toolCalls || []).length
     const inputLen = messages.reduce((s, m) => s + JSON.stringify(m).length, 0)
-    const inputTokens = Math.ceil(inputLen / 4)
-    const outputTokens = Math.ceil(contentLen / 4)
+    const inputTokens = chatResponse?.usage?.input_tokens ?? Math.ceil(inputLen / 4)
+    const outputTokens = chatResponse?.usage?.output_tokens ?? Math.ceil(contentLen / 4)
 
     return { chatResponse, inputTokens, outputTokens }
   }
