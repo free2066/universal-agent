@@ -398,7 +398,9 @@ export function parseShellFrontmatter(
   if (value == null) {
     return undefined
   }
-  const normalized = String(value).trim().toLowerCase()
+  // Avoid unnecessary String() call for string values
+  const str = typeof value === 'string' ? value : String(value)
+  const normalized = str.trim().toLowerCase()
   if (normalized === '') {
     return undefined
   }

@@ -9,6 +9,10 @@ import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { isEnvTruthy } from './envUtils.js'
 import type { EffortLevel } from 'src/entrypoints/sdk/runtimeTypes.js'
 
+// Cache for model support checks to avoid repeated toLowerCase() calls
+const MODEL_SUPPORTS_EFFORT_CACHE = new Map<string, boolean>()
+const MODEL_SUPPORTS_MAX_CACHE = new Map<string, boolean>()
+
 export type { EffortLevel }
 
 export const EFFORT_LEVELS = [
@@ -22,47 +26,51 @@ export type EffortValue = EffortLevel | number
 
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports the effort parameter.
 export function modelSupportsEffort(model: string): boolean {
+  const cached = MODEL_SUPPORTS_EFFORT_CACHE.get(model)
+  if (cached !== undefined) return cached
+  
   const m = model.toLowerCase()
+  let result: boolean
   if (isEnvTruthy(process.env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT)) {
-    return true
+    result = true
+  } else {
+    const supported3P = get3PModelCapabilityOverride(model, 'effort')
+    if (supported3P !== undefined) {
+      result = supported3P
+    } else if (m.includes('opus-4-6') || m.includes('sonnet-4-6')) {
+      result = true
+    } else if (m.includes('haiku') || m.includes('sonnet') || m.includes('opus')) {
+      result = false
+    } else {
+      result = getAPIProvider() === 'firstParty'
+    }
   }
-  const supported3P = get3PModelCapabilityOverride(model, 'effort')
-  if (supported3P !== undefined) {
-    return supported3P
-  }
-  // Supported by a subset of Claude 4 models
-  if (m.includes('opus-4-6') || m.includes('sonnet-4-6')) {
-    return true
-  }
-  // Exclude any other known legacy models (haiku, older opus/sonnet variants)
-  if (m.includes('haiku') || m.includes('sonnet') || m.includes('opus')) {
-    return false
-  }
-
-  // IMPORTANT: Do not change the default effort support without notifying
-  // the model launch DRI and research. This is a sensitive setting that can
-  // greatly affect model quality and bashing.
-
-  // Default to true for unknown model strings on 1P.
-  // Do not default to true for 3P as they have different formats for their
-  // model strings (ex. anthropics/claude-code#30795)
-  return getAPIProvider() === 'firstParty'
+  MODEL_SUPPORTS_EFFORT_CACHE.set(model, result)
+  return result
 }
 
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports 'max' effort.
 // Per API docs, 'max' is Opus 4.6 only for public models — other models return an error.
 export function modelSupportsMaxEffort(model: string): boolean {
+  const cached = MODEL_SUPPORTS_MAX_CACHE.get(model)
+  if (cached !== undefined) return cached
+  
+  let result: boolean
   const supported3P = get3PModelCapabilityOverride(model, 'max_effort')
   if (supported3P !== undefined) {
-    return supported3P
+    result = supported3P
+  } else {
+    const mLower = model.toLowerCase()
+    if (mLower.includes('opus-4-6')) {
+      result = true
+    } else if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
+      result = true
+    } else {
+      result = false
+    }
   }
-  if (model.toLowerCase().includes('opus-4-6')) {
-    return true
-  }
-  if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
-    return true
-  }
-  return false
+  MODEL_SUPPORTS_MAX_CACHE.set(model, result)
+  return result
 }
 
 export function isEffortLevel(value: string): value is EffortLevel {

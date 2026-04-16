@@ -51,9 +51,12 @@ function logOperation(operation: QueueOperation, content?: string): void {
 // Within the same priority, commands are processed FIFO.
 // ============================================================================
 
+// Pre-frozen empty array for initial state
+const EMPTY_SNAPSHOT: readonly QueuedCommand[] = Object.freeze([])
+
 const commandQueue: QueuedCommand[] = []
 /** Frozen snapshot — recreated on every mutation for useSyncExternalStore. */
-let snapshot: readonly QueuedCommand[] = Object.freeze([])
+let snapshot: readonly QueuedCommand[] = EMPTY_SNAPSHOT
 const queueChanged = createSignal()
 
 function notifySubscribers(): void {

@@ -112,24 +112,20 @@ function extractTranscript(messages: SerializedMessage[]): string {
  * Checks if a log contains the query term in any searchable field.
  */
 function logContainsQuery(log: LogOption, queryLower: string): boolean {
+  // Helper to check if a value contains the query (avoiding repeated toLowerCase calls)
+  const matchesQuery = (value: string | undefined): boolean =>
+    value !== undefined && value.toLowerCase().includes(queryLower)
+  
   // Check title
   const title = getLogDisplayTitle(log).toLowerCase()
   if (title.includes(queryLower)) return true
 
-  // Check custom title
-  if (log.customTitle?.toLowerCase().includes(queryLower)) return true
-
-  // Check tag
-  if (log.tag?.toLowerCase().includes(queryLower)) return true
-
-  // Check branch
-  if (log.gitBranch?.toLowerCase().includes(queryLower)) return true
-
-  // Check summary
-  if (log.summary?.toLowerCase().includes(queryLower)) return true
-
-  // Check first prompt
-  if (log.firstPrompt?.toLowerCase().includes(queryLower)) return true
+  // Check other fields using helper
+  if (matchesQuery(log.customTitle)) return true
+  if (matchesQuery(log.tag)) return true
+  if (matchesQuery(log.gitBranch)) return true
+  if (matchesQuery(log.summary)) return true
+  if (matchesQuery(log.firstPrompt)) return true
 
   // Check transcript (more expensive, do last)
   if (log.messages && log.messages.length > 0) {

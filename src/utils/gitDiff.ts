@@ -154,14 +154,16 @@ export function parseGitNumstat(stdout: string): NumstatResult {
   const perFileStats = new Map<string, PerFileStats>()
 
   for (const line of lines) {
-    const parts = line.split('\t')
-    // Valid numstat lines have exactly 3 tab-separated parts: added, removed, filename
-    if (parts.length < 3) continue
-
+    // Parse tab-separated parts: added, removed, filename (filename may contain tabs)
+    const tab1 = line.indexOf('\t')
+    if (tab1 === -1) continue
+    const tab2 = line.indexOf('\t', tab1 + 1)
+    if (tab2 === -1) continue
+    
     validFileCount++
-    const addStr = parts[0]
-    const remStr = parts[1]
-    const filePath = parts.slice(2).join('\t') // filename may contain tabs
+    const addStr = line.slice(0, tab1)
+    const remStr = line.slice(tab1 + 1, tab2)
+    const filePath = line.slice(tab2 + 1) // filename may contain tabs
     const isBinary = addStr === '-' || remStr === '-'
     const fileAdded = isBinary ? 0 : parseInt(addStr ?? '0', 10) || 0
     const fileRemoved = isBinary ? 0 : parseInt(remStr ?? '0', 10) || 0

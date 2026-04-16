@@ -164,24 +164,30 @@ export function parseChangelog(content: string): Record<string, string[]> {
     const sections = content.split(/^## /gm).slice(1) // Skip the first section which is the header
 
     for (const section of sections) {
-      const lines = section.trim().split('\n')
-      if (lines.length === 0) continue
-
+      const trimmed = section.trim()
+      const newlineIndex = trimmed.indexOf('\n')
+      if (newlineIndex === -1) continue
+      
       // Extract version from the first line
       // Handle both "1.2.3" and "1.2.3 - YYYY-MM-DD" formats
-      const versionLine = lines[0]
+      const versionLine = trimmed.slice(0, newlineIndex)
       if (!versionLine) continue
 
       // First part before any dash is the version
-      const version = versionLine.split(' - ')[0]?.trim() || ''
+      const dashIndex = versionLine.indexOf(' - ')
+      const version = (dashIndex === -1 ? versionLine : versionLine.slice(0, dashIndex)).trim()
       if (!version) continue
 
       // Extract bullet points
-      const notes = lines
-        .slice(1)
-        .filter(line => line.trim().startsWith('- '))
-        .map(line => line.trim().substring(2).trim())
-        .filter(Boolean)
+      const remaining = trimmed.slice(newlineIndex + 1)
+      const notes: string[] = []
+      for (const line of remaining.split('\n')) {
+        const t = line.trim()
+        if (t.startsWith('- ')) {
+          const note = t.slice(2).trim()
+          if (note) notes.push(note)
+        }
+      }
 
       if (notes.length > 0) {
         releaseNotes[version] = notes

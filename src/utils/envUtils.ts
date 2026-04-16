@@ -42,7 +42,9 @@ export function hasNodeOption(flag: string): boolean {
 export function isEnvTruthy(envVar: string | boolean | undefined): boolean {
   if (!envVar) return false
   if (typeof envVar === 'boolean') return envVar
-  const normalizedValue = envVar.toLowerCase().trim()
+  // trim() first to reduce toLowerCase() work
+  const trimmed = envVar.trim()
+  const normalizedValue = trimmed.toLowerCase()
   return TRUTHY_VALUES.has(normalizedValue)
 }
 
@@ -52,7 +54,9 @@ export function isEnvDefinedFalsy(
   if (envVar === undefined) return false
   if (typeof envVar === 'boolean') return !envVar
   if (!envVar) return false
-  const normalizedValue = envVar.toLowerCase().trim()
+  // trim() first to reduce toLowerCase() work
+  const trimmed = envVar.trim()
+  const normalizedValue = trimmed.toLowerCase()
   return FALSY_VALUES.has(normalizedValue)
 }
 

@@ -157,7 +157,9 @@ export async function getCompoundCommandPrefixesStatic(
   // Group prefixes by their first word (root command)
   const groups = new Map<string, string[]>()
   for (const prefix of prefixes) {
-    const root = prefix.split(' ')[0]!
+    // Use indexOf to avoid creating an array
+    const spaceIndex = prefix.indexOf(' ')
+    const root = spaceIndex === -1 ? prefix : prefix.slice(0, spaceIndex)
     const group = groups.get(root)
     if (group) {
       group.push(prefix)

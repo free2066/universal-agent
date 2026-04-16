@@ -42,6 +42,11 @@ import {
 } from '../../utils/teammate.js'
 import { feature } from 'bun:bundle'
 
+// Cache environment checks at module level
+const IS_LOCAL_AGENT = process.env.CLAUDE_CODE_ENTRYPOINT === 'local-agent'
+const IS_CI = isEnvTruthy(process.env.CI)
+const IS_CLAUBBIT = isEnvTruthy(process.env.CLAUBBIT)
+
 /**
  * Marker type for verifying analytics metadata doesn't contain sensitive data
  *
@@ -77,6 +82,9 @@ export function sanitizeToolNameForAnalytics(
   return toolName as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
 }
 
+// Cache for tool details logging check
+let _toolDetailsLoggingEnabled: boolean | null = null
+
 /**
  * Check if detailed tool name logging is enabled for OTLP events.
  * When enabled, MCP server/tool names and Skill names are logged.
@@ -85,7 +93,10 @@ export function sanitizeToolNameForAnalytics(
  * Enable with OTEL_LOG_TOOL_DETAILS=1
  */
 export function isToolDetailsLoggingEnabled(): boolean {
-  return isEnvTruthy(process.env.OTEL_LOG_TOOL_DETAILS)
+  if (_toolDetailsLoggingEnabled === null) {
+    _toolDetailsLoggingEnabled = isEnvTruthy(process.env.OTEL_LOG_TOOL_DETAILS)
+  }
+  return _toolDetailsLoggingEnabled
 }
 
 /**
@@ -104,7 +115,7 @@ export function isAnalyticsToolDetailsLoggingEnabled(
   mcpServerType: string | undefined,
   mcpServerBaseUrl: string | undefined,
 ): boolean {
-  if (process.env.CLAUDE_CODE_ENTRYPOINT === 'local-agent') {
+  if (IS_LOCAL_AGENT) {
     return true
   }
   if (mcpServerType === 'claudeai-proxy') {
