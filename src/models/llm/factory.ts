@@ -15,6 +15,30 @@ import { GeminiClient } from './gemini.js';
 import { OllamaClient } from './ollama.js';
 
 /**
+ * 统一的 models.json 配置缓存
+ * 避免多次读取同一文件
+ */
+interface ModelsConfig {
+  profiles?: Array<{ name?: string; displayName?: string; modelName?: string }>;
+  agentModels?: Record<string, string>;
+}
+
+let configCache: ModelsConfig | null = null;
+
+function loadModelsConfig(): ModelsConfig {
+  if (configCache) return configCache;
+  
+  try {
+    const configPath = resolve(homedir(), '.uagent', 'models.json');
+    configCache = JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch {
+    configCache = {};
+  }
+  
+  return configCache;
+}
+
+/**
  * 模型名称映射缓存（友好名称 → 实际模型 ID）
  * 从 ~/.uagent/models.json 的 profiles 加载
  */
@@ -25,23 +49,17 @@ function getModelNameCache(): Map<string, string> {
   
   modelNameCache = new Map();
   
-  try {
-    const configPath = resolve(homedir(), '.uagent', 'models.json');
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-    
-    if (config.profiles && Array.isArray(config.profiles)) {
-      for (const profile of config.profiles as Array<{ name?: string; displayName?: string; modelName?: string }>) {
-        // 映射 name 和 displayName（如果有）指向实际模型名
-        if (profile.name && profile.modelName) {
-          modelNameCache.set(profile.name.toLowerCase(), profile.modelName);
-        }
-        if (profile.displayName && profile.modelName) {
-          modelNameCache.set(profile.displayName.toLowerCase(), profile.modelName);
-        }
+  const config = loadModelsConfig();
+  if (config.profiles && Array.isArray(config.profiles)) {
+    for (const profile of config.profiles) {
+      // 映射 name 和 displayName（如果有）指向实际模型名
+      if (profile.name && profile.modelName) {
+        modelNameCache.set(profile.name.toLowerCase(), profile.modelName);
+      }
+      if (profile.displayName && profile.modelName) {
+        modelNameCache.set(profile.displayName.toLowerCase(), profile.modelName);
       }
     }
-  } catch {
-    // 忽略读取错误，使用空映射
   }
   
   return modelNameCache;
@@ -72,20 +90,14 @@ function getAgentModelMap(): Map<string, string> {
 
   agentModelMapCache = new Map();
 
-  try {
-    const configPath = resolve(homedir(), '.uagent', 'models.json');
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-
-    // 从 agentModels 配置读取映射
-    if (config.agentModels && typeof config.agentModels === 'object') {
-      for (const [fromModel, toModel] of Object.entries(config.agentModels as Record<string, string>)) {
-        if (fromModel && toModel) {
-          agentModelMapCache.set(fromModel.toLowerCase(), toModel);
-        }
+  const config = loadModelsConfig();
+  // 从 agentModels 配置读取映射
+  if (config.agentModels && typeof config.agentModels === 'object') {
+    for (const [fromModel, toModel] of Object.entries(config.agentModels)) {
+      if (fromModel && toModel) {
+        agentModelMapCache.set(fromModel.toLowerCase(), toModel);
       }
     }
-  } catch {
-    // 忽略读取错误
   }
 
   return agentModelMapCache;
@@ -163,4 +175,13 @@ export function createLLMClient(model: string): LLMClient {
 
   // Default: OpenAI
   return new OpenAIClient(resolvedModel);
+}
+
+/**
+ * 清除配置缓存（用于配置更新后重新加载）
+ */
+export function clearModelsConfigCache(): void {
+  configCache = null;
+  modelNameCache = null;
+  agentModelMapCache = null;
 }
