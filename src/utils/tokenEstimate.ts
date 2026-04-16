@@ -99,11 +99,22 @@ export function estimateOutputTokens(
 }
 
 /**
- * Check if usage data looks invalid (all zeros)
+ * Check if usage data looks invalid
+ * 
+ * Invalid cases:
+ * 1. Missing usage object
+ * 2. Both input and output tokens are zero
+ * 3. Input tokens is zero but output is non-zero (API bug like GLM-5)
+ *    A normal response should always have input_tokens > 0
  */
 export function isUsageInvalid(usage?: { input_tokens: number; output_tokens: number }): boolean {
   if (!usage) return true;
-  return usage.input_tokens === 0 && usage.output_tokens === 0;
+  // Case 1: Both zero - completely invalid
+  if (usage.input_tokens === 0 && usage.output_tokens === 0) return true;
+  // Case 2: Input zero but output non-zero - API bug (e.g., GLM-5)
+  // A valid response must have input_tokens > 0 (at minimum the prompt)
+  if (usage.input_tokens === 0 && usage.output_tokens > 0) return true;
+  return false;
 }
 
 /**
