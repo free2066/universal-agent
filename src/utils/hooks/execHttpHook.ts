@@ -58,14 +58,22 @@ function getHttpHookPolicy(): {
   }
 }
 
+/** Regex cache for url pattern matching */
+const urlPatternCache = new Map<string, RegExp>()
+
 /**
  * Match a URL against a pattern with * as a wildcard (any characters).
  * Same semantics as the MCP server allowlist patterns.
  */
 function urlMatchesPattern(url: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-  const regexStr = escaped.replace(/\*/g, '.*')
-  return new RegExp(`^${regexStr}$`).test(url)
+  let regex = urlPatternCache.get(pattern)
+  if (!regex) {
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    const regexStr = escaped.replace(/\*/g, '.*')
+    regex = new RegExp(`^${regexStr}$`)
+    urlPatternCache.set(pattern, regex)
+  }
+  return regex.test(url)
 }
 
 /**
