@@ -541,15 +541,13 @@ export const FileReadTool = buildTool({
     const existingState = dedupKillswitch
       ? undefined
       : readFileState.get(fullFilePath)
-    // Only dedup entries that came from a prior Read (offset is always set
-    // by Read). Edit/Write store offset=undefined — their readFileState
-    // entry reflects post-edit mtime, so deduping against it would wrongly
-    // point the model at the pre-edit Read content.
+    // Optimization: Check if we have a cached full file that can serve partial range
     if (
       existingState &&
       !existingState.isPartialView &&
       existingState.offset !== undefined
     ) {
+      // Case 1: Exact range match - return dedup stub
       const rangeMatch =
         existingState.offset === offset && existingState.limit === limit
       if (rangeMatch) {
@@ -564,6 +562,41 @@ export const FileReadTool = buildTool({
               data: {
                 type: 'file_unchanged' as const,
                 file: { filePath: file_path },
+              },
+            }
+          }
+        } catch {
+          // stat failed — fall through to full read
+        }
+      }
+      // Case 2: Cached full file (offset=0, limit=undefined) - serve partial range
+      // This avoids re-reading when model requests different ranges of same file
+      if (
+        existingState.offset === 0 &&
+        existingState.limit === undefined &&
+        offset !== undefined
+      ) {
+        try {
+          const mtimeMs = await getFileModificationTimeAsync(fullFilePath)
+          if (mtimeMs === existingState.timestamp) {
+            // File unchanged - slice from cache
+            const lines = existingState.content.split('\n')
+            const startLine = Math.max(0, offset === 0 ? 0 : offset - 1)
+            const endLine = limit !== undefined ? startLine + limit : lines.length
+            const slicedContent = lines.slice(startLine, endLine).join('\n')
+            const analyticsExt = getFileExtensionForAnalytics(fullFilePath)
+            logEvent('tengu_file_read_cache_slice', {
+              ...(analyticsExt !== undefined && { ext: analyticsExt }),
+            })
+            // Return the sliced content without re-reading
+            return {
+              data: {
+                type: 'text' as const,
+                file: {
+                  filePath: file_path,
+                  lineCount: Math.min(limit ?? Infinity, lines.length - startLine),
+                },
+                content: slicedContent,
               },
             }
           }

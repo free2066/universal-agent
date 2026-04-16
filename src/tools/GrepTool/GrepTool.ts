@@ -36,6 +36,39 @@ import {
 const WHITESPACE_RE = /\s+/
 const COMMA_RE = /,/
 
+// ============================================================================
+// Search result cache (performance optimization)
+// ============================================================================
+const GREP_CACHE_TTL = 60_000 // 60 seconds
+interface GrepCacheEntry {
+  key: string
+  result: Output
+  timestamp: number
+}
+
+const grepCache = new Map<string, GrepCacheEntry>()
+
+function getCacheKey(
+  pattern: string,
+  path: string,
+  glob: string | undefined,
+  type: string | undefined,
+  output_mode: string,
+  case_insensitive: boolean,
+  multiline: boolean,
+): string {
+  return `${pattern}|${path}|${glob || ''}|${type || ''}|${output_mode}|${case_insensitive ? 'i' : ''}|${multiline ? 'm' : ''}`
+}
+
+function cleanExpiredCache(): void {
+  const now = Date.now()
+  for (const [key, entry] of grepCache.entries()) {
+    if (now - entry.timestamp > GREP_CACHE_TTL) {
+      grepCache.delete(key)
+    }
+  }
+}
+
 const inputSchema = lazySchema(() =>
   z.strictObject({
     pattern: z
@@ -333,6 +366,41 @@ export const GrepTool = buildTool({
     { abortController, getAppState },
   ) {
     const absolutePath = path ? expandPath(path) : getCwd()
+    
+    // Clean expired cache entries periodically
+    if (grepCache.size > 50) {
+      cleanExpiredCache()
+    }
+    
+    // Check cache for exact pattern+path+glob match (excluding pagination params)
+    const cacheKey = getCacheKey(
+      pattern,
+      absolutePath,
+      glob,
+      type,
+      output_mode,
+      case_insensitive,
+      multiline,
+    )
+    
+    const cached = grepCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < GREP_CACHE_TTL) {
+      // Apply pagination to cached result
+      const { items, appliedLimit } = applyHeadLimit(
+        cached.result.filenames,
+        head_limit,
+        offset,
+      )
+      const output: Output = {
+        ...cached.result,
+        filenames: items,
+        numFiles: items.length,
+        ...(appliedLimit !== undefined && { appliedLimit }),
+        ...(offset > 0 && { appliedOffset: offset }),
+      }
+      return { data: output }
+    }
+    
     const args = ['--hidden']
 
     // Exclude VCS directories to avoid noise from version control metadata
@@ -491,6 +559,14 @@ export const GrepTool = buildTool({
         ...(appliedLimit !== undefined && { appliedLimit }),
         ...(offset > 0 && { appliedOffset: offset }),
       }
+      
+      // Cache the result (without pagination)
+      grepCache.set(cacheKey, {
+        key: cacheKey,
+        result: { mode: 'content', numFiles: 0, filenames: [], content: output.content, numLines: output.numLines },
+        timestamp: Date.now(),
+      })
+      
       return { data: output }
     }
 
@@ -539,6 +615,14 @@ export const GrepTool = buildTool({
         ...(appliedLimit !== undefined && { appliedLimit }),
         ...(offset > 0 && { appliedOffset: offset }),
       }
+      
+      // Cache the result (without pagination)
+      grepCache.set(cacheKey, {
+        key: cacheKey,
+        result: { mode: 'count', numFiles: fileCount, filenames: [], content: output.content, numMatches: totalMatches },
+        timestamp: Date.now(),
+      })
+      
       return { data: output }
     }
 
@@ -588,6 +672,13 @@ export const GrepTool = buildTool({
       ...(appliedLimit !== undefined && { appliedLimit }),
       ...(offset > 0 && { appliedOffset: offset }),
     }
+    
+    // Cache the result (full sorted list, before pagination)
+    grepCache.set(cacheKey, {
+      key: cacheKey,
+      result: { mode: 'files_with_matches', filenames: sortedMatches.map(toRelativePath), numFiles: sortedMatches.length },
+      timestamp: Date.now(),
+    })
 
     return {
       data: output,
