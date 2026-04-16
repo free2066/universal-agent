@@ -581,24 +581,30 @@ export const FileReadTool = buildTool({
           if (mtimeMs === existingState.timestamp) {
             // File unchanged - slice from cache
             const lines = existingState.content.split('\n')
+            const totalLines = lines.length
             const startLine = Math.max(0, offset === 0 ? 0 : offset - 1)
-            const endLine = limit !== undefined ? startLine + limit : lines.length
+            const endLine = limit !== undefined ? startLine + limit : totalLines
             const slicedContent = lines.slice(startLine, endLine).join('\n')
+            const actualLineCount = Math.min(endLine - startLine, totalLines - startLine)
             const analyticsExt = getFileExtensionForAnalytics(fullFilePath)
             logEvent('tengu_file_read_cache_slice', {
               ...(analyticsExt !== undefined && { ext: analyticsExt }),
             })
-            // Return the sliced content without re-reading
-            return {
-              data: {
-                type: 'text' as const,
-                file: {
-                  filePath: file_path,
-                  lineCount: Math.min(limit ?? Infinity, lines.length - startLine),
-                },
+            // Return format must match normal text read exactly
+            const data = {
+              type: 'text' as const,
+              file: {
+                filePath: file_path,
                 content: slicedContent,
+                numLines: actualLineCount,
+                startLine: offset,
+                totalLines,
               },
             }
+            if (isAutoMemFile(fullFilePath)) {
+              memoryFileMtimes.set(data, mtimeMs)
+            }
+            return { data }
           }
         } catch {
           // stat failed — fall through to full read
