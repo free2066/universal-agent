@@ -38,22 +38,8 @@ export interface FileChangeInfo {
   timestamp: Date
 }
 
-/** Directories to always ignore */
-const IGNORED_DIRS = [
-  'node_modules',
-  '.git',
-  'dist',
-  '.next',
-  'build',
-  '__pycache__',
-  '.cache',
-  'coverage',
-  '.turbo',
-]
-
-const IGNORED_PATTERN = new RegExp(
-  `(${IGNORED_DIRS.map(d => `[/\\\\]${d}[/\\\\]`).join('|')}|[/\\\\]${IGNORED_DIRS.map(d => `${d}$`).join('|[/\\\\]')})`,
-)
+/** Directories to always ignore - single regex pattern for efficiency */
+const IGNORED_PATTERN = /[/\\](node_modules|\.git|dist|\.next|build|__pycache__|\.cache|coverage|\.turbo)([/\\]|$)/
 
 export class FileWatcherService extends EventEmitter {
   private watcher: ReturnType<typeof import('chokidar').watch> | null = null
