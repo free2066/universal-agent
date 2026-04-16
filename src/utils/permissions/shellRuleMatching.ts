@@ -19,6 +19,12 @@ const ESCAPED_BACKSLASH_PLACEHOLDER_RE = new RegExp(
   'g',
 )
 
+// ============================================================================
+// Regex pattern cache for wildcard matching (performance optimization)
+// ============================================================================
+const _wildcardPatternCache = new Map<string, RegExp>()
+const MAX_WILDCARD_CACHE_SIZE = 100
+
 /**
  * Parsed permission rule discriminated union.
  */
@@ -148,7 +154,14 @@ export function matchWildcardPattern(
   // The 's' (dotAll) flag makes '.' match newlines, so wildcards match
   // commands containing embedded newlines (e.g. heredoc content after splitCommand_DEPRECATED).
   const flags = 's' + (caseInsensitive ? 'i' : '')
-  const regex = new RegExp(`^${regexPattern}$`, flags)
+  const cacheKey = `${regexPattern}|${flags}`
+  let regex = _wildcardPatternCache.get(cacheKey)
+  if (!regex) {
+    regex = new RegExp(`^${regexPattern}$`, flags)
+    if (_wildcardPatternCache.size < MAX_WILDCARD_CACHE_SIZE) {
+      _wildcardPatternCache.set(cacheKey, regex)
+    }
+  }
 
   return regex.test(command)
 }

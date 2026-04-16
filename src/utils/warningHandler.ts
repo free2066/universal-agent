@@ -11,6 +11,9 @@ import { getPlatform } from './platform.js'
 export const MAX_WARNING_KEYS = 1000
 const warningCounts = new Map<string, number>()
 
+// Precompiled regex for Windows path separator conversion
+const WIN_SEP_RE = /\\/g
+
 // Check if running from a build directory (development mode)
 // This is a sync version of the logic in getCurrentInstallationType()
 function isRunningFromBuildDirectory(): boolean {
@@ -19,8 +22,8 @@ function isRunningFromBuildDirectory(): boolean {
 
   // On Windows, convert backslashes to forward slashes for consistent path matching
   if (getPlatform() === 'windows') {
-    invokedPath = invokedPath.split(win32.sep).join(posix.sep)
-    execPath = execPath.split(win32.sep).join(posix.sep)
+    invokedPath = invokedPath.replace(WIN_SEP_RE, '/')
+    execPath = execPath.replace(WIN_SEP_RE, '/')
   }
 
   const pathsToCheck = [invokedPath, execPath]

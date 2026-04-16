@@ -309,8 +309,8 @@ export function applySedSubstitution(
     .replace(/\\&/g, ESCAPED_AMP_PLACEHOLDER)
     // Convert & to $& (full match) - use $$& to get literal $& in output
     .replace(/&/g, '$$&')
-    // Convert placeholder back to literal &
-    .replace(new RegExp(ESCAPED_AMP_PLACEHOLDER, 'g'), '&')
+    // Convert placeholder back to literal & (use replaceAll for string replacement)
+    .replaceAll(ESCAPED_AMP_PLACEHOLDER, '&')
 
   try {
     const regex = new RegExp(jsPattern, regexFlags)

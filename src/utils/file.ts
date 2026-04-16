@@ -90,8 +90,8 @@ export function writeTextContent(
   let toWrite = content
   if (endings === 'CRLF') {
     // Normalize any existing CRLF to LF first so a new_string that already
-    // contains \r\n (raw model output) doesn't become \r\r\n after the join.
-    toWrite = content.replaceAll('\r\n', '\n').split('\n').join('\r\n')
+    // contains \r\n (raw model output) doesn't become \r\r\n after replacement.
+    toWrite = content.replace(/\r?\n/g, '\r\n')
   }
 
   writeFileSyncAndFlush_DEPRECATED(filePath, toWrite, { encoding })

@@ -1,5 +1,8 @@
 import { basename, extname, posix, sep } from 'path'
 
+// Precompiled regex for path separator conversion
+const PATH_SEP_RE = /[/\\]+/g
+
 /**
  * File patterns that should be excluded from attribution.
  * Based on GitHub Linguist vendored patterns and common generated file patterns.
@@ -85,7 +88,7 @@ const EXCLUDED_FILENAME_PATTERNS = [
 export function isGeneratedFile(filePath: string): boolean {
   // Normalize path separators for consistent pattern matching (patterns use posix-style /)
   const normalizedPath =
-    posix.sep + filePath.split(sep).join(posix.sep).replace(/^\/+/, '')
+    '/' + filePath.replace(PATH_SEP_RE, '/').replace(/^\/+/, '')
   const fileName = basename(filePath).toLowerCase()
   const ext = extname(filePath).toLowerCase()
 

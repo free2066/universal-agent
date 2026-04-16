@@ -11,6 +11,9 @@ import { logForDebugging } from '../debug.js'
 import { EFFORT_LEVELS, parseEffortValue } from '../effort.js'
 import { isBareMode } from '../envUtils.js'
 import { isENOENT } from '../errors.js'
+
+// Precompiled regex for namespace generation
+const NAMESPACE_SEP_RE = /\//g
 import {
   coerceDescriptionToString,
   type FrontmatterData,
@@ -74,7 +77,7 @@ function getCommandNameFromFile(
     const relativePath = parentOfSkillDir.startsWith(baseDir)
       ? parentOfSkillDir.slice(baseDir.length).replace(/^\//, '')
       : ''
-    const namespace = relativePath ? relativePath.split('/').join(':') : ''
+    const namespace = relativePath ? relativePath.replace(NAMESPACE_SEP_RE, ':') : ''
 
     return namespace
       ? `${pluginName}:${namespace}:${commandBaseName}`
@@ -88,7 +91,7 @@ function getCommandNameFromFile(
     const relativePath = fileDirectory.startsWith(baseDir)
       ? fileDirectory.slice(baseDir.length).replace(/^\//, '')
       : ''
-    const namespace = relativePath ? relativePath.split('/').join(':') : ''
+    const namespace = relativePath ? relativePath.replace(NAMESPACE_SEP_RE, ':') : ''
 
     return namespace
       ? `${pluginName}:${namespace}:${commandBaseName}`

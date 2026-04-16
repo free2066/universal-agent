@@ -21,9 +21,12 @@ const teamMemPaths = feature('TEAMMEM')
 
 const IS_WINDOWS = process.platform === 'win32'
 
+// Precompiled regex for path separator conversion (performance optimization)
+const WIN_SEP_RE = /\\/g
+
 // Normalize path separators to posix (/). Does NOT translate drive encoding.
 function toPosix(p: string): string {
-  return p.split(win32.sep).join(posix.sep)
+  return p.replace(WIN_SEP_RE, '/')
 }
 
 // Convert a path to a stable string-comparable form: forward-slash separated,
@@ -65,7 +68,7 @@ export function detectSessionFileType(
 export function detectSessionPatternType(
   pattern: string,
 ): 'session_memory' | 'session_transcript' | null {
-  const normalized = pattern.split(win32.sep).join(posix.sep)
+  const normalized = pattern.replace(WIN_SEP_RE, '/')
   if (
     normalized.includes('session-memory') &&
     (normalized.includes('.md') || normalized.endsWith('*'))

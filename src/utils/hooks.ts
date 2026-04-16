@@ -48,6 +48,12 @@ import {
   getAgentTranscriptPath,
 } from './sessionStorage.js'
 import type { AgentId } from '../types/ids.js'
+
+// ============================================================================
+// Regex pattern cache for hook matching (performance optimization)
+// ============================================================================
+const _hookPatternCache = new Map<string, RegExp>()
+const MAX_HOOK_PATTERN_CACHE = 50
 import {
   getSettings_DEPRECATED,
   getSettingsForSource,
@@ -1347,12 +1353,19 @@ function matchesPattern(matchQuery: string, matcher: string): boolean {
 
   // Otherwise treat as regex
   try {
-    const regex = new RegExp(matcher)
+    let regex = _hookPatternCache.get(matcher)
+    if (!regex) {
+      regex = new RegExp(matcher)
+      if (_hookPatternCache.size < MAX_HOOK_PATTERN_CACHE) {
+        _hookPatternCache.set(matcher, regex)
+      }
+    }
     if (regex.test(matchQuery)) {
       return true
     }
     // Also test against legacy names so patterns like "^Task$" still match
     for (const legacyName of getLegacyToolNames(matchQuery)) {
+      regex.lastIndex = 0  // Reset for global regex
       if (regex.test(legacyName)) {
         return true
       }
