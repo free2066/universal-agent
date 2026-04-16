@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
 import { stringify as yamlStringify } from 'yaml';
+import { HOME_DIR } from '../utils/env.js';
 import { createLLMClient } from './llm-client.js';
 import { detectFreeModes, buildPointersFromDetection, formatDetectionSummary } from './free-model-detector.js';
 import { usageTracker } from './usage-tracker.js';
@@ -56,7 +57,7 @@ export interface TokenUsage {
   timestamp: number;
 }
 
-const CONFIG_DIR = resolve(process.env.HOME || '~', '.uagent');
+const CONFIG_DIR = resolve(HOME_DIR, '.uagent');
 const CONFIG_FILE = resolve(CONFIG_DIR, 'models.json');
 
 /**

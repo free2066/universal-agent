@@ -13,6 +13,37 @@ import type { OverageDisabledReason } from './claudeAiLimits.js'
 /** Helper: Unix timestamp in seconds (avoids repeated Math.floor(Date.now() / 1000)) */
 function nowUnix(): number { return Math.floor(Date.now() / 1000) }
 
+/** Helper: Get end of month timestamp in Unix seconds */
+function getEndOfMonthTimestamp(): number {
+  const d = new Date()
+  d.setMonth(d.getMonth() + 1, 1)
+  d.setHours(0, 0, 0, 0)
+  return Math.floor(d.getTime() / 1000)
+}
+
+// ============================================================================
+// Rate limit header name constants (avoid string repetition)
+// ============================================================================
+const RL = {
+  STATUS: 'anthropic-ratelimit-unified-status',
+  RESET: 'anthropic-ratelimit-unified-reset',
+  CLAIM: 'anthropic-ratelimit-unified-representative-claim',
+  OVERAGE_STATUS: 'anthropic-ratelimit-unified-overage-status',
+  OVERAGE_RESET: 'anthropic-ratelimit-unified-overage-reset',
+  OVERAGE_DISABLED_REASON: 'anthropic-ratelimit-unified-overage-disabled-reason',
+  FALLBACK: 'anthropic-ratelimit-unified-fallback',
+  FALLBACK_PCT: 'anthropic-ratelimit-unified-fallback-percentage',
+  RETRY_AFTER: 'retry-after',
+  UTIL_5H: 'anthropic-ratelimit-unified-5h-utilization',
+  RESET_5H: 'anthropic-ratelimit-unified-5h-reset',
+  THRESH_5H: 'anthropic-ratelimit-unified-5h-surpassed-threshold',
+  UTIL_7D: 'anthropic-ratelimit-unified-7d-utilization',
+  RESET_7D: 'anthropic-ratelimit-unified-7d-reset',
+  THRESH_7D: 'anthropic-ratelimit-unified-7d-surpassed-threshold',
+  OVERAGE_UTIL: 'anthropic-ratelimit-unified-overage-utilization',
+  OVERAGE_THRESH: 'anthropic-ratelimit-unified-overage-surpassed-threshold',
+} as const
+
 type MockHeaders = {
   'anthropic-ratelimit-unified-status'?:
     | 'allowed'

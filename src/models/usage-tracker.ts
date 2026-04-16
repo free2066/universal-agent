@@ -17,6 +17,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { resolve, join } from 'path';
+import { HOME_DIR } from '../utils/env.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,8 +61,9 @@ export interface LimitCheckResult {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const USAGE_DIR = resolve(process.env.HOME || '~', '.uagent', 'usage');
-const LIMITS_FILE = resolve(process.env.HOME || '~', '.uagent', 'limits.json');
+const UAGENT_DIR = resolve(HOME_DIR, '.uagent');
+const USAGE_DIR = resolve(UAGENT_DIR, 'usage');
+const LIMITS_FILE = resolve(UAGENT_DIR, 'limits.json');
 
 function todayKey(): string {
   return new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
@@ -113,7 +115,7 @@ export class UsageTracker {
 
   setLimits(limits: Partial<UsageLimits>): void {
     this.limits = { ...this.limits, ...limits };
-    mkdirSync(resolve(process.env.HOME || '~', '.uagent'), { recursive: true });
+    mkdirSync(UAGENT_DIR, { recursive: true });
     writeFileSync(LIMITS_FILE, JSON.stringify(this.limits, null, 2));
   }
 
