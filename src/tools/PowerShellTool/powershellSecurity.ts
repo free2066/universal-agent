@@ -358,8 +358,9 @@ function checkComObject(
     // so CLM never fires. Extract -TypeName (named, colon-bound, or
     // positional-0) and run through isClmAllowedType. Closes attackVectors D4.
     let typeName: string | undefined
-    for (let i = 0; i < cmd.args.length; i++) {
-      const a = cmd.args[i]!
+    const args = cmd.args
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!
       const lower = a.toLowerCase()
       // -TypeName abbrev: -t is unambiguous (no other New-Object -t* params).
       // Handle colon-bound form first: -TypeName:Foo.Bar
@@ -375,9 +376,9 @@ function checkComObject(
       if (
         lower.startsWith('-t') &&
         '-typename'.startsWith(lower) &&
-        cmd.args[i + 1] !== undefined
+        args[i + 1] !== undefined
       ) {
-        typeName = cmd.args[i + 1]
+        typeName = args[i + 1]
         break
       }
     }
@@ -389,8 +390,8 @@ function checkComObject(
       const VALUE_PARAMS = new Set(['-argumentlist', '-comobject', '-property'])
       // Switch params (no value argument)
       const SWITCH_PARAMS = new Set(['-strict'])
-      for (let i = 0; i < cmd.args.length; i++) {
-        const a = cmd.args[i]!
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i]!
         if (a.startsWith('-')) {
           const lower = a.toLowerCase()
           // Skip -TypeName variants (already handled by named-param loop above)

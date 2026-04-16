@@ -31,6 +31,11 @@ const BUILTIN_DIR = path.resolve(
 // User override directory (use cached HOME_DIR)
 const USER_DIR = path.join(HOME_DIR, '.uagent', 'model-prompts')
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const O_SERIES_MODEL_RE = /\bo[1-9][-\w]*/
+
 /**
  * Determine the prompt "family" key for a given model name.
  * Returns a filename stem like 'gemini', 'gpt-o', 'gpt-4o', 'deepseek', 'qwen'.
@@ -38,18 +43,18 @@ const USER_DIR = path.join(HOME_DIR, '.uagent', 'model-prompts')
 function getPromptFamily(modelName: string): string | null {
   const lower = modelName.toLowerCase()
 
-  if (lower.startsWith('gemini') || lower.includes('gemini')) return 'gemini'
+  if (lower.startsWith('gemini')) return 'gemini'  // startsWith implies includes
 
   // o-series reasoning models (o1, o3, o4, o1-mini, o3-mini, etc.)
-  if (/\bo[1-9][-\w]*/.test(lower) || lower.includes('-o1') || lower.includes('-o3') || lower.includes('-o4')) {
+  if (O_SERIES_MODEL_RE.test(lower) || lower.includes('-o1') || lower.includes('-o3') || lower.includes('-o4')) {
     return 'gpt-o'
   }
 
-  if (lower.startsWith('gpt-4') || lower.includes('gpt-4o')) return 'gpt-4o'
+  if (lower.startsWith('gpt-4')) return 'gpt-4o'
 
-  if (lower.startsWith('deepseek') || lower.includes('deepseek')) return 'deepseek'
+  if (lower.startsWith('deepseek')) return 'deepseek'
 
-  if (lower.startsWith('qwen') || lower.includes('qwen')) return 'qwen'
+  if (lower.startsWith('qwen')) return 'qwen'
 
   // Kimi / Moonshot — similar to GPT family
   if (lower.startsWith('moonshot') || lower.includes('kimi')) return 'gpt-4o'

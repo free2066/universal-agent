@@ -52,6 +52,11 @@ import {
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
 import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const PDF_PAGE_LIMIT_RE = /maximum of \d+ PDF pages/
+
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
 
 export function startsWithApiErrorPrefix(text: string): boolean {
@@ -137,7 +142,7 @@ export function isMediaSizeError(raw: string): boolean {
   return (
     (raw.includes('image exceeds') && raw.includes('maximum')) ||
     (raw.includes('image dimensions exceed') && raw.includes('many-image')) ||
-    /maximum of \d+ PDF pages/.test(raw)
+    PDF_PAGE_LIMIT_RE.test(raw)
   )
 }
 

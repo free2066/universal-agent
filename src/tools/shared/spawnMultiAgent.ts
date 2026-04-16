@@ -267,7 +267,11 @@ function pickUniqueTeammateName(
   existingNames: Iterable<string>,
 ): string {
   const normalizedBaseName = baseName.toLowerCase()
-  const existing = new Set([...existingNames].map(name => name.toLowerCase()))
+  // Build Set directly without intermediate array
+  const existing = new Set<string>()
+  for (const name of existingNames) {
+    existing.add(name.toLowerCase())
+  }
 
   if (!existing.has(normalizedBaseName)) {
     return baseName

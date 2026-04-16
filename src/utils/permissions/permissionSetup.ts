@@ -81,6 +81,11 @@ import {
   permissionRuleValueToString,
 } from './permissionRuleParser.js'
 
+// ============================================================================
+// Pre-computed lowercase patterns (performance optimization)
+// ============================================================================
+const DANGEROUS_BASH_PATTERNS_LOWER = DANGEROUS_BASH_PATTERNS.map(p => p.toLowerCase())
+
 /**
  * Checks if a Bash permission rule is dangerous for auto mode.
  * A rule is dangerous if it would auto-allow commands that execute arbitrary code,
@@ -114,8 +119,8 @@ export function isDangerousBashPermission(
 
   // Check for dangerous patterns with prefix syntax (e.g., "python:*")
   // or wildcard syntax (e.g., "python*")
-  for (const pattern of DANGEROUS_BASH_PATTERNS) {
-    const lowerPattern = pattern.toLowerCase()
+  for (let i = 0; i < DANGEROUS_BASH_PATTERNS_LOWER.length; i++) {
+    const lowerPattern = DANGEROUS_BASH_PATTERNS_LOWER[i]!
 
     // Exact match to the pattern itself (e.g., "python" as a rule)
     if (content === lowerPattern) {

@@ -86,6 +86,11 @@ const teamMemPaths = feature('TEAMMEM')
 
 let hasLoggedInitialLoad = false
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const HTML_COMMENT_SPAN_RE = /<!--[\s\S]*?-->/g
+
 const MEMORY_INSTRUCTION_PROMPT =
   'Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.'
 // Recommended max character count for a memory file
@@ -307,9 +312,8 @@ function stripHtmlCommentsFromTokens(tokens: ReturnType<Lexer['lex']>): {
   let result = ''
   let stripped = false
 
-  // A well-formed HTML comment span. Non-greedy so multiple comments on the
-  // same line are matched independently; [\s\S] to span newlines.
-  const commentSpan = /<!--[\s\S]*?-->/g
+  // Reset lastIndex for the global regex
+  HTML_COMMENT_SPAN_RE.lastIndex = 0
 
   for (const token of tokens) {
     if (token.type === 'html') {
@@ -318,7 +322,7 @@ function stripHtmlCommentsFromTokens(tokens: ReturnType<Lexer['lex']>): {
         // Per CommonMark, a type-2 HTML block ends at the *line* containing
         // `-->`, so text after `-->` on that line is part of this token.
         // Strip only the comment spans and keep any residual content.
-        const residue = token.raw.replace(commentSpan, '')
+        const residue = token.raw.replace(HTML_COMMENT_SPAN_RE, '')
         stripped = true
         if (residue.trim().length > 0) {
           // Residual content exists (e.g. `<!-- note --> Use bun`): keep it.

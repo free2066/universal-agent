@@ -15,6 +15,13 @@
  * exist (PS resolves type accelerators like [int] → System.Int32 at runtime;
  * we match against what the AST emits, which is the literal text).
  */
+
+// ============================================================================
+// Precompiled regex patterns for type name normalization (performance optimization)
+// ============================================================================
+const ARRAY_SUFFIX_RE = /\[\]$/
+const GENERIC_ARGS_RE = /\[.*\]$/
+
 export const CLM_ALLOWED_TYPES: ReadonlySet<string> = new Set(
   [
     // Type accelerators (short names as they appear in AST TypeName.Name)
@@ -195,11 +202,12 @@ export function normalizeTypeName(name: string): string {
   // Strip array suffix: "String[]" → "string" (arrays of allowed types are allowed)
   // Strip generic args: "List[int]" → "list" (conservative — the generic wrapper
   // might be unsafe even if the type arg is safe, so we check the outer type)
-  return name
-    .toLowerCase()
-    .replace(/\[\]$/, '')
-    .replace(/\[.*\]$/, '')
-    .trim()
+  const lower = name.toLowerCase()
+  // Check for generic args first since they're more likely to be present
+  if (GENERIC_ARGS_RE.test(lower)) {
+    return lower.replace(ARRAY_SUFFIX_RE, '').replace(GENERIC_ARGS_RE, '').trim()
+  }
+  return lower.replace(ARRAY_SUFFIX_RE, '').trim()
 }
 
 /**

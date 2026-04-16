@@ -79,6 +79,12 @@ export const DANGEROUS_DIRECTORIES = [
   '.claude',
 ] as const
 
+// ============================================================================
+// Pre-computed lowercase separators (performance optimization)
+// sep is constant for the platform, so we can compute once at module load
+// ============================================================================
+const SEPARATORS_LOWER = [sep.toLowerCase(), '/'] as const
+
 /**
  * Normalizes a path for case-insensitive comparison.
  * This prevents bypassing security checks using mixed-case paths on case-insensitive
@@ -119,8 +125,8 @@ export function getClaudeSkillScope(
   for (const { dir, prefix } of bases) {
     const dirLower = normalizeCaseForComparison(dir)
     // Try both path separators (Windows paths may not be normalized to /)
-    for (const s of [sep, '/']) {
-      if (absolutePathLower.startsWith(dirLower + s.toLowerCase())) {
+    for (const s of SEPARATORS_LOWER) {
+      if (absolutePathLower.startsWith(dirLower + s)) {
         // Match on lowercase, but slice the ORIGINAL path so the skill name
         // preserves case (pattern matching downstream is case-sensitive)
         const rest = absolutePath.slice(dir.length + s.length)
