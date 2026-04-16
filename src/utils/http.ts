@@ -14,28 +14,46 @@ import {
 import { getClaudeCodeUserAgent } from './userAgent.js'
 import { getWorkload } from './workloadContext.js'
 
+// ============================================================================
+// User Agent caching (performance optimization)
+// ============================================================================
+
+/** Cached user agent string - rebuilt when env vars change */
+let _cachedUserAgent: string | undefined
+let _cachedUserAgentKey: string | undefined
+
+/** Cached MCP user agent string */
+let _cachedMCPUserAgent: string | undefined
+let _cachedMCPUserAgentKey: string | undefined
+
+/** Cached WebFetch user agent string */
+let _cachedWebFetchUserAgent: string | undefined
+
 // WARNING: We rely on `claude-cli` in the user agent for log filtering.
 // Please do NOT change this without making sure that logging also gets updated!
 export function getUserAgent(): string {
+  const key = `${process.env.CLAUDE_AGENT_SDK_VERSION}|${process.env.CLAUDE_AGENT_SDK_CLIENT_APP}|${getWorkload()}`
+  if (_cachedUserAgent !== undefined && _cachedUserAgentKey === key) {
+    return _cachedUserAgent
+  }
   const agentSdkVersion = process.env.CLAUDE_AGENT_SDK_VERSION
     ? `, agent-sdk/${process.env.CLAUDE_AGENT_SDK_VERSION}`
     : ''
-  // SDK consumers can identify their app/library via CLAUDE_AGENT_SDK_CLIENT_APP
-  // e.g., "my-app/1.0.0" or "my-library/2.1"
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
     ? `, client-app/${process.env.CLAUDE_AGENT_SDK_CLIENT_APP}`
     : ''
-  // Turn-/process-scoped workload tag for cron-initiated requests. 1P-only
-  // observability — proxies strip HTTP headers; QoS routing uses cc_workload
-  // in the billing-header attribution block instead (see constants/system.ts).
-  // getAnthropicClient (client.ts:98) calls this per-request inside withRetry,
-  // so the read picks up the same setWorkload() value as getAttributionHeader.
   const workload = getWorkload()
   const workloadSuffix = workload ? `, workload/${workload}` : ''
-  return `claude-cli/${MACRO.VERSION} (${process.env.USER_TYPE}, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli'}${agentSdkVersion}${clientApp}${workloadSuffix})`
+  _cachedUserAgent = `claude-cli/${MACRO.VERSION} (${process.env.USER_TYPE}, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli'}${agentSdkVersion}${clientApp}${workloadSuffix})`
+  _cachedUserAgentKey = key
+  return _cachedUserAgent
 }
 
 export function getMCPUserAgent(): string {
+  const key = `${process.env.CLAUDE_CODE_ENTRYPOINT}|${process.env.CLAUDE_AGENT_SDK_VERSION}|${process.env.CLAUDE_AGENT_SDK_CLIENT_APP}`
+  if (_cachedMCPUserAgent !== undefined && _cachedMCPUserAgentKey === key) {
+    return _cachedMCPUserAgent
+  }
   const parts: string[] = []
   if (process.env.CLAUDE_CODE_ENTRYPOINT) {
     parts.push(process.env.CLAUDE_CODE_ENTRYPOINT)
@@ -47,7 +65,9 @@ export function getMCPUserAgent(): string {
     parts.push(`client-app/${process.env.CLAUDE_AGENT_SDK_CLIENT_APP}`)
   }
   const suffix = parts.length > 0 ? ` (${parts.join(', ')})` : ''
-  return `claude-code/${MACRO.VERSION}${suffix}`
+  _cachedMCPUserAgent = `claude-code/${MACRO.VERSION}${suffix}`
+  _cachedMCPUserAgentKey = key
+  return _cachedMCPUserAgent
 }
 
 // User-Agent for WebFetch requests to arbitrary sites. `Claude-User` is
@@ -55,7 +75,11 @@ export function getMCPUserAgent(): string {
 // operators match in robots.txt); the claude-code suffix lets them distinguish
 // local CLI traffic from claude.ai server-side fetches.
 export function getWebFetchUserAgent(): string {
-  return `Claude-User (${getClaudeCodeUserAgent()}; +https://support.anthropic.com/)`
+  if (_cachedWebFetchUserAgent !== undefined) {
+    return _cachedWebFetchUserAgent
+  }
+  _cachedWebFetchUserAgent = `Claude-User (${getClaudeCodeUserAgent()}; +https://support.anthropic.com/)`
+  return _cachedWebFetchUserAgent
 }
 
 export type AuthHeaders = {

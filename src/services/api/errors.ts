@@ -61,6 +61,8 @@ export function startsWithApiErrorPrefix(text: string): boolean {
   )
 }
 export const PROMPT_TOO_LONG_ERROR_MESSAGE = 'Prompt is too long'
+/** Lowercase version for case-insensitive error matching */
+const PROMPT_TOO_LONG_ERROR_MESSAGE_LOWER = PROMPT_TOO_LONG_ERROR_MESSAGE.toLowerCase()
 
 export function isPromptTooLongMessage(msg: AssistantMessage): boolean {
   if (!msg.isApiErrorMessage) {
@@ -1013,7 +1015,7 @@ export function classifyAPIError(error: unknown): string {
     error instanceof Error &&
     error.message
       .toLowerCase()
-      .includes(PROMPT_TOO_LONG_ERROR_MESSAGE.toLowerCase())
+      .includes(PROMPT_TOO_LONG_ERROR_MESSAGE_LOWER)
   ) {
     return 'prompt_too_long'
   }

@@ -10,6 +10,28 @@ import {
   type LSPServerInstance,
 } from './LSPServerInstance.js'
 import type { ScopedLspServerConfig } from './types.js'
+
+// ============================================================================
+// File extension caching for LSP routing
+// ============================================================================
+
+/** Cache for lowercase file extensions to avoid repeated path.extname() calls */
+const extensionCache = new Map<string, string>()
+const MAX_EXTENSION_CACHE_SIZE = 10000
+
+/** Get lowercase file extension with caching */
+function getFileExtension(filePath: string): string {
+  const cached = extensionCache.get(filePath)
+  if (cached !== undefined) return cached
+  
+  const ext = path.extname(filePath).toLowerCase()
+  // Limit cache size to prevent memory leaks
+  if (extensionCache.size >= MAX_EXTENSION_CACHE_SIZE) {
+    extensionCache.clear()
+  }
+  extensionCache.set(filePath, ext)
+  return ext
+}
 /**
  * LSP Server Manager interface returned by createLSPServerManager.
  * Manages multiple LSP server instances and routes requests based on file extensions.
@@ -211,7 +233,7 @@ export function createLSPServerManager(): LSPServerManager {
    * Returns undefined if no server handles this file type.
    */
   function getServerForFile(filePath: string): LSPServerInstance | undefined {
-    const ext = path.extname(filePath).toLowerCase()
+    const ext = getFileExtension(filePath)
     const serverNames = extensionMap.get(ext)
 
     if (!serverNames || serverNames.length === 0) {
@@ -303,7 +325,7 @@ export function createLSPServerManager(): LSPServerManager {
     }
 
     // Get language ID from server's extensionToLanguage mapping
-    const ext = path.extname(filePath).toLowerCase()
+    const ext = getFileExtension(filePath)
     const languageId = server.config.extensionToLanguage[ext] || 'plaintext'
 
     const documentKey = getDocumentKey(server.name, fileUri)

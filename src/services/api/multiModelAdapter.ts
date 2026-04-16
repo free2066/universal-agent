@@ -47,6 +47,35 @@ function generateShortId(prefix: '' | 'msg_' | 'toolu_' = ''): string {
   return `${prefix}${randomUUID().replace(UUID_HYPHEN_REGEX, '').slice(0, 24)}`
 }
 
+// ============================================================================
+// Fallback chain configuration caching
+// ============================================================================
+
+/** Cached fallback chain from environment variable */
+let _fallbackChainCache: string[] | undefined
+let _fallbackChainCacheEnv: string | undefined
+
+/** Get fallback chain with caching */
+function getFallbackChain(): string[] {
+  const env = process.env.UA_FALLBACK_CHAIN
+  if (env === _fallbackChainCacheEnv && _fallbackChainCache !== undefined) {
+    return _fallbackChainCache
+  }
+  try {
+    const parsed = JSON.parse(env || '[]')
+    if (!Array.isArray(parsed)) {
+      _fallbackChainCache = []
+    } else {
+      _fallbackChainCache = parsed.filter((m: unknown) => typeof m === 'string' && m.length > 0)
+    }
+    _fallbackChainCacheEnv = env
+  } catch {
+    _fallbackChainCache = []
+    _fallbackChainCacheEnv = ''
+  }
+  return _fallbackChainCache
+}
+
 // MA-6: Validate UA_DEBUG_LOG path once at module load to prevent path traversal.
 // Reject /proc, /sys, /etc and other dangerous system directories.
 const _UA_LOG_PATH: string | null = (() => {
@@ -763,13 +792,7 @@ export class MultiModelAnthropicAdapter {
       // Guard against cycles: only pick a model that appears AFTER the current
       // one in the chain and hasn't been tried yet in this call tree.
       // MA-4: validate fallback chain structure to prevent prototype pollution
-      const fallbackChain: string[] = (() => {
-        try {
-          const parsed = JSON.parse(process.env.UA_FALLBACK_CHAIN || '[]')
-          if (!Array.isArray(parsed)) return []
-          return parsed.filter((m: unknown) => typeof m === 'string' && m.length > 0)
-        } catch { return [] }
-      })()
+      const fallbackChain = getFallbackChain()
       const triedModels: Set<string> = options?._triedModels instanceof Set
         ? options._triedModels
         : new Set([this.modelName])

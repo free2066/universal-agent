@@ -18,6 +18,31 @@
  *     Go regex are kept (JS $ matches end-of-string in default mode).
  */
 
+// ============================================================================
+// Special case labels for rule ID conversion (module-level constant)
+// ============================================================================
+
+/** Words where canonical capitalization differs from title case */
+const SPECIAL_CASE_LABELS: Record<string, string> = {
+  aws: 'AWS',
+  gcp: 'GCP',
+  api: 'API',
+  pat: 'PAT',
+  ad: 'AD',
+  tf: 'TF',
+  oauth: 'OAuth',
+  npm: 'NPM',
+  pypi: 'PyPI',
+  jwt: 'JWT',
+  github: 'GitHub',
+  gitlab: 'GitLab',
+  openai: 'OpenAI',
+  digitalocean: 'DigitalOcean',
+  huggingface: 'HuggingFace',
+  hashicorp: 'HashiCorp',
+  sendgrid: 'SendGrid',
+}
+
 import { capitalize } from '../../utils/stringUtils.js'
 
 type SecretRule = {
@@ -241,29 +266,9 @@ function getCompiledRules(): Array<{ id: string; re: RegExp }> {
  * e.g., "github-pat" → "GitHub PAT", "aws-access-token" → "AWS Access Token"
  */
 function ruleIdToLabel(ruleId: string): string {
-  // Words where the canonical capitalization differs from title case
-  const specialCase: Record<string, string> = {
-    aws: 'AWS',
-    gcp: 'GCP',
-    api: 'API',
-    pat: 'PAT',
-    ad: 'AD',
-    tf: 'TF',
-    oauth: 'OAuth',
-    npm: 'NPM',
-    pypi: 'PyPI',
-    jwt: 'JWT',
-    github: 'GitHub',
-    gitlab: 'GitLab',
-    openai: 'OpenAI',
-    digitalocean: 'DigitalOcean',
-    huggingface: 'HuggingFace',
-    hashicorp: 'HashiCorp',
-    sendgrid: 'SendGrid',
-  }
   return ruleId
     .split('-')
-    .map(part => specialCase[part] ?? capitalize(part))
+    .map(part => SPECIAL_CASE_LABELS[part] ?? capitalize(part))
     .join(' ')
 }
 
