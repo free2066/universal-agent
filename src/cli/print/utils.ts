@@ -40,7 +40,6 @@ export function canBatchWith(
   return (
     next !== undefined &&
     next.mode === 'prompt' &&
-    head.mode === 'prompt' &&
     next.workload === head.workload &&
     next.isMeta === head.isMeta
   )
