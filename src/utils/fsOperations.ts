@@ -10,8 +10,8 @@ import {
   stat as statPromise,
   unlink as unlinkPromise,
 } from 'fs/promises'
-import { homedir } from 'os'
 import * as nodePath from 'path'
+import { HOME_DIR } from './env.js'
 import { getErrnoCode } from './errors.js'
 import { slowLogging } from './slowOperations.js'
 
@@ -290,9 +290,9 @@ export function getPathsForPermissionCheck(inputPath: string): string[] {
   // but we normalize here as defense in depth for permission checking
   let path = inputPath
   if (path === '~') {
-    path = homedir().normalize('NFC')
+    path = HOME_DIR.normalize('NFC')
   } else if (path.startsWith('~/')) {
-    path = nodePath.join(homedir().normalize('NFC'), path.slice(2))
+    path = nodePath.join(HOME_DIR.normalize('NFC'), path.slice(2))
   }
 
   const pathSet = new Set<string>()

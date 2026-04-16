@@ -1,9 +1,9 @@
 // @ts-nocheck
 import memoize from 'lodash-es/memoize.js'
-import { homedir } from 'os'
 import { dirname, isAbsolute, resolve } from 'path'
 import type { ToolPermissionContext } from '../../Tool.js'
 import { getPlatform } from '../../utils/platform.js'
+import { HOME_DIR } from '../env.js'
 import {
   getFsImplementation,
   getPathsForPermissionCheck,
@@ -84,7 +84,7 @@ export function expandTilde(path: string): string {
     path.startsWith('~/') ||
     (process.platform === 'win32' && path.startsWith('~\\'))
   ) {
-    return homedir() + path.slice(1)
+    return HOME_DIR + path.slice(1)
   }
   return path
 }
@@ -349,7 +349,7 @@ export function isDangerousRemovalPath(resolvedPath: string): boolean {
     return true
   }
 
-  const normalizedHome = homedir().replace(/[\\/]+/g, '/')
+  const normalizedHome = HOME_DIR.replace(/[\\/]+/g, '/')
   if (normalizedPath === normalizedHome) {
     return true
   }

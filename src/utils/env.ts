@@ -25,7 +25,10 @@ const IS_WINDOWS = PLATFORM === 'win32'
 /** Cached home directory to avoid repeated os.homedir() calls */
 const HOME_DIR = homedir()
 
-export { PLATFORM, IS_MAC, IS_LINUX, IS_WINDOWS, HOME_DIR }
+/** Cached user type check - evaluated once at module load time for performance */
+const IS_ANT_USER = process.env.USER_TYPE === 'ant'
+
+export { PLATFORM, IS_MAC, IS_LINUX, IS_WINDOWS, HOME_DIR, IS_ANT_USER }
 
 // Config and data paths
 export const getGlobalClaudeFile = memoize((): string => {

@@ -1,5 +1,6 @@
-import { homedir, platform } from 'os'
+import { platform } from 'os'
 import { join } from 'path'
+import { HOME_DIR } from './env.js'
 import { getFsImplementation } from '../utils/fsOperations.js'
 import type { IdeType } from './ide.js'
 
@@ -24,29 +25,42 @@ const ideNameToDirMap: { [key: string]: string[] } = {
   androidstudio: ['AndroidStudio'],
 }
 
+// ============================================================================
+// Precompiled regex cache for IDE patterns (performance optimization)
+// ============================================================================
+const IDE_PATTERN_REGEX_CACHE = new Map<string, RegExp[]>()
+function getIdePatternRegexes(ideName: string): RegExp[] {
+  let regexes = IDE_PATTERN_REGEX_CACHE.get(ideName)
+  if (!regexes) {
+    const patterns = ideNameToDirMap[ideName.toLowerCase()]
+    regexes = patterns?.map(p => new RegExp('^' + p)) ?? []
+    IDE_PATTERN_REGEX_CACHE.set(ideName, regexes)
+  }
+  return regexes
+}
+
 // Build plugin directory paths
 // https://www.jetbrains.com/help/pycharm/directories-used-by-the-ide-to-store-settings-caches-plugins-and-logs.html#plugins-directory
 function buildCommonPluginDirectoryPaths(ideName: string): string[] {
-  const homeDir = homedir()
   const directories: string[] = []
   const idePatterns = ideNameToDirMap[ideName.toLowerCase()]
   if (!idePatterns) {
     return directories
   }
 
-  const appData = process.env.APPDATA || join(homeDir, 'AppData', 'Roaming')
+  const appData = process.env.APPDATA || join(HOME_DIR, 'AppData', 'Roaming')
   const localAppData =
-    process.env.LOCALAPPDATA || join(homeDir, 'AppData', 'Local')
+    process.env.LOCALAPPDATA || join(HOME_DIR, 'AppData', 'Local')
 
   switch (platform()) {
     case 'darwin':
       directories.push(
-        join(homeDir, 'Library', 'Application Support', 'JetBrains'),
-        join(homeDir, 'Library', 'Application Support'),
+        join(HOME_DIR, 'Library', 'Application Support', 'JetBrains'),
+        join(HOME_DIR, 'Library', 'Application Support'),
       )
       if (ideName.toLowerCase() === 'androidstudio') {
         directories.push(
-          join(homeDir, 'Library', 'Application Support', 'Google'),
+          join(HOME_DIR, 'Library', 'Application Support', 'Google'),
         )
       }
       break
@@ -64,14 +78,14 @@ function buildCommonPluginDirectoryPaths(ideName: string): string[] {
 
     case 'linux':
       directories.push(
-        join(homeDir, '.config', 'JetBrains'),
-        join(homeDir, '.local', 'share', 'JetBrains'),
+        join(HOME_DIR, '.config', 'JetBrains'),
+        join(HOME_DIR, '.local', 'share', 'JetBrains'),
       )
       for (const pattern of idePatterns) {
-        directories.push(join(homeDir, '.' + pattern))
+        directories.push(join(HOME_DIR, '.' + pattern))
       }
       if (ideName.toLowerCase() === 'androidstudio') {
-        directories.push(join(homeDir, '.config', 'Google'))
+        directories.push(join(HOME_DIR, '.config', 'Google'))
       }
       break
     default:
@@ -87,13 +101,10 @@ async function detectPluginDirectories(ideName: string): Promise<string[]> {
   const fs = getFsImplementation()
 
   const pluginDirPaths = buildCommonPluginDirectoryPaths(ideName)
-  const idePatterns = ideNameToDirMap[ideName.toLowerCase()]
-  if (!idePatterns) {
+  const regexes = getIdePatternRegexes(ideName)
+  if (regexes.length === 0) {
     return foundDirectories
   }
-
-  // Precompile once — idePatterns is invariant across baseDirs
-  const regexes = idePatterns.map(p => new RegExp('^' + p))
 
   for (const baseDir of pluginDirPaths) {
     try {

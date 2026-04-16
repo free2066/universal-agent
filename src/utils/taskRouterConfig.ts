@@ -9,8 +9,8 @@
  */
 
 import { existsSync, readFileSync } from 'fs'
-import { homedir } from 'os'
 import { resolve } from 'path'
+import { HOME_DIR } from './env.js'
 import { errorMessage } from './errors.js'
 
 /** Task categories that the router can classify a user request into. */
@@ -58,7 +58,7 @@ export interface TaskRouterConfig {
   runtime_fallback?: RuntimeFallbackConfig
 }
 
-const CONFIG_DIR = resolve(homedir(), '.uagent')
+const CONFIG_DIR = resolve(HOME_DIR, '.uagent')
 const CONFIG_FILE_ENV = process.env.UA_TASK_ROUTER_CONFIG
 const CONFIG_FILE_DEFAULT = resolve(CONFIG_DIR, 'task-router.json')
 

@@ -4,10 +4,10 @@ import { createWriteStream } from 'fs'
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import { execSync } from 'child_process'
 import memoize from 'lodash-es/memoize.js'
-import { homedir } from 'os'
 import * as path from 'path'
 import { logEvent } from 'src/services/analytics/index.js'
 import { fileURLToPath } from 'url'
+import { HOME_DIR } from './env.js'
 import { isInBundledMode } from './bundledMode.js'
 import { logForDebugging } from './debug.js'
 import { isEnvDefinedFalsy } from './envUtils.js'
@@ -18,7 +18,7 @@ import { getPlatform } from './platform.js'
 import { countCharInString } from './stringUtils.js'
 
 // uagent local ripgrep installation directory
-const UA_RIPGREP_DIR = path.join(homedir(), '.uagent', 'bin')
+const UA_RIPGREP_DIR = path.join(HOME_DIR, '.uagent', 'bin')
 const UA_RIPGREP_PATH = path.join(UA_RIPGREP_DIR, 'rg')
 
 /**
@@ -735,7 +735,7 @@ export const countFilesRoundedRg = memoize(
   ): Promise<number | undefined> => {
     // Skip file counting if we're in the home directory to avoid triggering
     // macOS TCC permission dialogs for Desktop, Downloads, Documents, etc.
-    if (path.resolve(dirPath) === path.resolve(homedir())) {
+    if (path.resolve(dirPath) === path.resolve(HOME_DIR)) {
       return undefined
     }
 
