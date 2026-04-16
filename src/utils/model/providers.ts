@@ -3,14 +3,20 @@ import { isEnvTruthy } from '../envUtils.js'
 
 export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry'
 
+/** Cached API provider - evaluated once at first call, then cached for the process lifetime */
+let _cachedAPIProvider: APIProvider | undefined
+
 export function getAPIProvider(): APIProvider {
-  return isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)
-    ? 'bedrock'
-    : isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)
-      ? 'vertex'
-      : isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
-        ? 'foundry'
-        : 'firstParty'
+  if (_cachedAPIProvider === undefined) {
+    _cachedAPIProvider = isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK)
+      ? 'bedrock'
+      : isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX)
+        ? 'vertex'
+        : isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY)
+          ? 'foundry'
+          : 'firstParty'
+  }
+  return _cachedAPIProvider
 }
 
 export function getAPIProviderForStatsig(): AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS {
