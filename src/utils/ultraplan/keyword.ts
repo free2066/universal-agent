@@ -10,6 +10,38 @@ const OPEN_TO_CLOSE: Record<string, string> = {
   "'": "'",
 }
 
+// ============================================================================
+// Regex caching for keyword matching
+// ============================================================================
+
+/** Cache for keyword test regexes (case-insensitive) */
+const keywordTestCache = new Map<string, RegExp>()
+
+/** Cache for keyword word boundary regexes (global, case-insensitive) */
+const keywordWordCache = new Map<string, RegExp>()
+
+/** Get or create cached regex for keyword test */
+function getKeywordTestRegex(keyword: string): RegExp {
+  let regex = keywordTestCache.get(keyword)
+  if (!regex) {
+    regex = new RegExp(keyword, 'i')
+    keywordTestCache.set(keyword, regex)
+  }
+  regex.lastIndex = 0 // Reset for re-use
+  return regex
+}
+
+/** Get or create cached regex for keyword word matching */
+function getKeywordWordRegex(keyword: string): RegExp {
+  let regex = keywordWordCache.get(keyword)
+  if (!regex) {
+    regex = new RegExp(`\\b${keyword}\\b`, 'gi')
+    keywordWordCache.set(keyword, regex)
+  }
+  regex.lastIndex = 0 // Reset for re-use
+  return regex
+}
+
 /**
  * Find keyword positions, skipping occurrences that are clearly not a
  * launch directive:
@@ -47,7 +79,7 @@ function findKeywordTriggerPositions(
   text: string,
   keyword: string,
 ): TriggerPosition[] {
-  const re = new RegExp(keyword, 'i')
+  const re = getKeywordTestRegex(keyword)
   if (!re.test(text)) return []
   if (text.startsWith('/')) return []
   const quotedRanges: Array<{ start: number; end: number }> = []
@@ -76,7 +108,7 @@ function findKeywordTriggerPositions(
   }
 
   const positions: TriggerPosition[] = []
-  const wordRe = new RegExp(`\\b${keyword}\\b`, 'gi')
+  const wordRe = getKeywordWordRegex(keyword)
   const matches = text.matchAll(wordRe)
   for (const match of matches) {
     if (match.index === undefined) continue
