@@ -17,6 +17,7 @@
 import OpenAI from 'openai';
 import type { LLMClient, ChatOptions, ChatResponse, Message } from '../types.js';
 import { withInferenceTimeout, safeParseJSON, toOpenAIUserContent, msgText } from './shared.js';
+import { isUsageInvalid, estimateInputTokens, estimateOutputTokens } from '../../utils/tokenEstimate.js';
 
 // ── OpenAI ────────────────────────────────────────────────────────────────────
 
@@ -185,10 +186,27 @@ export class OpenAIClient implements LLMClient {
             name: tc.name,
             arguments: safeParseJSON(tc.args, tc.name),
           }));
-        return { type: 'tool_calls', content: textContent, toolCalls, usage: streamUsage };
+        
+        // Fallback to estimation if usage is invalid (e.g., GLM returns zeros)
+        const finalUsage = isUsageInvalid(streamUsage)
+          ? {
+              input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+              output_tokens: estimateOutputTokens(textContent, this.model),
+            }
+          : streamUsage;
+        
+        return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage };
       }
 
-      return { type: 'text', content: textContent, usage: streamUsage };
+      // Fallback to estimation if usage is invalid
+      const finalUsage = isUsageInvalid(streamUsage)
+        ? {
+            input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+            output_tokens: estimateOutputTokens(textContent, this.model),
+          }
+        : streamUsage;
+
+      return { type: 'text', content: textContent, usage: finalUsage };
     });
   }
 
@@ -345,9 +363,25 @@ export class DeepSeekClient extends OpenAIClient {
           const toolCalls = Array.from(toolCallMap.entries())
             .sort((a, b) => a[0] - b[0])
             .map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) }));
-          return { type: 'tool_calls', content: textContent, toolCalls, usage: streamUsage };
+          
+          const finalUsage = isUsageInvalid(streamUsage)
+            ? {
+                input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+                output_tokens: estimateOutputTokens(textContent, this.model),
+              }
+            : streamUsage;
+          
+          return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage };
         }
-        return { type: 'text', content: textContent, usage: streamUsage };
+        
+        const finalUsage = isUsageInvalid(streamUsage)
+          ? {
+              input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+              output_tokens: estimateOutputTokens(textContent, this.model),
+            }
+          : streamUsage;
+        
+        return { type: 'text', content: textContent, usage: finalUsage };
       });
     }
     return super.streamChat(options, onChunk);
@@ -438,9 +472,25 @@ export class QwenClient extends OpenAIClient {
           const toolCalls = Array.from(toolCallMap.entries())
             .sort((a, b) => a[0] - b[0])
             .map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) }));
-          return { type: 'tool_calls', content: textContent, toolCalls, usage: streamUsage };
+          
+          const finalUsage = isUsageInvalid(streamUsage)
+            ? {
+                input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+                output_tokens: estimateOutputTokens(textContent, this.model),
+              }
+            : streamUsage;
+          
+          return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage };
         }
-        return { type: 'text', content: textContent, usage: streamUsage };
+        
+        const finalUsage = isUsageInvalid(streamUsage)
+          ? {
+              input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+              output_tokens: estimateOutputTokens(textContent, this.model),
+            }
+          : streamUsage;
+        
+        return { type: 'text', content: textContent, usage: finalUsage };
       });
     }
     return super.streamChat(options, onChunk);
@@ -619,9 +669,21 @@ export class OpenRouterClient implements LLMClient {
         }
       }
       if (toolCallMap.size > 0) {
-        return { type: 'tool_calls', content: textContent, toolCalls: Array.from(toolCallMap.entries()).sort((a, b) => a[0] - b[0]).map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) })), usage: streamUsage };
+        const finalUsage = isUsageInvalid(streamUsage)
+          ? {
+              input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+              output_tokens: estimateOutputTokens(textContent, this.model),
+            }
+          : streamUsage;
+        return { type: 'tool_calls', content: textContent, toolCalls: Array.from(toolCallMap.entries()).sort((a, b) => a[0] - b[0]).map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) })), usage: finalUsage };
       }
-      return { type: 'text', content: textContent, usage: streamUsage };
+      const finalUsage = isUsageInvalid(streamUsage)
+        ? {
+            input_tokens: estimateInputTokens(options.systemPrompt, options.messages.map(m => ({ role: m.role, content: msgText(m.content) })), this.model),
+            output_tokens: estimateOutputTokens(textContent, this.model),
+          }
+        : streamUsage;
+      return { type: 'text', content: textContent, usage: finalUsage };
     });
   }
 
