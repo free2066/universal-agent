@@ -12,11 +12,21 @@
 
 import { tryParseShellCommand } from './bash/shellQuote.js'
 
+// ============================================================================
+// Precompiled regex patterns
+// ============================================================================
+
+/** Matches numeric-only strings (conflicts with $0, $1 shorthand) */
+const NUMERIC_ONLY_REGEX = /^\\d+$/
+
+/** Matches single quotes for shell escaping */
+const SINGLE_QUOTE_REGEX = /'/g
+
 function escapeArgumentForPromptShell(arg: string): string {
   if (arg.length === 0) {
     return "''"
   }
-  return `'${arg.replace(/'/g, `'"'"'`)}'`
+  return `'${arg.replace(SINGLE_QUOTE_REGEX, `'"'"'`)}'`
 }
 
 /**
@@ -63,7 +73,7 @@ export function parseArgumentNames(
 
   // Filter out empty strings and numeric-only names (which conflict with $0, $1 shorthand)
   const isValidName = (name: string): boolean =>
-    typeof name === 'string' && name.trim() !== '' && !/^\d+$/.test(name)
+    typeof name === 'string' && name.trim() !== '' && !NUMERIC_ONLY_REGEX.test(name)
 
   if (Array.isArray(argumentNames)) {
     return argumentNames.filter(isValidName)

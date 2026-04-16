@@ -18,6 +18,14 @@ import {
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
 import { getFsImplementation } from './fsOperations.js'
+
+// ============================================================================
+// Precomputed report formatting strings
+// ============================================================================
+
+/** Separator line for profiling reports */
+const REPORT_SEPARATOR = '='.repeat(80)
+const REPORT_LINE = '-'.repeat(80)
 import { formatMs, formatTimelineLine, getPerformance } from './profilerBase.js'
 import { writeFileSync_DEPRECATED } from './slowOperations.js'
 
@@ -90,9 +98,9 @@ function getReport(): string {
   }
 
   const lines: string[] = []
-  lines.push('='.repeat(80))
+  lines.push(REPORT_SEPARATOR)
   lines.push('STARTUP PROFILING REPORT')
-  lines.push('='.repeat(80))
+  lines.push(REPORT_SEPARATOR)
   lines.push('')
 
   let prevTime = 0
@@ -113,7 +121,7 @@ function getReport(): string {
   const lastMark = marks[marks.length - 1]
   lines.push('')
   lines.push(`Total startup time: ${formatMs(lastMark?.startTime ?? 0)}ms`)
-  lines.push('='.repeat(80))
+  lines.push(REPORT_SEPARATOR)
 
   return lines.join('\n')
 }

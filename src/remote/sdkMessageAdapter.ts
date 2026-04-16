@@ -22,6 +22,25 @@ import { logForDebugging } from '../utils/debug.js'
 import { fromSDKCompactMetadata } from '../utils/messages/mappers.js'
 import { createUserMessage } from '../utils/messages.js'
 
+// ============================================================================
+// Timestamp caching for batch message processing
+// ============================================================================
+
+let _cachedTimestamp: string | null = null
+let _cachedTimestampTime: number = 0
+
+/** Get ISO timestamp with 1ms caching - good for batch processing while maintaining precision */
+function getISOTimestamp(): string {
+  const now = Date.now()
+  // Cache for 1ms - allows batch processing optimization while keeping reasonable precision
+  if (_cachedTimestamp && now - _cachedTimestampTime < 1) {
+    return _cachedTimestamp
+  }
+  _cachedTimestamp = getISOTimestamp()
+  _cachedTimestampTime = now
+  return _cachedTimestamp
+}
+
 let lastRateLimitEventKey: string | null = null
 
 function getRateLimitEventKey(
@@ -55,7 +74,7 @@ function convertAssistantMessage(msg: SDKAssistantMessage): AssistantMessage {
     message: msg.message,
     uuid: msg.uuid,
     requestId: undefined,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
     error: msg.error,
   }
 }
@@ -85,7 +104,7 @@ function convertResultMessage(msg: SDKResultMessage): SystemMessage {
     content,
     level: isError ? 'warning' : 'info',
     uuid: msg.uuid,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
   }
 }
 
@@ -99,7 +118,7 @@ function convertInitMessage(msg: SDKSystemMessage): SystemMessage {
     content: `Remote session initialized (model: ${msg.model})`,
     level: 'info',
     uuid: msg.uuid,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
   }
 }
 
@@ -162,7 +181,7 @@ function convertStatusMessage(msg: SDKStatusMessage): SystemMessage | null {
     content,
     level: 'info',
     uuid: msg.uuid,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
   }
 }
 
@@ -180,7 +199,7 @@ function convertToolProgressMessage(
     content: `Tool ${msg.tool_name} is still running (${formatElapsedSeconds(msg.elapsed_time_seconds)})…`,
     level: 'info',
     uuid: msg.uuid,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
     toolUseID: msg.tool_use_id,
   }
 }
@@ -203,7 +222,7 @@ function convertCompactBoundaryMessage(
     content,
     level: 'info',
     uuid: msg.uuid,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
     compactMetadata,
   }
 }
@@ -228,7 +247,7 @@ function convertRateLimitEventMessage(
           : 'Using extra usage to keep requests running.',
       level: info.overageStatus === 'allowed_warning' ? 'warning' : 'info',
       uuid: msg.uuid,
-      timestamp: new Date().toISOString(),
+      timestamp: getISOTimestamp(),
     }
   }
 
@@ -243,7 +262,7 @@ function convertRateLimitEventMessage(
       content: `Approaching the current usage limit${utilization}.${formatResetSuffix(info.resetsAt)}`.trim(),
       level: 'warning',
       uuid: msg.uuid,
-      timestamp: new Date().toISOString(),
+      timestamp: getISOTimestamp(),
     }
   }
 
@@ -258,7 +277,7 @@ function convertRateLimitEventMessage(
       content: `${prefix}${formatResetSuffix(info.resetsAt)}`.trim(),
       level: 'warning',
       uuid: msg.uuid,
-      timestamp: new Date().toISOString(),
+      timestamp: getISOTimestamp(),
     }
   }
 
@@ -275,7 +294,7 @@ function convertHookStartedMessage(
     content: `Running hook: ${msg.hook_name}…`,
     level: 'info',
     uuid: msg.uuid,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
   }
 }
 
@@ -299,7 +318,7 @@ function convertHookResponseMessage(
 ${trimmedDetails}`,
       level: 'warning',
       uuid: msg.uuid,
-      timestamp: new Date().toISOString(),
+      timestamp: getISOTimestamp(),
     }
   }
   return null
@@ -318,7 +337,7 @@ function convertFilesPersistedEventMessage(
       content: `Failed to persist ${msg.failed.length} file(s):\n${failures}`,
       level: 'warning',
       uuid: msg.uuid,
-      timestamp: new Date().toISOString(),
+      timestamp: getISOTimestamp(),
     }
   }
   return null
@@ -338,7 +357,7 @@ function convertToolUseSummaryMessage(
     content: `Completed tool work: ${summary}`,
     level: 'info',
     uuid: msg.uuid,
-    timestamp: new Date().toISOString(),
+    timestamp: getISOTimestamp(),
   }
 }
 
@@ -475,7 +494,7 @@ export function convertSDKMessage(
               content: 'Remote session authentication expired or not authenticated. Please re-authenticate.',
               level: 'warning',
               uuid: msg.uuid,
-              timestamp: new Date().toISOString(),
+              timestamp: getISOTimestamp(),
             },
           }
         }
@@ -491,7 +510,7 @@ export function convertSDKMessage(
             content: `Remote API error: ${apiMsg.error}`,
             level: 'warning',
             uuid: msg.uuid,
-            timestamp: new Date().toISOString(),
+            timestamp: getISOTimestamp(),
           },
         }
       }
@@ -505,7 +524,7 @@ export function convertSDKMessage(
             content: `Retrying API request: ${arMsg.error} (Attempt ${arMsg.attempt}/${arMsg.max_attempts})`,
             level: 'warning',
             uuid: msg.uuid,
-            timestamp: new Date().toISOString(),
+            timestamp: getISOTimestamp(),
           },
         }
       }

@@ -550,6 +550,9 @@ const DESANITIZATIONS: Record<string, string> = {
   '\n\nA:': '\n\nAssistant:',
 }
 
+/** Pre-cached entries for iteration (avoids Object.entries() call on each use) */
+const DESANITIZATION_ENTRIES = Object.entries(DESANITIZATIONS)
+
 /**
  * Normalizes a match string by applying specific replacements
  * This helps handle when exact matches fail due to formatting differences
@@ -562,7 +565,7 @@ function desanitizeMatchString(matchString: string): {
   let result = matchString
   const appliedReplacements: Array<{ from: string; to: string }> = []
 
-  for (const [from, to] of Object.entries(DESANITIZATIONS)) {
+  for (const [from, to] of DESANITIZATION_ENTRIES) {
     const beforeReplace = result
     result = result.replaceAll(from, to)
 

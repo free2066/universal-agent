@@ -31,6 +31,14 @@ import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import { formatMs, formatTimelineLine, getPerformance } from './profilerBase.js'
 
+// ============================================================================
+// Precomputed report formatting strings
+// ============================================================================
+
+/** Separator line for profiling reports */
+const REPORT_SEPARATOR = '='.repeat(80)
+const REPORT_LINE = '-'.repeat(80)
+
 // Module-level state - initialized once when the module loads
 // eslint-disable-next-line custom-rules/no-process-env-top-level
 const ENABLED = isEnvTruthy(process.env.CLAUDE_CODE_PROFILE_QUERY)
@@ -138,9 +146,9 @@ function getQueryProfileReport(): string {
   }
 
   const lines: string[] = []
-  lines.push('='.repeat(80))
+  lines.push(REPORT_SEPARATOR)
   lines.push(`QUERY PROFILING REPORT - Query #${queryCount}`)
-  lines.push('='.repeat(80))
+  lines.push(REPORT_SEPARATOR)
   lines.push('')
 
   // Use first mark as baseline (query start time) to show relative times
@@ -180,7 +188,7 @@ function getQueryProfileReport(): string {
   const totalTime = lastMark ? lastMark.startTime - baselineTime : 0
 
   lines.push('')
-  lines.push('-'.repeat(80))
+  lines.push(REPORT_LINE)
 
   if (firstChunkTime > 0) {
     const preRequestOverhead = apiRequestSentTime
@@ -205,7 +213,7 @@ function getQueryProfileReport(): string {
   // Add phase summary
   lines.push(getPhaseSummary(marks, baselineTime))
 
-  lines.push('='.repeat(80))
+  lines.push(REPORT_SEPARATOR)
 
   return lines.join('\n')
 }

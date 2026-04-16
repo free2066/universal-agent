@@ -2,24 +2,25 @@
 
 import { getRelativeTimeFormat, getTimeZone } from './intl.js'
 
+// ============================================================================
+// Precompiled regex patterns for formatting
+// ============================================================================
+
+/** Matches trailing ".0" for removal in file size display */
+const TRAILING_ZERO_DECIMAL = /\\.0$/
+
 /**
  * Formats a byte count to a human-readable string (KB, MB, GB).
  * @example formatFileSize(1536) → "1.5KB"
  */
 export function formatFileSize(sizeInBytes: number): string {
   const kb = sizeInBytes / 1024
-  if (kb < 1) {
-    return `${sizeInBytes} bytes`
-  }
-  if (kb < 1024) {
-    return `${kb.toFixed(1).replace(/\.0$/, '')}KB`
-  }
+  if (kb < 1) return `${sizeInBytes} bytes`
+  if (kb < 1024) return `${kb.toFixed(1).replace(TRAILING_ZERO_DECIMAL, '')}KB`
   const mb = kb / 1024
-  if (mb < 1024) {
-    return `${mb.toFixed(1).replace(/\.0$/, '')}MB`
-  }
+  if (mb < 1024) return `${mb.toFixed(1).replace(TRAILING_ZERO_DECIMAL, '')}MB`
   const gb = mb / 1024
-  return `${gb.toFixed(1).replace(/\.0$/, '')}GB`
+  return `${gb.toFixed(1).replace(TRAILING_ZERO_DECIMAL, '')}GB`
 }
 
 /**
