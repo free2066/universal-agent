@@ -78,9 +78,12 @@ function* segmentGraphemes(str: string): Generator<Grapheme> {
 // Sequence Parsing
 // =============================================================================
 
+// Precompiled regex for CSI parameter splitting
+const CSI_PARAM_SEP_RE = /[;:]/
+
 function parseCSIParams(paramStr: string): number[] {
   if (paramStr === '') return []
-  return paramStr.split(/[;:]/).map(s => (s === '' ? 0 : parseInt(s, 10)))
+  return paramStr.split(CSI_PARAM_SEP_RE).map(s => (s === '' ? 0 : parseInt(s, 10)))
 }
 
 /** Parse a raw CSI sequence (e.g., "\x1b[31m") into an action */

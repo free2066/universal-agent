@@ -22,6 +22,12 @@ import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 // Cache expiration: 24 hours
 const GROVE_CACHE_EXPIRATION_MS = 24 * 60 * 60 * 1000
 
+// Cached OAuth config to avoid repeated function calls within the same operation
+let _cachedOauthConfig: ReturnType<typeof getOauthConfig> | null = null
+function getCachedOauthConfig() {
+  return _cachedOauthConfig ??= getOauthConfig()
+}
+
 export type AccountSettings = {
   grove_enabled: boolean | null
   grove_notice_viewed_at: string | null
@@ -62,7 +68,7 @@ export const getGroveSettings = memoize(
           throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
         }
         return axios.get<AccountSettings>(
-          `${getOauthConfig().BASE_API_URL}/api/oauth/account/settings`,
+          `${getCachedOauthConfig().BASE_API_URL}/api/oauth/account/settings`,
           {
             headers: {
               ...authHeaders.headers,
@@ -95,7 +101,7 @@ export async function markGroveNoticeViewed(): Promise<void> {
         throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
       }
       return axios.post(
-        `${getOauthConfig().BASE_API_URL}/api/oauth/account/grove_notice_viewed`,
+        `${getCachedOauthConfig().BASE_API_URL}/api/oauth/account/grove_notice_viewed`,
         {},
         {
           headers: {
@@ -127,7 +133,7 @@ export async function updateGroveSettings(
         throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
       }
       return axios.patch(
-        `${getOauthConfig().BASE_API_URL}/api/oauth/account/settings`,
+        `${getCachedOauthConfig().BASE_API_URL}/api/oauth/account/settings`,
         {
           grove_enabled: groveEnabled,
         },
@@ -242,7 +248,7 @@ export const getGroveNoticeConfig = memoize(
           throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
         }
         return axios.get<GroveConfig>(
-          `${getOauthConfig().BASE_API_URL}/api/claude_code_grove`,
+          `${getCachedOauthConfig().BASE_API_URL}/api/claude_code_grove`,
           {
             headers: {
               ...authHeaders.headers,

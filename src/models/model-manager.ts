@@ -65,6 +65,12 @@ const CONFIG_FILE = resolve(CONFIG_DIR, 'models.json');
  * Used when auto-creating a ModelProfile in setPointer() to avoid duplicating
  * the if-chain in multiple places inside the class.
  */
+// Module-level constant for valid providers (avoid repeated Set creation)
+const VALID_PROVIDERS = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'groq', 'siliconflow', 'openrouter', 'custom'])
+
+// Default model constant
+const DEFAULT_MODEL = 'gemini-2.5-flash'
+
 function inferProviderFromModelName(modelName: string): ModelProfile['provider'] {
   // 万擎 (Kuaishou internal) — format: "wanqing/<model-id>"
   // Uses OpenAI-compatible API with WQ_API_KEY + OPENAI_BASE_URL
@@ -92,10 +98,10 @@ export class ModelManager {
     //   gemini-2.5-flash  — 1500 req/day free (Google AI Studio, GEMINI_API_KEY)
     //   gemini-2.0-flash  — same free tier, slightly lighter
     //   deepseek-chat     — free credits on signup (DEEPSEEK_API_KEY)
-    main:    process.env.UAGENT_MODEL         ?? 'gemini-2.5-flash',
-    task:    process.env.UAGENT_TASK_MODEL    ?? 'gemini-2.5-flash',
-    compact: process.env.UAGENT_COMPACT_MODEL ?? 'gemini-2.5-flash',
-    quick:   process.env.UAGENT_QUICK_MODEL   ?? 'gemini-2.5-flash',
+    main:    process.env.UAGENT_MODEL         ?? DEFAULT_MODEL,
+    task:    process.env.UAGENT_TASK_MODEL    ?? DEFAULT_MODEL,
+    compact: process.env.UAGENT_COMPACT_MODEL ?? DEFAULT_MODEL,
+    quick:   process.env.UAGENT_QUICK_MODEL   ?? DEFAULT_MODEL,
   };
   private usageHistory: TokenUsage[] = [];
   private sessionCost = 0;
@@ -178,7 +184,6 @@ export class ModelManager {
     try {
       const data = JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'));
       if (data.profiles) {
-        const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'groq', 'siliconflow', 'openrouter', 'custom']);
         for (const p of data.profiles) {
           // Validate each profile before loading: must have a known provider and non-empty modelName.
           // This prevents test-injected garbage (e.g. 'non-existent-model-12345') from
@@ -186,7 +191,7 @@ export class ModelManager {
           // Also skip wanqing/* profiles — they are CodeFlicker IDE internal aliases that
           // don't map to real API endpoint IDs.
           if (p && typeof p.name === 'string' && typeof p.modelName === 'string'
-              && p.modelName.length > 0 && validProviders.has(p.provider)
+              && p.modelName.length > 0 && VALID_PROVIDERS.has(p.provider)
               && !p.name.startsWith('wanqing/') && !p.modelName.startsWith('wanqing/')) {
             this.profiles.set(p.name, p);
           }
@@ -217,9 +222,8 @@ export class ModelManager {
     mkdirSync(CONFIG_DIR, { recursive: true });
     // Only persist profiles that have a valid provider — filters out any test
     // or placeholder profiles that may have been created by setPointer() during testing.
-    const validProviders = new Set(['openai', 'anthropic', 'ollama', 'gemini', 'deepseek', 'moonshot', 'qwen', 'mistral', 'groq', 'siliconflow', 'openrouter', 'custom']);
     const profilesToSave = Array.from(this.profiles.values())
-      .filter(p => validProviders.has(p.provider) && p.modelName.length > 0);
+      .filter(p => VALID_PROVIDERS.has(p.provider) && p.modelName.length > 0);
     writeFileSync(CONFIG_FILE, JSON.stringify({
       profiles: profilesToSave,
       pointers: this.getPointers(),

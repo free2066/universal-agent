@@ -32,6 +32,10 @@ const GLOBAL_KEYTERMS: readonly string[] = [
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
+// Precompiled regex for identifier splitting
+const CAMEL_CASE_RE = /([a-z])([A-Z])/g
+const IDENTIFIER_SEP_RE = /[-_./\s]+/
+
 /**
  * Split an identifier (camelCase, PascalCase, kebab-case, snake_case, or
  * path segments) into individual words.  Fragments of 2 chars or fewer are
@@ -39,8 +43,8 @@ const GLOBAL_KEYTERMS: readonly string[] = [
  */
 export function splitIdentifier(name: string): string[] {
   return name
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .split(/[-_./\s]+/)
+    .replace(CAMEL_CASE_RE, '$1 $2')
+    .split(IDENTIFIER_SEP_RE)
     .map(w => w.trim())
     .filter(w => w.length > 2 && w.length <= 20)
 }

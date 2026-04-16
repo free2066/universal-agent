@@ -337,14 +337,31 @@ async function configureApiKeyHeaders(
   }
 }
 
+// Precompiled regex for splitting custom headers
+const HEADER_NEWLINE_RE = /\n|\r\n/
+
+// Cached custom headers (only changes when env vars change)
+let _cachedCustomHeaders: Record<string, string> | null = null
+let _cachedCustomHeadersEnv: string | undefined = undefined
+
 function getCustomHeaders(): Record<string, string> {
-  const customHeaders: Record<string, string> = {}
   const customHeadersEnv = process.env.ANTHROPIC_CUSTOM_HEADERS
 
-  if (!customHeadersEnv) return customHeaders
+  // Return cached result if env hasn't changed
+  if (customHeadersEnv === _cachedCustomHeadersEnv && _cachedCustomHeaders !== null) {
+    return _cachedCustomHeaders
+  }
+
+  _cachedCustomHeadersEnv = customHeadersEnv
+  const customHeaders: Record<string, string> = {}
+
+  if (!customHeadersEnv) {
+    _cachedCustomHeaders = customHeaders
+    return customHeaders
+  }
 
   // Split by newlines to support multiple headers
-  const headerStrings = customHeadersEnv.split(/\n|\r\n/)
+  const headerStrings = customHeadersEnv.split(HEADER_NEWLINE_RE)
 
   for (const headerString of headerStrings) {
     if (!headerString.trim()) continue
@@ -360,6 +377,7 @@ function getCustomHeaders(): Record<string, string> {
     }
   }
 
+  _cachedCustomHeaders = customHeaders
   return customHeaders
 }
 

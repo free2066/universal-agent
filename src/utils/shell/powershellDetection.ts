@@ -84,6 +84,11 @@ export type PowerShellEdition = 'core' | 'desktop'
  * the model doesn't emit `cmd1 && cmd2` on 5.1 (parser error) or avoid
  * `&&` on 7+ where it's the correct short-circuiting operator.
  */
+
+// Precompiled regex for path splitting
+const PATH_SEP_RE = /[/\\]/
+const EXE_SUFFIX_RE = /\.exe$/
+
 export async function getPowerShellEdition(): Promise<PowerShellEdition | null> {
   const p = await getCachedPowerShellPath()
   if (!p) return null
@@ -92,10 +97,10 @@ export async function getPowerShellEdition(): Promise<PowerShellEdition | null> 
   //   /opt/microsoft/powershell/7/pwsh
   //   C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
   const base = p
-    .split(/[/\\]/)
+    .split(PATH_SEP_RE)
     .pop()!
     .toLowerCase()
-    .replace(/\.exe$/, '')
+    .replace(EXE_SUFFIX_RE, '')
   return base === 'pwsh' ? 'core' : 'desktop'
 }
 

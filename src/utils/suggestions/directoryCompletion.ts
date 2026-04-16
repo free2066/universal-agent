@@ -146,19 +146,14 @@ export function clearDirectoryCache(): void {
   directoryCache.clear()
 }
 
+// Precompiled regex for path-like token detection
+const PATH_LIKE_REGEX = /^(?:~\/|\/|\.\/|\.\.\/|~|\.|\.\.)$/
+
 /**
  * Checks if a string looks like a path (starts with path-like prefixes)
  */
 export function isPathLikeToken(token: string): boolean {
-  return (
-    token.startsWith('~/') ||
-    token.startsWith('/') ||
-    token.startsWith('./') ||
-    token.startsWith('../') ||
-    token === '~' ||
-    token === '.' ||
-    token === '..'
-  )
+  return PATH_LIKE_REGEX.test(token)
 }
 
 /**

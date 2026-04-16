@@ -61,6 +61,9 @@ import { POWERSHELL_TOOL_NAME } from './toolName.js'
 // nested assignment prefixes in the parse-failed fallback path.
 const PS_ASSIGN_PREFIX_RE = /^\$[\w:]+\s*(?:[+\-*/%]|\?\?)?\s*=\s*/
 
+// Precompiled regex for command fragment splitting in parse-failed fallback
+const PS_FRAGMENT_SEP_RE = /[;|\n\r{}()&]+/
+
 /**
  * Cmdlets that can place a file at a caller-specified path. The
  * git-internal-paths guard checks whether any arg is a git-internal path
@@ -784,7 +787,7 @@ export async function powershellToolHasPermission(
     const backtickStripped = command
       .replace(/`[\r\n]+\s*/g, '')
       .replace(/`/g, '')
-    for (const fragment of backtickStripped.split(/[;|\n\r{}()&]+/)) {
+    for (const fragment of backtickStripped.split(PS_FRAGMENT_SEP_RE)) {
       const trimmedFrag = fragment.trim()
       if (!trimmedFrag) continue // skip empty fragments
       // Skip the full command ONLY if it starts with a cmdlet name (no

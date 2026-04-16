@@ -164,11 +164,20 @@ function getAnthropicEnvMetadata() {
   }
 }
 
+// Cache build age to avoid repeated Date calculations
+const BUILD_TIME_MS = MACRO.BUILD_TIME ? new Date(MACRO.BUILD_TIME).getTime() : NaN
+let _cachedBuildAge: number | undefined = undefined
+let _cachedBuildAgeTime: number = 0
+
 function getBuildAgeMinutes(): number | undefined {
-  if (!MACRO.BUILD_TIME) return undefined
-  const buildTime = new Date(MACRO.BUILD_TIME).getTime()
-  if (isNaN(buildTime)) return undefined
-  return Math.floor((Date.now() - buildTime) / 60000)
+  if (isNaN(BUILD_TIME_MS)) return undefined
+  const now = Date.now()
+  if (now - _cachedBuildAgeTime < 60000 && _cachedBuildAge !== undefined) {
+    return _cachedBuildAge
+  }
+  _cachedBuildAgeTime = now
+  _cachedBuildAge = Math.floor((now - BUILD_TIME_MS) / 60000)
+  return _cachedBuildAge
 }
 
 export function logAPIQuery({

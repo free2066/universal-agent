@@ -97,6 +97,10 @@ type LoadedPluginMarketplace = {
   cachePath: string
 }
 
+// Cached plugins directory path (avoid repeated path operations)
+let _cachedPluginsDir: string | null = null
+let _cachedMarketplacesCacheDir: string | null = null
+
 /**
  * Get the path to the known marketplaces configuration file
  * Using a function instead of a constant allows proper mocking in tests
@@ -110,7 +114,7 @@ function getKnownMarketplacesFile(): string {
  * Using a function instead of a constant allows proper mocking in tests
  */
 export function getMarketplacesCacheDir(): string {
-  return join(getPluginsDirectory(), 'marketplaces')
+  return _cachedMarketplacesCacheDir ??= join(getPluginsDirectory(), 'marketplaces')
 }
 
 /**
