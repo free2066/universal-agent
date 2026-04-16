@@ -126,6 +126,10 @@ export class OpenAIClient implements LLMClient {
       // Some providers like GLM may not return usage in stream
       let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
 
+      // Track accumulated text and tool calls for the stream
+      let textContent = '';
+      const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+
       for await (const chunk of stream) {
         // Extract usage from chunk if present (last chunk may contain usage)
         const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
@@ -389,13 +393,23 @@ export class QwenClient extends OpenAIClient {
             model: this.model,
             messages,
             stream: true,
+            stream_options: { include_usage: true },
             extra_body: { enable_thinking: true },
           } as OpenAI.ChatCompletionCreateParamsStreaming,
           { signal },
         )) as unknown as AsyncIterable<OpenAI.ChatCompletionChunk>;
         let textContent = '';
         const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+        let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
         for await (const chunk of stream) {
+          // Extract usage from chunk if present (last chunk may contain usage)
+          const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+          if (chunkUsage) {
+            streamUsage = {
+              input_tokens: chunkUsage.prompt_tokens ?? 0,
+              output_tokens: chunkUsage.completion_tokens ?? 0,
+            };
+          }
           const delta = chunk.choices[0]?.delta as {
             content?: string;
             reasoning_content?: string;
@@ -424,9 +438,9 @@ export class QwenClient extends OpenAIClient {
           const toolCalls = Array.from(toolCallMap.entries())
             .sort((a, b) => a[0] - b[0])
             .map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) }));
-          return { type: 'tool_calls', content: textContent, toolCalls };
+          return { type: 'tool_calls', content: textContent, toolCalls, usage: streamUsage };
         }
-        return { type: 'text', content: textContent };
+        return { type: 'text', content: textContent, usage: streamUsage };
       });
     }
     return super.streamChat(options, onChunk);
@@ -526,6 +540,7 @@ export class OpenRouterClient implements LLMClient {
       if (!choice) throw new Error('No choices returned from OpenRouter');
       const msg = choice.message;
 
+      const usage = response.usage;
       if (msg.tool_calls?.length) {
         return {
           type: 'tool_calls',
@@ -535,10 +550,21 @@ export class OpenRouterClient implements LLMClient {
             name: tc.function.name,
             arguments: safeParseJSON(tc.function.arguments, tc.function.name),
           })),
+          usage: usage ? {
+            input_tokens: usage.prompt_tokens ?? 0,
+            output_tokens: usage.completion_tokens ?? 0,
+          } : undefined,
         };
       }
 
-      return { type: 'text', content: msg.content || '' };
+      return {
+        type: 'text',
+        content: msg.content || '',
+        usage: usage ? {
+          input_tokens: usage.prompt_tokens ?? 0,
+          output_tokens: usage.completion_tokens ?? 0,
+        } : undefined,
+      };
     });
   }
 
@@ -553,6 +579,7 @@ export class OpenRouterClient implements LLMClient {
       const stream = await this.client.chat.completions.create(
         {
           model: this.model, messages, stream: true,
+          stream_options: { include_usage: true },
           ...(hasTools ? {
             tools: options.tools!.map((t) => ({ type: 'function' as const, function: t })),
             tool_choice: 'auto' as const,
@@ -562,7 +589,16 @@ export class OpenRouterClient implements LLMClient {
       );
       let textContent = '';
       const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+      let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
       for await (const chunk of stream) {
+        // Extract usage from chunk if present (last chunk may contain usage)
+        const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+        if (chunkUsage) {
+          streamUsage = {
+            input_tokens: chunkUsage.prompt_tokens ?? 0,
+            output_tokens: chunkUsage.completion_tokens ?? 0,
+          };
+        }
         const delta = chunk.choices[0]?.delta;
         if (!delta) continue;
         if (delta.content) { onChunk(delta.content); textContent += delta.content; }
@@ -583,9 +619,9 @@ export class OpenRouterClient implements LLMClient {
         }
       }
       if (toolCallMap.size > 0) {
-        return { type: 'tool_calls', content: textContent, toolCalls: Array.from(toolCallMap.entries()).sort((a, b) => a[0] - b[0]).map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) })) };
+        return { type: 'tool_calls', content: textContent, toolCalls: Array.from(toolCallMap.entries()).sort((a, b) => a[0] - b[0]).map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) })), usage: streamUsage };
       }
-      return { type: 'text', content: textContent };
+      return { type: 'text', content: textContent, usage: streamUsage };
     });
   }
 
