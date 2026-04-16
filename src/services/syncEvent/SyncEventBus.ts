@@ -73,7 +73,8 @@ function todayFile(): string {
     return path.join(EVENTS_DIR, `${_cachedDate}.jsonl`)
   }
   const d = new Date()
-  _cachedDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  // toISOString() returns "YYYY-MM-DDTHH:mm:ss.sssZ", slice(0,10) gives "YYYY-MM-DD"
+  _cachedDate = d.toISOString().slice(0, 10)
   _cachedTimestamp = now
   return path.join(EVENTS_DIR, `${_cachedDate}.jsonl`)
 }

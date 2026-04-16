@@ -6,6 +6,12 @@ import { registerBundledSkill } from '../bundledSkills.js'
 // getPromptForCommand so they only enter memory when /claude-api is invoked.
 type SkillContent = typeof import('./claudeApiContent.js')
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->\n?/g
+const TEMPLATE_VAR_RE = /\{\{(\w+)\}\}/g
+
 type DetectedLanguage =
   | 'python'
   | 'typescript'
@@ -66,12 +72,14 @@ function processContent(md: string, content: SkillContent): string {
   let out = md
   let prev
   do {
+    HTML_COMMENT_RE.lastIndex = 0
     prev = out
-    out = out.replace(/<!--[\s\S]*?-->\n?/g, '')
+    out = out.replace(HTML_COMMENT_RE, '')
   } while (out !== prev)
 
+  TEMPLATE_VAR_RE.lastIndex = 0
   out = out.replace(
-    /\{\{(\w+)\}\}/g,
+    TEMPLATE_VAR_RE,
     (match, key: string) =>
       (content.SKILL_MODEL_VARS as Record<string, string>)[key] ?? match,
   )

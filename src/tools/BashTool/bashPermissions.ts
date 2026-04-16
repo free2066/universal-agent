@@ -89,9 +89,12 @@ import { shouldUseSandbox } from './shouldUseSandbox.js'
 const bashCommandIsSafeAsync = bashCommandIsSafeAsync_DEPRECATED
 const splitCommand = splitCommand_DEPRECATED
 
-// Env-var assignment prefix (VAR=value). Shared across three while-loops that
-// skip safe env vars before extracting the command name.
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
 const ENV_VAR_ASSIGN_RE = /^[A-Za-z_]\w*=/
+const WHITESPACE_RE = /\s+/
+const SUBCMD_NAME_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/
 
 // CC-643: On complex compound commands, splitCommand_DEPRECATED can produce a
 // very large subcommands array (possible exponential growth; #21405's ReDoS fix
@@ -178,7 +181,7 @@ function skipSafeEnvVarPrefix(tokens: string[]): number | null {
  *   'chmod 755 file' → null (number, not a subcommand)
  */
 export function getSimpleCommandPrefix(command: string): string | null {
-  const tokens = command.trim().split(/\s+/).filter(Boolean)
+  const tokens = command.trim().split(WHITESPACE_RE).filter(Boolean)
   if (tokens.length === 0) return null
 
   // Skip env var assignments (VAR=value) at the start, but only if they are
@@ -194,7 +197,7 @@ export function getSimpleCommandPrefix(command: string): string | null {
   const subcmd = remaining[1]!
   // Second token must look like a subcommand (e.g., "commit", "run", "compose"),
   // not a flag (-rf), filename (file.txt), path (/tmp), URL, or number (755).
-  if (!/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(subcmd)) return null
+  if (!SUBCMD_NAME_RE.test(subcmd)) return null
   return remaining.slice(0, 2).join(' ')
 }
 
@@ -252,7 +255,7 @@ const BARE_SHELL_PREFIXES = new Set([
  * because stripSafeWrappers won't strip RUN.
  */
 export function getFirstWordPrefix(command: string): string | null {
-  const tokens = command.trim().split(/\s+/).filter(Boolean)
+  const tokens = command.trim().split(WHITESPACE_RE).filter(Boolean)
 
   const i = skipSafeEnvVarPrefix(tokens)
   if (i === null) return null
@@ -261,7 +264,7 @@ export function getFirstWordPrefix(command: string): string | null {
   if (!cmd) return null
   // Same shape check as the subcommand regex in getSimpleCommandPrefix:
   // rejects paths (./script.sh, /usr/bin/python), flags, numbers, filenames.
-  if (!/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(cmd)) return null
+  if (!SUBCMD_NAME_RE.test(cmd)) return null
   if (BARE_SHELL_PREFIXES.has(cmd)) return null
   return cmd
 }

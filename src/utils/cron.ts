@@ -7,6 +7,14 @@
 // No L, W, ?, or name aliases. All times are interpreted in the process's
 // local timezone — "0 9 * * *" means 9am wherever the CLI is running.
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const STEP_RE = /^\*(?:\/(\d+))?$/
+const RANGE_RE = /^(\d+)-(\d+)(?:\/(\d+))?$/
+const SINGLE_RE = /^\d+$/
+const WHITESPACE_RE = /\s+/
+
 export type CronFields = {
   minute: number[]
   hour: number[]
@@ -34,7 +42,7 @@ function expandField(field: string, range: FieldRange): number[] | null {
 
   for (const part of field.split(',')) {
     // wildcard or star-slash-N
-    const stepMatch = part.match(/^\*(?:\/(\d+))?$/)
+    const stepMatch = STEP_RE.exec(part)
     if (stepMatch) {
       const step = stepMatch[1] ? parseInt(stepMatch[1], 10) : 1
       if (step < 1) return null
@@ -43,7 +51,7 @@ function expandField(field: string, range: FieldRange): number[] | null {
     }
 
     // N-M or N-M/S
-    const rangeMatch = part.match(/^(\d+)-(\d+)(?:\/(\d+))?$/)
+    const rangeMatch = RANGE_RE.exec(part)
     if (rangeMatch) {
       const lo = parseInt(rangeMatch[1]!, 10)
       const hi = parseInt(rangeMatch[2]!, 10)
@@ -59,8 +67,7 @@ function expandField(field: string, range: FieldRange): number[] | null {
     }
 
     // plain N
-    const singleMatch = part.match(/^\d+$/)
-    if (singleMatch) {
+    if (SINGLE_RE.test(part)) {
       let n = parseInt(part, 10)
       // dayOfWeek: accept 7 as Sunday alias → 0
       if (min === 0 && max === 6 && n === 7) n = 0
@@ -81,7 +88,7 @@ function expandField(field: string, range: FieldRange): number[] | null {
  * Returns null if invalid or unsupported syntax.
  */
 export function parseCronExpression(expr: string): CronFields | null {
-  const parts = expr.trim().split(/\s+/)
+  const parts = expr.trim().split(WHITESPACE_RE)
   if (parts.length !== 5) return null
 
   const expanded: number[][] = []

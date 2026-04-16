@@ -35,6 +35,7 @@ import {
   isBareMode,
   isEnvTruthy,
 } from '../utils/envUtils.js'
+import { IS_WINDOWS } from '../utils/env.js'
 import { isENOENT, isFsInaccessible } from '../utils/errors.js'
 import {
   coerceDescriptionToString,
@@ -48,6 +49,13 @@ import {
 } from '../utils/frontmatterParser.js'
 import { getFsImplementation } from '../utils/fsOperations.js'
 import { isPathGitignored } from '../utils/git/gitignore.js'
+
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const BACKSLASH_RE = /\\/g
+const SKILL_DIR_RE = /\$\{CLAUDE_SKILL_DIR\}/g
+const SESSION_ID_RE = /\$\{CLAUDE_SESSION_ID\}/g
 import { logError } from '../utils/log.js'
 import {
   extractDescriptionFromMarkdown,
@@ -400,14 +408,15 @@ export function createSkillCommand({
       // injection (!`...`) can reference bundled scripts. Normalize backslashes
       // to forward slashes on Windows so shell commands don't treat them as escapes.
       if (baseDir) {
-        const skillDir =
-          process.platform === 'win32' ? baseDir.replace(/\\/g, '/') : baseDir
-        finalContent = finalContent.replace(/\$\{CLAUDE_SKILL_DIR\}/g, skillDir)
+        const skillDir = IS_WINDOWS ? baseDir.replace(BACKSLASH_RE, '/') : baseDir
+        SKILL_DIR_RE.lastIndex = 0
+        finalContent = finalContent.replace(SKILL_DIR_RE, skillDir)
       }
 
       // Replace ${CLAUDE_SESSION_ID} with the current session ID
+      SESSION_ID_RE.lastIndex = 0
       finalContent = finalContent.replace(
-        /\$\{CLAUDE_SESSION_ID\}/g,
+        SESSION_ID_RE,
         getSessionId(),
       )
 
