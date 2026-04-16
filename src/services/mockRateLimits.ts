@@ -10,6 +10,9 @@ import type { SubscriptionType } from '../services/oauth/types.js'
 import { setMockBillingAccessOverride } from '../utils/billing.js'
 import type { OverageDisabledReason } from './claudeAiLimits.js'
 
+/** Helper: Unix timestamp in seconds (avoids repeated Math.floor(Date.now() / 1000)) */
+function nowUnix(): number { return Math.floor(Date.now() / 1000) }
+
 type MockHeaders = {
   'anthropic-ratelimit-unified-status'?:
     | 'allowed'
@@ -129,7 +132,7 @@ export function setMockHeader(
       // If user provides a number, treat it as hours from now
       const hours = Number(value)
       if (!isNaN(hours)) {
-        value = String(Math.floor(Date.now() / 1000) + hours * 3600)
+        value = String(nowUnix() + hours * 3600)
       }
     }
 
@@ -145,15 +148,15 @@ export function setMockHeader(
         // Determine reset time based on claim type
         let resetsAt: number
         if (value === 'five_hour') {
-          resetsAt = Math.floor(Date.now() / 1000) + 5 * 3600
+          resetsAt = nowUnix() + 5 * 3600
         } else if (
           value === 'seven_day' ||
           value === 'seven_day_opus' ||
           value === 'seven_day_sonnet'
         ) {
-          resetsAt = Math.floor(Date.now() / 1000) + 7 * 24 * 3600
+          resetsAt = nowUnix() + 7 * 24 * 3600
         } else {
-          resetsAt = Math.floor(Date.now() / 1000) + 3600
+          resetsAt = nowUnix() + 3600
         }
 
         // Add to exceeded limits (remove if already exists)
@@ -199,7 +202,7 @@ function updateRetryAfter(): void {
     const resetTimestamp = Number(reset)
     const secondsUntilReset = Math.max(
       0,
-      resetTimestamp - Math.floor(Date.now() / 1000),
+      resetTimestamp - nowUnix(),
     )
     mockHeaders['retry-after'] = String(secondsUntilReset)
   } else {
@@ -234,7 +237,7 @@ function updateRepresentativeClaim(): void {
       // Calculate seconds until reset
       const secondsUntilReset = Math.max(
         0,
-        furthest.resetsAt - Math.floor(Date.now() / 1000),
+        furthest.resetsAt - nowUnix(),
       )
       mockHeaders['retry-after'] = String(secondsUntilReset)
     } else {
@@ -256,7 +259,7 @@ export function addExceededLimit(
   }
 
   mockEnabled = true
-  const resetsAt = Math.floor(Date.now() / 1000) + hoursFromNow * 3600
+  const resetsAt = nowUnix() + hoursFromNow * 3600
 
   // Remove existing limit of same type
   exceededLimits = exceededLimits.filter(l => l.type !== type)
@@ -292,7 +295,7 @@ export function setMockEarlyWarning(
   // Default hours based on claim type (early in window to trigger warning)
   const defaultHours = claimAbbrev === '5h' ? 4 : 5 * 24
   const hours = hoursFromNow ?? defaultHours
-  const resetsAt = Math.floor(Date.now() / 1000) + hours * 3600
+  const resetsAt = nowUnix() + hours * 3600
 
   mockHeaders[`anthropic-ratelimit-unified-${claimAbbrev}-utilization`] =
     String(utilization)
@@ -334,8 +337,8 @@ export function setMockRateLimitScenario(scenario: MockScenario): void {
   mockEnabled = true
 
   // Set reset times for demos
-  const fiveHoursFromNow = Math.floor(Date.now() / 1000) + 5 * 3600
-  const sevenDaysFromNow = Math.floor(Date.now() / 1000) + 7 * 24 * 3600
+  const fiveHoursFromNow = nowUnix() + 5 * 3600
+  const sevenDaysFromNow = nowUnix() + 7 * 24 * 3600
 
   // Clear existing headers
   mockHeaders = {}
