@@ -9,7 +9,7 @@
 // These functions are internal to print.ts and cannot be re-exported
 // They are declared locally but not exported from print.ts
 
-// Re-export types for consumers who need them
+// Re-export types from print.ts
 export type {
   LoadInitialMessagesResult,
-} from './types.js'
+} from '../print.js'

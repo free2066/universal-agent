@@ -9,30 +9,28 @@
 export {
   SHUTDOWN_TEAM_PROMPT,
   MAX_RECEIVED_UUIDS,
-  receivedMessageUuids,
-  receivedMessageUuidsOrder,
-  trackReceivedMessageUuid,
 } from './constants.js'
 
-// Re-export utilities
+// Re-export utilities from print.ts
 export {
   toBlocks,
   joinPromptValues,
   canBatchWith,
-} from './utils.js'
+} from '../print.js'
 
-// Re-export types
+// Re-export types from print.ts
 export type {
   PromptValue,
   LoadInitialMessagesResult,
   DynamicMcpState,
   SdkMcpState,
   McpSetServersResult,
-} from './types.js'
+} from '../print.js'
 
 // Re-export headless functions
 export {
   runHeadless,
+  runHeadlessStreaming,
 } from './headless.js'
 
 // Re-export permission functions

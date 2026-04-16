@@ -10,9 +10,9 @@ export {
   reconcileMcpServers,
 } from '../print.js'
 
-// Re-export types
+// Re-export types from print.ts
 export type {
   DynamicMcpState,
   SdkMcpState,
   McpSetServersResult,
-} from './types.js'
+} from '../print.js'

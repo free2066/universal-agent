@@ -1,50 +1,16 @@
 /**
  * Utility functions for print module
+ * 
+ * These functions are re-exported from print.ts for module organization.
+ * The actual implementations remain in print.ts to avoid code duplication.
  */
 
-import type { PromptValue } from './types.js'
-import type { QueuedCommand } from '../../types/textInputTypes.js'
+// Re-export from the main print.ts file
+export {
+  toBlocks,
+  joinPromptValues,
+  canBatchWith,
+} from '../print.js'
 
-/**
- * Content block type
- */
-type ContentBlockParam = { type: string; text?: string; [key: string]: unknown }
-
-/**
- * Convert prompt value to content blocks
- */
-export function toBlocks(v: PromptValue): ContentBlockParam[] {
-  return typeof v === 'string' ? [{ type: 'text', text: v }] : v
-}
-
-/**
- * Join prompt values from multiple queued commands into one. Strings are
- * newline-joined; if any value is a block array, all values are normalized
- * to blocks and concatenated.
- */
-export function joinPromptValues(values: PromptValue[]): PromptValue {
-  if (values.length === 1) return values[0]!
-  if (values.every(v => typeof v === 'string')) {
-    return values.join('\n')
-  }
-  return values.flatMap(toBlocks)
-}
-
-/**
- * Whether `next` can be batched into the same ask() call as `head`. Only
- * prompt-mode commands batch, and only when the workload tag matches (so the
- * combined turn is attributed correctly) and the isMeta flag matches (so a
- * proactive tick can't merge into a user prompt and lose its hidden-in-
- * transcript marking when the head is spread over the merged command).
- */
-export function canBatchWith(
-  head: QueuedCommand,
-  next: QueuedCommand | undefined,
-): boolean {
-  return (
-    next !== undefined &&
-    next.mode === 'prompt' &&
-    next.workload === head.workload &&
-    next.isMeta === head.isMeta
-  )
-}
+// Re-export type from print.ts
+export type { PromptValue } from '../print.js'

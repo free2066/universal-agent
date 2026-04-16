@@ -10,7 +10,7 @@ export {
   handleOrphanedPermissionResponse,
 } from '../print.js'
 
-// Re-export types
+// Re-export types from print.ts
 export type {
   LoadInitialMessagesResult,
-} from './types.js'
+} from '../print.js'

@@ -415,9 +415,9 @@ function trackReceivedMessageUuid(uuid: UUID): boolean {
   return true // new UUID
 }
 
-type PromptValue = string | ContentBlockParam[]
+export type PromptValue = string | ContentBlockParam[]
 
-function toBlocks(v: PromptValue): ContentBlockParam[] {
+export function toBlocks(v: PromptValue): ContentBlockParam[] {
   return typeof v === 'string' ? [{ type: 'text', text: v }] : v
 }
 
@@ -974,7 +974,7 @@ export async function runHeadless(
   )
 }
 
-function runHeadlessStreaming(
+export function runHeadlessStreaming(
   structuredIO: StructuredIO,
   mcpClients: MCPServerConnection[],
   commands: Command[],
@@ -4885,7 +4885,7 @@ export function removeInterruptedMessage(
   }
 }
 
-type LoadInitialMessagesResult = {
+export type LoadInitialMessagesResult = {
   messages: Message[]
   turnInterruptionState?: TurnInterruptionState
   agentSetting?: string

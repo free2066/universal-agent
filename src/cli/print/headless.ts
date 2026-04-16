@@ -9,4 +9,5 @@
 // Note: The actual implementations remain in print.ts due to deep closure dependencies
 export {
   runHeadless,
+  runHeadlessStreaming,
 } from '../print.js'
