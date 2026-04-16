@@ -29,6 +29,24 @@ import type {
   UAToolCall,
 } from './types.js'
 
+// ============================================================================
+// UUID Short ID Generation (performance optimized)
+// ============================================================================
+
+/** 正则表达式常量，用于移除 UUID 中的连字符 */
+const UUID_HYPHEN_REGEX = /-/g
+
+/**
+ * 生成 24 字符的短 ID（基于 UUID）
+ * 用于 message_id 和 tool_use_id 的生成
+ *
+ * @param prefix - 可选前缀，如 'msg_' 或 'toolu_'
+ * @returns 带前缀的 24 字符 ID
+ */
+function generateShortId(prefix: '' | 'msg_' | 'toolu_' = ''): string {
+  return `${prefix}${randomUUID().replace(UUID_HYPHEN_REGEX, '').slice(0, 24)}`
+}
+
 // MA-6: Validate UA_DEBUG_LOG path once at module load to prevent path traversal.
 // Reject /proc, /sys, /etc and other dangerous system directories.
 const _UA_LOG_PATH: string | null = (() => {
@@ -186,7 +204,7 @@ function convertResponseToAnthropicMessage(
     for (const tc of response.toolCalls || []) {
       content.push({
         type: 'tool_use',
-        id: tc.id || `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+        id: tc.id || generateShortId('toolu_'),
         name: normalizeToolName(tc.name),
         input: tc.arguments || {},
       })
@@ -196,7 +214,7 @@ function convertResponseToAnthropicMessage(
   }
 
   return {
-    id: `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+    id: generateShortId('msg_'),
     type: 'message',
     role: 'assistant',
     model,
@@ -343,7 +361,7 @@ function buildRealStreamResult(
   const makeStream = () => realStream()
 
   async function* realStream(): AsyncGenerator<any> {
-    const messageId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+    const messageId = generateShortId('msg_')
 
     // Emit message_start immediately
     yield {
@@ -411,7 +429,7 @@ function buildRealStreamResult(
 
       for (let i = 0; i < (finalResponse.toolCalls || []).length; i++) {
         const tc = finalResponse.toolCalls[i]
-        const toolId = tc.id || `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const toolId = tc.id || generateShortId('toolu_')
         yield {
           type: 'content_block_start',
           index: i + 1,
@@ -451,7 +469,7 @@ function buildRealStreamResult(
       for (const tc of finalResponse.toolCalls || []) {
         finalContent.push({
           type: 'tool_use',
-          id: tc.id || `toolu_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+          id: tc.id || generateShortId('toolu_'),
           name: normalizeToolName(tc.name),
           input: tc.arguments || {},
         })
@@ -469,7 +487,7 @@ function buildRealStreamResult(
 
   // Placeholder for final message (filled in after stream completes)
   const _storedFinalMessage: any = {
-    id: `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+    id: generateShortId('msg_'),
     type: 'message',
     role: 'assistant',
     model,
