@@ -449,7 +449,8 @@ export async function call(onDone: (result?: string, options?: {
       }
 
       // Try to open the project in the selected IDE
-      if (selectedIDE.name.toLowerCase().includes('vscode') || selectedIDE.name.toLowerCase().includes('cursor') || selectedIDE.name.toLowerCase().includes('windsurf')) {
+      const lowerName = selectedIDE.name.toLowerCase()
+      if (lowerName.includes('vscode') || lowerName.includes('cursor') || lowerName.includes('windsurf')) {
         // VS Code-based IDEs
         const {
           code
