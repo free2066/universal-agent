@@ -198,6 +198,7 @@ export interface SSEMessageDeltaEvent {
     stop_sequence: string | null
   }
   usage: {
+    input_tokens?: number
     output_tokens: number
   }
 }
