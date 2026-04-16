@@ -18,6 +18,11 @@ import {
   type TLSConfig,
 } from './mtls.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const NO_PROXY_SPLIT_RE = /[,\s]+/
+
 // Disable fetch keep-alive after a stale-pool ECONNRESET so retries open a
 // fresh TCP connection instead of reusing the dead pooled socket. Sticky for
 // the process lifetime — once the pool is known-bad, don't trust it again.
@@ -101,7 +106,7 @@ export function shouldBypassProxy(
     const hostWithPort = `${hostname}:${port}`
 
     // Split by comma or space and trim each entry
-    const noProxyList = noProxy.split(/[,\s]+/).filter(Boolean)
+    const noProxyList = noProxy.split(NO_PROXY_SPLIT_RE).filter(Boolean)
 
     return noProxyList.some(pattern => {
       pattern = pattern.toLowerCase().trim()

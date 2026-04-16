@@ -9,6 +9,11 @@ import { logError } from './log.js'
 import { memoizeWithLRU } from './memoize.js'
 import { jsonStringify } from './slowOperations.js'
 
+// ============================================================================
+// Constants (performance optimization - avoid repeated string allocation)
+// ============================================================================
+const NEWLINE = '\n'
+
 type CachedParse = { ok: true; value: unknown } | { ok: false }
 
 // Memoized inner parse. Uses a discriminated-union wrapper because:
@@ -159,7 +164,7 @@ function parseJSONLString<T>(data: string): T[] {
 
   const results: T[] = []
   while (start < len) {
-    let end = stripped.indexOf('\n', start)
+    let end = stripped.indexOf(NEWLINE, start)
     if (end === -1) end = len
 
     const line = stripped.substring(start, end).trim()

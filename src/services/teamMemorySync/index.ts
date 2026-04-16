@@ -28,6 +28,14 @@
 import axios from 'axios'
 import { createHash } from 'crypto'
 import { mkdir, readdir, readFile, stat, writeFile } from 'fs/promises'
+
+// ============================================================================
+// Constants for hashing (performance optimization)
+// ============================================================================
+const HASH_PREFIX = 'sha256:'
+const HASH_ALGO = 'sha256'
+const ENCODING_UTF8 = 'utf8'
+const DIGEST_HEX = 'hex'
 import { join, relative, sep } from 'path'
 import {
   CLAUDE_AI_INFERENCE_SCOPE,
@@ -133,7 +141,7 @@ export function createSyncState(): SyncState {
  * so local-vs-server comparison works by direct string equality.
  */
 export function hashContent(content: string): string {
-  return 'sha256:' + createHash('sha256').update(content, 'utf8').digest('hex')
+  return HASH_PREFIX + createHash(HASH_ALGO).update(content, ENCODING_UTF8).digest(DIGEST_HEX)
 }
 
 /**

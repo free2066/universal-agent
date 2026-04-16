@@ -34,6 +34,24 @@ import { generateSessionTitle } from '../utils/sessionTitle.js'
 import type { RemoteMessageContent } from '../utils/teleport/api.js'
 import { updateSessionTitle } from '../utils/teleport/api.js'
 
+// ============================================================================
+// Precompiled regex patterns for noise line detection (performance optimization)
+// ============================================================================
+const NOISE_PREFIX_RE = /^(?:Command|Directory|Working directory|Path|Exit code|Stdout|Stderr):/i
+const FULL_OUTPUT_RE = /^Full output saved to:/i
+const READ_LINES_RE = /^Read \d+ lines?(?: \(from line \d+ to \d+\))?\.?$/
+const FOUND_LINES_RE = /^Found \d+ lines in \d+ files(?: \(\d+ms\))?\.?$/
+const FOUND_FILES_RE = /^Found \d+ files(?: in \d+ms)?\.?$/
+const BRACKET_RE = /^[\[{(]$/
+
+// Precompiled regex patterns for error message detection
+const EISDIR_RE = /EISDIR:\s*illegal operation on a directory,\s*read/i
+const LINE_RANGE_INVALID_RE = /(?:line (?:numbers?|range)|offset).*(?:invalid|illegal|out of range)|start_line_one_indexed|end_line_one_indexed/i
+const ENOENT_RE = /\bENOENT\b|No such file or directory|File does not exist/i
+const EACCES_RE = /\b(?:EACCES|EPERM)\b|Permission denied/i
+const ENOTDIR_RE = /\bENOTDIR\b/i
+const ERROR_PREFIX_RE = /^(?:Error:|Agent execution error:)\s*/
+
 function describeTaskTerminalStatus(status: string): string {
   switch (status) {
     case 'failed':
@@ -341,14 +359,12 @@ function isNoiseToolResultLine(line: string): boolean {
   const normalized = line.replace(/\s+/g, ' ').trim()
   return (
     !normalized ||
-    /^(?:Command|Directory|Working directory|Path|Exit code|Stdout|Stderr):/i.test(
-      normalized,
-    ) ||
-    /^Full output saved to:/i.test(normalized) ||
-    /^Read \d+ lines?(?: \(from line \d+ to \d+\))?\.?$/.test(normalized) ||
-    /^Found \d+ lines in \d+ files(?: \(\d+ms\))?\.?$/.test(normalized) ||
-    /^Found \d+ files(?: in \d+ms)?\.?$/.test(normalized) ||
-    /^[\[{(]$/.test(normalized)
+    NOISE_PREFIX_RE.test(normalized) ||
+    FULL_OUTPUT_RE.test(normalized) ||
+    READ_LINES_RE.test(normalized) ||
+    FOUND_LINES_RE.test(normalized) ||
+    FOUND_FILES_RE.test(normalized) ||
+    BRACKET_RE.test(normalized)
   )
 }
 
@@ -552,28 +568,22 @@ function buildQueryToolFeedback(
 
 function humanizeToolFailureDetail(detail: string): string {
   const normalized = detail.replace(/\s+/g, ' ').trim()
-  if (/EISDIR:\s*illegal operation on a directory,\s*read/i.test(normalized)) {
+  if (EISDIR_RE.test(normalized)) {
     return 'Target is a directory, not a file.'
   }
-  if (
-    /(?:line (?:numbers?|range)|offset).*(?:invalid|illegal|out of range)|start_line_one_indexed|end_line_one_indexed/i.test(
-      normalized,
-    )
-  ) {
+  if (LINE_RANGE_INVALID_RE.test(normalized)) {
     return 'Requested line range is invalid.'
   }
-  if (/\bENOENT\b|No such file or directory|File does not exist/i.test(normalized)) {
+  if (ENOENT_RE.test(normalized)) {
     return 'File or directory not found.'
   }
-  if (/\b(?:EACCES|EPERM)\b|Permission denied/i.test(normalized)) {
+  if (EACCES_RE.test(normalized)) {
     return 'Permission denied.'
   }
-  if (/\bENOTDIR\b/i.test(normalized)) {
+  if (ENOTDIR_RE.test(normalized)) {
     return 'A path segment is not a directory.'
   }
-  return ensureTrailingPeriod(
-    normalized.replace(/^(?:Error:|Agent execution error:)\s*/, ''),
-  )
+  return ensureTrailingPeriod(normalized.replace(ERROR_PREFIX_RE, ''))
 }
 
 function buildGenericToolFailureFeedback(

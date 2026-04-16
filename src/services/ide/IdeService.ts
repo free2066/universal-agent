@@ -101,8 +101,8 @@ export class IdeService {
         return SUPPORTED_IDES.find(i => i.cmd === 'codium') ?? null
       }
       // Check VSCODE_INJECTION which cursor overrides
-      const injection = env.VSCODE_INJECTION ?? ''
-      if (injection.toLowerCase().includes('cursor')) {
+      const injection = (env.VSCODE_INJECTION ?? '').toLowerCase()
+      if (injection.includes('cursor')) {
         return SUPPORTED_IDES.find(i => i.cmd === 'cursor') ?? null
       }
       // Default VS Code
