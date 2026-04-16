@@ -30,14 +30,25 @@ export type {
   McpSetServersResult,
 } from './types.js'
 
-// Re-export main functions from print.ts (temporary until full migration)
-// These are re-exported from the main print.ts file
+// Re-export headless functions
 export {
   runHeadless,
+} from './headless.js'
+
+// Re-export permission functions
+export {
   createCanUseToolWithPermissionPrompt,
   getCanUseToolFn,
+} from './permission.js'
+
+// Re-export message handlers
+export {
   removeInterruptedMessage,
   handleOrphanedPermissionResponse,
+} from './messages.js'
+
+// Re-export MCP handlers
+export {
   handleMcpSetServers,
   reconcileMcpServers,
-} from '../print.js'
+} from './mcp.js'
