@@ -1,52 +1,52 @@
 /**
  * Print module entry point
  * 
- * This module re-exports all public functions from print.ts for backward compatibility.
- * New code should import from the specific sub-modules when possible.
+ * Re-exports all public functions from the split modules.
+ * Import from 'src/cli/print.js' for backward compatibility.
  */
 
-// Re-export constants
+// Re-export constants and state
 export {
   SHUTDOWN_TEAM_PROMPT,
   MAX_RECEIVED_UUIDS,
+  receivedMessageUuids,
+  receivedMessageUuidsOrder,
+  trackReceivedMessageUuid,
 } from './constants.js'
 
-// Re-export utilities from print.ts
-export {
-  toBlocks,
-  joinPromptValues,
-  canBatchWith,
-} from '../print.js'
-
-// Re-export types from print.ts
+// Re-export types
 export type {
   PromptValue,
   LoadInitialMessagesResult,
   DynamicMcpState,
   SdkMcpState,
   McpSetServersResult,
-} from '../print.js'
+  UUID,
+} from './types.js'
 
-// Re-export headless functions
+// Re-export utility functions
+export {
+  toBlocks,
+  joinPromptValues,
+  canBatchWith,
+} from './utils.js'
+
+// Re-export main functions from print.ts
 export {
   runHeadless,
-  runHeadlessStreaming,
-} from './headless.js'
-
-// Re-export permission functions
-export {
   createCanUseToolWithPermissionPrompt,
   getCanUseToolFn,
-} from './permission.js'
-
-// Re-export message handlers
-export {
+  handleInitializeRequest,
+  handleRewindFiles,
+  handleSetPermissionMode,
+  handleChannelEnable,
+  reregisterChannelHandlerAfterReconnect,
+  emitLoadError,
   removeInterruptedMessage,
+  loadInitialMessages,
+  getStructuredIO,
   handleOrphanedPermissionResponse,
-} from './messages.js'
-
-// Re-export MCP handlers
-export {
+  toScopedConfig,
   handleMcpSetServers,
   reconcileMcpServers,
-} from './mcp.js'
+} from '../print.js'

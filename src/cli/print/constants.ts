@@ -1,12 +1,13 @@
 /**
- * Constants for print module
+ * Constants and state for print module
  */
 
-import type { UUID } from 'crypto'
+import type { UUID } from './types.js'
 
-/**
- * Prompt for shutting down team in non-interactive mode
- */
+// ============================================================================
+// Team Shutdown Prompt
+// ============================================================================
+
 export const SHUTDOWN_TEAM_PROMPT = `<system-reminder>
 You are running in non-interactive mode and cannot return a response to the user until your team is shut down.
 
@@ -21,7 +22,37 @@ The user cannot receive your response until the team is completely shut down.
 
 Shut down your team and prepare your final response for the user.`
 
-/**
- * Maximum number of received message UUIDs to track
- */
+// ============================================================================
+// Message UUID Tracking
+// ============================================================================
+
 export const MAX_RECEIVED_UUIDS = 10_000
+
+/** Set of UUIDs received during the current session runtime */
+export const receivedMessageUuids = new Set<UUID>()
+
+/** Ordered list of UUIDs for LRU eviction */
+export const receivedMessageUuidsOrder: UUID[] = []
+
+/**
+ * Track a received message UUID, evicting oldest entries when at capacity.
+ * @returns true if the UUID was new, false if it was a duplicate
+ */
+export function trackReceivedMessageUuid(uuid: UUID): boolean {
+  if (receivedMessageUuids.has(uuid)) {
+    return false // duplicate
+  }
+  receivedMessageUuids.add(uuid)
+  receivedMessageUuidsOrder.push(uuid)
+  // Evict oldest entries when at capacity
+  if (receivedMessageUuidsOrder.length > MAX_RECEIVED_UUIDS) {
+    const toEvict = receivedMessageUuidsOrder.splice(
+      0,
+      receivedMessageUuidsOrder.length - MAX_RECEIVED_UUIDS,
+    )
+    for (const old of toEvict) {
+      receivedMessageUuids.delete(old)
+    }
+  }
+  return true // new UUID
+}

@@ -377,81 +377,15 @@ const extractMemoriesModule = feature('EXTRACT_MEMORIES')
   : null
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-const SHUTDOWN_TEAM_PROMPT = `<system-reminder>
-You are running in non-interactive mode and cannot return a response to the user until your team is shut down.
+// Re-export from split modules
+export { SHUTDOWN_TEAM_PROMPT, MAX_RECEIVED_UUIDS, receivedMessageUuids, receivedMessageUuidsOrder, trackReceivedMessageUuid } from './print/constants.js'
+export type { PromptValue, LoadInitialMessagesResult, DynamicMcpState, SdkMcpState, McpSetServersResult, UUID } from './print/types.js'
+export { toBlocks, joinPromptValues, canBatchWith } from './print/utils.js'
 
-You MUST shut down your team before preparing your final response:
-1. Use requestShutdown to ask each team member to shut down gracefully
-2. Wait for shutdown approvals
-3. Use the cleanup operation to clean up the team
-4. Only then provide your final response to the user
-
-The user cannot receive your response until the team is completely shut down.
-</system-reminder>
-
-Shut down your team and prepare your final response for the user.`
-
-// Track message UUIDs received during the current session runtime
-const MAX_RECEIVED_UUIDS = 10_000
-const receivedMessageUuids = new Set<UUID>()
-const receivedMessageUuidsOrder: UUID[] = []
-
-function trackReceivedMessageUuid(uuid: UUID): boolean {
-  if (receivedMessageUuids.has(uuid)) {
-    return false // duplicate
-  }
-  receivedMessageUuids.add(uuid)
-  receivedMessageUuidsOrder.push(uuid)
-  // Evict oldest entries when at capacity
-  if (receivedMessageUuidsOrder.length > MAX_RECEIVED_UUIDS) {
-    const toEvict = receivedMessageUuidsOrder.splice(
-      0,
-      receivedMessageUuidsOrder.length - MAX_RECEIVED_UUIDS,
-    )
-    for (const old of toEvict) {
-      receivedMessageUuids.delete(old)
-    }
-  }
-  return true // new UUID
-}
-
-export type PromptValue = string | ContentBlockParam[]
-
-export function toBlocks(v: PromptValue): ContentBlockParam[] {
-  return typeof v === 'string' ? [{ type: 'text', text: v }] : v
-}
-
-/**
- * Join prompt values from multiple queued commands into one. Strings are
- * newline-joined; if any value is a block array, all values are normalized
- * to blocks and concatenated.
- */
-export function joinPromptValues(values: PromptValue[]): PromptValue {
-  if (values.length === 1) return values[0]!
-  if (values.every(v => typeof v === 'string')) {
-    return values.join('\n')
-  }
-  return values.flatMap(toBlocks)
-}
-
-/**
- * Whether `next` can be batched into the same ask() call as `head`. Only
- * prompt-mode commands batch, and only when the workload tag matches (so the
- * combined turn is attributed correctly) and the isMeta flag matches (so a
- * proactive tick can't merge into a user prompt and lose its hidden-in-
- * transcript marking when the head is spread over the merged command).
- */
-export function canBatchWith(
-  head: QueuedCommand,
-  next: QueuedCommand | undefined,
-): boolean {
-  return (
-    next !== undefined &&
-    next.mode === 'prompt' &&
-    next.workload === head.workload &&
-    next.isMeta === head.isMeta
-  )
-}
+// Import for internal use in this file
+import { trackReceivedMessageUuid, receivedMessageUuids, receivedMessageUuidsOrder, MAX_RECEIVED_UUIDS, SHUTDOWN_TEAM_PROMPT } from './print/constants.js'
+import { toBlocks, joinPromptValues, canBatchWith } from './print/utils.js'
+import type { PromptValue } from './print/types.js'
 
 export async function runHeadless(
   inputPrompt: string | AsyncIterable<string>,
