@@ -51,6 +51,7 @@ const ENOENT_RE = /\bENOENT\b|No such file or directory|File does not exist/i
 const EACCES_RE = /\b(?:EACCES|EPERM)\b|Permission denied/i
 const ENOTDIR_RE = /\bENOTDIR\b/i
 const ERROR_PREFIX_RE = /^(?:Error:|Agent execution error:)\s*/
+const SENTENCE_END_RE = /[.!?…]$/
 
 function describeTaskTerminalStatus(status: string): string {
   switch (status) {
@@ -352,7 +353,7 @@ function getToolResultSourceText(source: unknown): string | null {
 }
 
 function ensureTrailingPeriod(text: string): string {
-  return /[.!?…]$/.test(text) ? text : `${text}.`
+  return SENTENCE_END_RE.test(text) ? text : `${text}.`
 }
 
 function isNoiseToolResultLine(line: string): boolean {

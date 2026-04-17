@@ -11,6 +11,9 @@ import type {
   ParsedBinding,
 } from './types.js'
 
+// Pre-compiled regex for command binding validation
+const COMMAND_ACTION_RE = /^command:[a-zA-Z0-9:\-_]+$/
+
 /**
  * Types of validation issues that can occur with keybindings.
  */
@@ -196,7 +199,7 @@ function validateBlock(
       })
     } else if (typeof action === 'string' && action.startsWith('command:')) {
       // Validate command binding format
-      if (!/^command:[a-zA-Z0-9:\-_]+$/.test(action)) {
+      if (!COMMAND_ACTION_RE.test(action)) {
         warnings.push({
           type: 'invalid_action',
           severity: 'warning',

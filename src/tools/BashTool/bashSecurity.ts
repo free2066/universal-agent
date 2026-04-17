@@ -9,6 +9,18 @@ import {
 import type { TreeSitterAnalysis } from '../../utils/bash/treeSitterAnalysis.js'
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js'
 
+// Pre-compiled regex patterns for security validation (hot path optimization)
+const LEADING_TAB_RE = /^\s*\t/
+const LEADING_OPERATOR_RE = /^\s*(&&|\|\||;|>>?|<)/
+const SUBSTITUTION_IN_MESSAGE_RE = /\$\(`|\$\{/
+const METACHAR_IN_REMAINDER_RE = /[;|&()`]|\$\(|\$\{/
+const REDIRECT_IN_UNQUOTED_RE = /[<>]/
+const JQ_SYSTEM_CALL_RE = /\bsystem\s*\(/
+const JQ_FILE_FLAGS_RE = /(?:^|\s)(?:-f\b|--from-file|--rawfile|--slurpfile|-L\b|--library-path)/
+const SHELL_METACHAR_IN_QUOTE_RE = /(?:^|\s)["'][^"']*[;&][^"']*["'](?:\s|$)/
+const EMPTY_LINE_RE = /^[ \t]*$/
+const CLOSING_PAREN_RE = /^([ \t]*)\)/
+
 const HEREDOC_IN_SUBSTITUTION = /\$\(.*<</
 
 // Note: Backtick pattern is handled separately in validateDangerousPatterns
@@ -247,7 +259,7 @@ function validateIncompleteCommands(
   const { originalCommand } = context
   const trimmed = originalCommand.trim()
 
-  if (/^\s*\t/.test(originalCommand)) {
+  if (LEADING_TAB_RE.test(originalCommand)) {
     logEvent('tengu_bash_security_check_triggered', {
       checkId: BASH_SECURITY_CHECK_IDS.INCOMPLETE_COMMANDS,
       subId: 1,
@@ -270,7 +282,7 @@ function validateIncompleteCommands(
     }
   }
 
-  if (/^\s*(&&|\|\||;|>>?|<)/.test(originalCommand)) {
+  if (LEADING_OPERATOR_RE.test(originalCommand)) {
     logEvent('tengu_bash_security_check_triggered', {
       checkId: BASH_SECURITY_CHECK_IDS.INCOMPLETE_COMMANDS,
       subId: 3,

@@ -2505,7 +2505,10 @@ export async function transformResultContent(
     case 'image': {
       // Resize and compress image data, enforcing API dimension limits
       const imageBuffer = Buffer.from(String(resultContent.data), 'base64')
-      const ext = resultContent.mimeType?.split('/')[1] || 'png'
+      // Optimized: use indexOf + slice instead of split
+      const mimeType = resultContent.mimeType
+      const slashIdx = mimeType ? mimeType.indexOf('/') : -1
+      const ext = slashIdx >= 0 ? mimeType.slice(slashIdx + 1) : 'png'
       const resized = await maybeResizeAndDownsampleImageBuffer(
         imageBuffer,
         imageBuffer.length,

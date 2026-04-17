@@ -438,11 +438,14 @@ export function getAssistantMessageFromError(
     messagesForAPI?: (UserMessage | AssistantMessage)[]
   },
 ): AssistantMessage {
+  // Cache lowercased error message for repeated checks
+  const errorMessage = error instanceof Error ? error.message : ''
+  const lowerMessage = errorMessage.toLowerCase()
+
   // Check for SDK timeout errors
   if (
     error instanceof APIConnectionTimeoutError ||
-    (error instanceof APIConnectionError &&
-      error.message.toLowerCase().includes('timeout'))
+    (error instanceof APIConnectionError && lowerMessage.includes('timeout'))
   ) {
     return createAssistantAPIErrorMessage({
       content: API_TIMEOUT_ERROR_MESSAGE,
@@ -567,10 +570,7 @@ export function getAssistantMessageFromError(
 
   // Handle prompt too long errors (Vertex returns 413, direct API returns 400)
   // Use case-insensitive check since Vertex returns "Prompt is too long" (capitalized)
-  if (
-    error instanceof Error &&
-    error.message.toLowerCase().includes('prompt is too long')
-  ) {
+  if (lowerMessage.includes('prompt is too long')) {
     // Content stays generic (UI matches on exact string). The raw error with
     // token counts goes into errorDetails — reactive compact's retry loop
     // parses the gap from there via getPromptTooLongTokenGap.
@@ -745,7 +745,7 @@ export function getAssistantMessageFromError(
     isClaudeAISubscriber() &&
     error instanceof APIError &&
     error.status === 400 &&
-    error.message.toLowerCase().includes('invalid model name') &&
+    lowerMessage.includes('invalid model name') &&
     (isNonCustomOpusModel(model) || model === 'opus')
   ) {
     return createAssistantAPIErrorMessage({
@@ -761,8 +761,7 @@ export function getAssistantMessageFromError(
   if (
     process.env.USER_TYPE === 'ant' &&
     !process.env.ANTHROPIC_MODEL &&
-    error instanceof Error &&
-    error.message.toLowerCase().includes('invalid model name')
+    lowerMessage.includes('invalid model name')
   ) {
     // Get organization ID from config - only use OAuth account data when actively using OAuth
     const orgId = getOauthAccountInfo()?.organizationUuid
@@ -793,7 +792,7 @@ export function getAssistantMessageFromError(
   if (
     error instanceof APIError &&
     error.status === 400 &&
-    error.message.toLowerCase().includes('organization has been disabled')
+    lowerMessage.includes('organization has been disabled')
   ) {
     const { source } = getAnthropicApiKeyWithSource()
     // getAnthropicApiKeyWithSource conflates the env var with FD-passed keys
@@ -818,10 +817,7 @@ export function getAssistantMessageFromError(
     }
   }
 
-  if (
-    error instanceof Error &&
-    error.message.toLowerCase().includes('x-api-key')
-  ) {
+  if (lowerMessage.includes('x-api-key')) {
     // In CCR mode, auth is via JWTs - this is likely a transient network issue
     if (isCCRMode()) {
       return createAssistantAPIErrorMessage({
@@ -894,8 +890,7 @@ export function getAssistantMessageFromError(
   // don't contain the actual model ID
   if (
     isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) &&
-    error instanceof Error &&
-    error.message.toLowerCase().includes('model id')
+    lowerMessage.includes('model id')
   ) {
     const switchCmd = getIsNonInteractiveSession() ? '--model' : '/model'
     const fallbackSuggestion = get3PModelFallbackSuggestion(model)
@@ -971,16 +966,19 @@ function get3PModelFallbackSuggestion(model: string): string | undefined {
  * Returns a standardized error type string suitable for Datadog tagging.
  */
 export function classifyAPIError(error: unknown): string {
+  // Cache lowercased error message for repeated checks
+  const errorMessage = error instanceof Error ? error.message : ''
+  const lowerMessage = errorMessage.toLowerCase()
+
   // Aborted requests
-  if (error instanceof Error && error.message === 'Request was aborted.') {
+  if (errorMessage === 'Request was aborted.') {
     return 'aborted'
   }
 
   // Timeout errors
   if (
     error instanceof APIConnectionTimeoutError ||
-    (error instanceof APIConnectionError &&
-      error.message.toLowerCase().includes('timeout'))
+    (error instanceof APIConnectionError && lowerMessage.includes('timeout'))
   ) {
     return 'api_timeout'
   }

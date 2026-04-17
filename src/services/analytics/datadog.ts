@@ -240,12 +240,12 @@ export async function trackDatadogEvent(
     // is a DD reserved field and is NOT queryable from dashboard widget
     // queries or the aggregation API. See scripts/release/MONITORING.md.
     const allDataRecord = allData
+    // Optimized: use flatMap to filter and map in single pass
     const tags = [
       `event:${eventName}`,
-      ...TAG_FIELDS.filter(
-        field =>
-          allDataRecord[field] !== undefined && allDataRecord[field] !== null,
-      ).map(field => `${camelToSnakeCase(field)}:${allDataRecord[field]}`),
+      ...TAG_FIELDS.flatMap(field =>
+        allDataRecord[field] != null ? [`${camelToSnakeCase(field)}:${allDataRecord[field]}`] : []
+      ),
     ]
 
     const log: DatadogLog = {
