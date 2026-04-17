@@ -25,7 +25,7 @@ function getProjectDir(cwd: string): string {
   return sanitizePath(cwd)
 }
 
-export const CACHE_PATHS = {
+export const CACHE_PATHS = Object.freeze({
   baseLogs: () => join(paths.cache, getProjectDir(getFsImplementation().cwd())),
   errors: () =>
     join(paths.cache, getProjectDir(getFsImplementation().cwd()), 'errors'),
@@ -38,4 +38,4 @@ export const CACHE_PATHS = {
       // Sanitize server name for Windows compatibility (colons are reserved for drive letters)
       `mcp-logs-${sanitizePath(serverName)}`,
     ),
-}
+})

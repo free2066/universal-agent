@@ -300,7 +300,8 @@ function SetModelAndClose({
   return null;
 }
 function isKnownAlias(model: string): boolean {
-  return (MODEL_ALIASES as readonly string[]).includes(model.toLowerCase().trim());
+  // Optimized: trim first to reduce string length before toLowerCase
+  return (MODEL_ALIASES as readonly string[]).includes(model.trim().toLowerCase());
 }
 function isOpus1mUnavailable(model: string): boolean {
   const m = model.toLowerCase();

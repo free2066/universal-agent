@@ -42,10 +42,10 @@ const KEEPALIVE_INTERVAL_MS = 8_000
 // arrives post-CloseStream — the server has nothing; don't wait out the
 // full ~3-5s WS teardown to confirm emptiness. `safety` is the last-
 // resort cap if the WS hangs. Exported so tests can shorten them.
-export const FINALIZE_TIMEOUTS_MS = {
+export const FINALIZE_TIMEOUTS_MS = Object.freeze({
   safety: 5_000,
   noData: 1_500,
-}
+} as const)
 
 // ─── Types ──────────────────────────────────────────────────────────
 

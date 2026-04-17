@@ -57,8 +57,12 @@ export function resolveAntModel(
   if (model === undefined) {
     return undefined
   }
+  // Optimized: use find with early exact match, then lowercase check
   const lower = model.toLowerCase()
-  return getAntModels().find(
-    m => m.alias === model || lower.includes(m.model.toLowerCase()),
-  )
+  const models = getAntModels()
+  for (const m of models) {
+    if (m.alias === model) return m
+    if (lower.includes(m.model.toLowerCase())) return m
+  }
+  return undefined
 }

@@ -258,7 +258,7 @@ export async function call(
     })
 
     const forkLog: LogOption = {
-      date: now.toISOString().split('T')[0]!,
+      date: now.toISOString().slice(0, 10), // Optimized: slice instead of split
       messages: serializedMessages,
       fullPath: forkPath,
       value: now.getTime(),

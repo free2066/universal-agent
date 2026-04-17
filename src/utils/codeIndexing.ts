@@ -128,7 +128,9 @@ export function detectCodeIndexingFromCommand(
 ): CodeIndexingTool | undefined {
   // Extract the first word (command name)
   const trimmed = command.trim()
-  const firstWord = trimmed.split(/\s+/)[0]?.toLowerCase()
+  // Optimized: single split call, reuse array
+  const words = trimmed.split(/\s+/, 3)
+  const firstWord = words[0]?.toLowerCase()
 
   if (!firstWord) {
     return undefined
@@ -136,7 +138,7 @@ export function detectCodeIndexingFromCommand(
 
   // Check for npx/bunx prefixed commands
   if (firstWord === 'npx' || firstWord === 'bunx') {
-    const secondWord = trimmed.split(/\s+/)[1]?.toLowerCase()
+    const secondWord = words[1]?.toLowerCase()
     if (secondWord && secondWord in CLI_COMMAND_MAPPING) {
       return CLI_COMMAND_MAPPING[secondWord]
     }

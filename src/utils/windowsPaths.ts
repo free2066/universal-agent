@@ -58,8 +58,9 @@ function findExecutable(executable: string): string | null {
 
     for (const candidatePath of paths) {
       // Normalize and compare paths to ensure we're not in current directory
+      // Optimized: no need for extra toLowerCase() since normalizedPath is already lowercase
       const normalizedPath = path.resolve(candidatePath).toLowerCase()
-      const pathDir = path.dirname(normalizedPath).toLowerCase()
+      const pathDir = path.dirname(normalizedPath) // already lowercase
 
       // Skip if the executable is in the current working directory
       if (pathDir === cwd || normalizedPath.startsWith(cwd + path.sep)) {

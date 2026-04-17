@@ -78,9 +78,14 @@ export function getModelCapability(model: string): ModelCapability | undefined {
   const cached = loadCache(getCachePath())
   if (!cached || cached.length === 0) return undefined
   const mLower = model.toLowerCase()
-  const exact = cached.find(c => c.id.toLowerCase() === mLower)
-  if (exact) return exact
-  return cached.find(c => mLower.includes(c.id.toLowerCase()))
+  // Optimized: single pass with early return for exact match, then fuzzy match
+  let fuzzyMatch: ModelCapability | undefined
+  for (const c of cached) {
+    const cLower = c.id.toLowerCase()
+    if (cLower === mLower) return c // exact match
+    if (!fuzzyMatch && mLower.includes(cLower)) fuzzyMatch = c
+  }
+  return fuzzyMatch
 }
 
 export async function refreshModelCapabilities(): Promise<void> {

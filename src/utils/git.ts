@@ -842,11 +842,16 @@ export async function preserveGitStateForIssue(): Promise<PreservedGitState | nu
   }
 }
 
+// Pre-compiled regex for localhost check
+const LOCALHOST_IP_RE = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
+
 function isLocalHost(host: string): boolean {
-  const hostWithoutPort = host.split(':')[0] ?? ''
+  // Optimized: use indexOf + slice instead of split
+  const colonIdx = host.indexOf(':')
+  const hostWithoutPort = colonIdx >= 0 ? host.slice(0, colonIdx) : host
   return (
     hostWithoutPort === 'localhost' ||
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostWithoutPort)
+    LOCALHOST_IP_RE.test(hostWithoutPort)
   )
 }
 

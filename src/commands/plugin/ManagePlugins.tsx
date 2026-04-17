@@ -391,7 +391,9 @@ async function checkIfLocalPlugin(pluginName: string, marketplaceName: string): 
  */
 export function filterManagedDisabledPlugins(plugins: LoadedPlugin[]): LoadedPlugin[] {
   return plugins.filter(plugin => {
-    const marketplace = plugin.source.split('@')[1] || 'local';
+    // Optimized: use lastIndexOf + slice instead of split
+    const atIdx = plugin.source.lastIndexOf('@')
+    const marketplace = atIdx >= 0 ? plugin.source.slice(atIdx + 1) : 'local';
     return !isPluginBlockedByPolicy(`${plugin.name}@${marketplace}`);
   });
 }
@@ -873,7 +875,9 @@ export function ManagePlugins({
         // Group plugins by marketplace
         const pluginsByMarketplace: Record<string, LoadedPlugin[]> = {};
         for (const plugin of allPlugins) {
-          const marketplace = plugin.source.split('@')[1] || 'local';
+          // Optimized: use lastIndexOf + slice instead of split
+          const atIdx = plugin.source.lastIndexOf('@')
+          const marketplace = atIdx >= 0 ? plugin.source.slice(atIdx + 1) : 'local';
           if (!pluginsByMarketplace[marketplace]) {
             pluginsByMarketplace[marketplace] = [];
           }

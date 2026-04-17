@@ -37,12 +37,16 @@ export const get3PModelCapabilityOverride = memoize(
       const pinned = process.env[tier.modelEnvVar]
       const capabilities = process.env[tier.capabilitiesEnvVar]
       if (!pinned || capabilities === undefined) continue
-      if (m !== pinned.toLowerCase()) continue
-      return capabilities
-        .toLowerCase()
-        .split(',')
-        .map(s => s.trim())
-        .includes(capability)
+      // Optimized: cache toLowerCase for pinned and capabilities
+      const pinnedLower = pinned.toLowerCase()
+      if (m !== pinnedLower) continue
+      const capLower = capabilities.toLowerCase()
+      // Optimized: single split + some instead of split + map + includes
+      const caps = capLower.split(',')
+      for (let i = 0; i < caps.length; i++) {
+        if (caps[i].trim() === capability) return true
+      }
+      return false
     }
     return undefined
   },

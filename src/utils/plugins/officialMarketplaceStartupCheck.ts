@@ -53,12 +53,12 @@ export function isOfficialMarketplaceAutoInstallDisabled(): boolean {
 /**
  * Configuration for retry logic
  */
-export const RETRY_CONFIG = {
+export const RETRY_CONFIG = Object.freeze({
   MAX_ATTEMPTS: 10,
   INITIAL_DELAY_MS: 60 * 60 * 1000, // 1 hour
   BACKOFF_MULTIPLIER: 2,
   MAX_DELAY_MS: 7 * 24 * 60 * 60 * 1000, // 1 week
-}
+} as const)
 
 /**
  * Calculate next retry delay using exponential backoff

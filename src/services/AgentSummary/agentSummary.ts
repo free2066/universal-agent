@@ -133,14 +133,17 @@ export function startAgentSummarization(
           continue
         }
         const textBlock = msg.message.content.find(b => b.type === 'text')
-        if (textBlock?.type === 'text' && textBlock.text.trim()) {
+        // Optimized: cache trim() result
+        if (textBlock?.type === 'text') {
           const summaryText = textBlock.text.trim()
-          logForDebugging(
-            `[AgentSummary] Summary result for ${taskId}: ${summaryText}`,
-          )
-          previousSummary = summaryText
-          updateAgentSummary(taskId, summaryText, setAppState)
-          break
+          if (summaryText) {
+            logForDebugging(
+              `[AgentSummary] Summary result for ${taskId}: ${summaryText}`,
+            )
+            previousSummary = summaryText
+            updateAgentSummary(taskId, summaryText, setAppState)
+            break
+          }
         }
       }
     } catch (e) {

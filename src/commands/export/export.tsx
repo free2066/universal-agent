@@ -33,7 +33,9 @@ export function extractFirstPrompt(messages: Message[]): string {
   }
 
   // Take first line only and limit length
-  result = result.split('\n')[0] || '';
+  // Optimized: use indexOf + slice instead of split
+  const newlineIdx = result.indexOf('\n')
+  result = newlineIdx >= 0 ? result.slice(0, newlineIdx) : result
   if (result.length > 50) {
     result = result.substring(0, 49) + '…';
   }

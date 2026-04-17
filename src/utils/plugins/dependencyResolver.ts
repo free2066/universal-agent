@@ -178,15 +178,19 @@ export function verifyAndDemote(plugins: readonly LoadedPlugin[]): {
   demoted: Set<string>
   errors: PluginError[]
 } {
-  const known = new Set(plugins.map(p => p.source))
-  const enabled = new Set(plugins.filter(p => p.enabled).map(p => p.source))
+  // Optimized: single pass to build known and enabled sets
+  const known = new Set<string>()
+  const enabled = new Set<string>()
+  const knownByName = new Set<string>()
+  for (const p of plugins) {
+    known.add(p.source)
+    if (p.enabled) enabled.add(p.source)
+    knownByName.add(parsePluginIdentifier(p.source).name)
+  }
   // Name-only indexes for bare deps from --plugin-dir (@inline) plugins:
   // the real marketplace is unknown, so match "B" against any enabled "B@*".
   // enabledByName is a multiset: if B@epic AND B@other are both enabled,
   // demoting one mustn't make "B" disappear from the index.
-  const knownByName = new Set(
-    plugins.map(p => parsePluginIdentifier(p.source).name),
-  )
   const enabledByName = new Map<string, number>()
   for (const id of enabled) {
     const n = parsePluginIdentifier(id).name
