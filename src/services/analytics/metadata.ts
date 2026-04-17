@@ -584,6 +584,24 @@ const getVersionBase = memoize((): string | undefined => {
  * Builds the environment context object
  */
 const buildEnvContext = memoize(async (): Promise<EnvContext> => {
+  // Optimized: cache all process.env accesses at the start
+  const env_HOST_PLATFORM = process.env.CLAUDE_CODE_HOST_PLATFORM
+  const env_CI = process.env.CI
+  const env_CLAUBBIT = process.env.CLAUBBIT
+  const env_REMOTE = process.env.CLAUDE_CODE_REMOTE
+  const env_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT
+  const env_REMOTE_ENV_TYPE = process.env.CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE
+  const env_COWORKER_TYPE = process.env.CLAUDE_CODE_COWORKER_TYPE
+  const env_CONTAINER_ID = process.env.CLAUDE_CODE_CONTAINER_ID
+  const env_REMOTE_SESSION_ID = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
+  const env_TAGS = process.env.CLAUDE_CODE_TAGS
+  const env_GITHUB_ACTIONS = process.env.GITHUB_ACTIONS
+  const env_ACTION = process.env.CLAUDE_CODE_ACTION
+  const env_GITHUB_EVENT_NAME = process.env.GITHUB_EVENT_NAME
+  const env_RUNNER_ENVIRONMENT = process.env.RUNNER_ENVIRONMENT
+  const env_RUNNER_OS = process.env.RUNNER_OS
+  const env_GITHUB_ACTION_PATH = process.env.GITHUB_ACTION_PATH
+  
   const [packageManagers, runtimes, linuxDistroInfo, vcs] = await Promise.all([
     env.getPackageManagers(),
     env.getRuntimes(),
@@ -596,51 +614,51 @@ const buildEnvContext = memoize(async (): Promise<EnvContext> => {
     // Raw process.platform so freebsd/openbsd/aix/sunos are visible in BQ.
     // getHostPlatformForAnalytics() buckets those into 'linux'; here we want
     // the truth. CLAUDE_CODE_HOST_PLATFORM still overrides for container/remote.
-    platformRaw: process.env.CLAUDE_CODE_HOST_PLATFORM || process.platform,
+    platformRaw: env_HOST_PLATFORM || process.platform,
     arch: env.arch,
     nodeVersion: env.nodeVersion,
     terminal: envDynamic.terminal,
     packageManagers: packageManagers.join(','),
     runtimes: runtimes.join(','),
     isRunningWithBun: env.isRunningWithBun(),
-    isCi: isEnvTruthy(process.env.CI),
-    isClaubbit: isEnvTruthy(process.env.CLAUBBIT),
-    isClaudeCodeRemote: isEnvTruthy(process.env.CLAUDE_CODE_REMOTE),
-    isLocalAgentMode: process.env.CLAUDE_CODE_ENTRYPOINT === 'local-agent',
+    isCi: isEnvTruthy(env_CI),
+    isClaubbit: isEnvTruthy(env_CLAUBBIT),
+    isClaudeCodeRemote: isEnvTruthy(env_REMOTE),
+    isLocalAgentMode: env_ENTRYPOINT === 'local-agent',
     isConductor: env.isConductor(),
-    ...(process.env.CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE && {
-      remoteEnvironmentType: process.env.CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE,
+    ...(env_REMOTE_ENV_TYPE && {
+      remoteEnvironmentType: env_REMOTE_ENV_TYPE,
     }),
     // Gated by feature flag to prevent leaking "coworkerType" string in external builds
     ...(feature('COWORKER_TYPE_TELEMETRY')
-      ? process.env.CLAUDE_CODE_COWORKER_TYPE
-        ? { coworkerType: process.env.CLAUDE_CODE_COWORKER_TYPE }
+      ? env_COWORKER_TYPE
+        ? { coworkerType: env_COWORKER_TYPE }
         : {}
       : {}),
-    ...(process.env.CLAUDE_CODE_CONTAINER_ID && {
-      claudeCodeContainerId: process.env.CLAUDE_CODE_CONTAINER_ID,
+    ...(env_CONTAINER_ID && {
+      claudeCodeContainerId: env_CONTAINER_ID,
     }),
-    ...(process.env.CLAUDE_CODE_REMOTE_SESSION_ID && {
-      claudeCodeRemoteSessionId: process.env.CLAUDE_CODE_REMOTE_SESSION_ID,
+    ...(env_REMOTE_SESSION_ID && {
+      claudeCodeRemoteSessionId: env_REMOTE_SESSION_ID,
     }),
-    ...(process.env.CLAUDE_CODE_TAGS && {
-      tags: process.env.CLAUDE_CODE_TAGS,
+    ...(env_TAGS && {
+      tags: env_TAGS,
     }),
-    isGithubAction: isEnvTruthy(process.env.GITHUB_ACTIONS),
-    isClaudeCodeAction: isEnvTruthy(process.env.CLAUDE_CODE_ACTION),
+    isGithubAction: isEnvTruthy(env_GITHUB_ACTIONS),
+    isClaudeCodeAction: isEnvTruthy(env_ACTION),
     isClaudeAiAuth: isClaudeAISubscriber(),
     version: MACRO.VERSION,
     versionBase: getVersionBase(),
     buildTime: MACRO.BUILD_TIME,
     deploymentEnvironment: env.detectDeploymentEnvironment(),
-    ...(isEnvTruthy(process.env.GITHUB_ACTIONS) && {
-      githubEventName: process.env.GITHUB_EVENT_NAME,
-      githubActionsRunnerEnvironment: process.env.RUNNER_ENVIRONMENT,
-      githubActionsRunnerOs: process.env.RUNNER_OS,
-      githubActionRef: process.env.GITHUB_ACTION_PATH?.includes(
+    ...(isEnvTruthy(env_GITHUB_ACTIONS) && {
+      githubEventName: env_GITHUB_EVENT_NAME,
+      githubActionsRunnerEnvironment: env_RUNNER_ENVIRONMENT,
+      githubActionsRunnerOs: env_RUNNER_OS,
+      githubActionRef: env_GITHUB_ACTION_PATH?.includes(
         'claude-code-action/',
       )
-        ? process.env.GITHUB_ACTION_PATH.split('claude-code-action/')[1]
+        ? env_GITHUB_ACTION_PATH.split('claude-code-action/')[1]
         : undefined,
     }),
     ...(getWslVersion() && { wslVersion: getWslVersion() }),
