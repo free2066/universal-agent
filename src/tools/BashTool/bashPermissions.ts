@@ -335,7 +335,10 @@ function extractPrefixBeforeHeredoc(command: string): string | null {
   const tokens = before.split(/\s+/).filter(Boolean)
   let i = 0
   while (i < tokens.length && ENV_VAR_ASSIGN_RE.test(tokens[i]!)) {
-    const varName = tokens[i]!.split('=')[0]!
+    // Optimized: use indexOf + slice instead of split
+    const token = tokens[i]!;
+    const eqIdx = token.indexOf('=');
+    const varName = eqIdx >= 0 ? token.slice(0, eqIdx) : token;
     const isAntOnlySafe =
       process.env.USER_TYPE === 'ant' && ANT_ONLY_SAFE_ENV_VARS.has(varName)
     if (!SAFE_ENV_VARS.has(varName) && !isAntOnlySafe) {

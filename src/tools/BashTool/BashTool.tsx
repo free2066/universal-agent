@@ -206,7 +206,10 @@ function isSilentBashCommand(command: string): boolean {
       lastOperator = part;
       continue;
     }
-    const baseCommand = part.trim().split(/\s+/)[0];
+    // Optimized: use indexOf + slice instead of split
+    const trimmed = part.trim();
+    const wsIdx2 = trimmed.search(/\s/);
+    const baseCommand = wsIdx2 >= 0 ? trimmed.slice(0, wsIdx2) : trimmed;
     if (!baseCommand) {
       continue;
     }

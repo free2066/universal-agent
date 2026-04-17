@@ -178,8 +178,10 @@ function getEnvOverrides(): Record<string, unknown> | null {
       if (raw) {
         try {
           envOverrides = JSON.parse(raw) as Record<string, unknown>
+          // Optimized: cache Object.keys() result
+          const overrideKeys = Object.keys(envOverrides!)
           logForDebugging(
-            `GrowthBook: Using env var overrides for ${Object.keys(envOverrides!).length} features: ${Object.keys(envOverrides!).join(', ')}`,
+            `GrowthBook: Using env var overrides for ${overrideKeys.length} features: ${overrideKeys.join(', ')}`,
           )
         } catch {
           logError(

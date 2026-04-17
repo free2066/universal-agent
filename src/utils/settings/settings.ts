@@ -608,7 +608,7 @@ export function getManagedSettingsKeysForLogging(
     ]),
   }
 
-  for (const key of Object.keys(validSettings)) {
+  for (const key in validSettings) {
     if (
       keysToExpand.includes(key) &&
       validSettings[key] &&
@@ -619,7 +619,7 @@ export function getManagedSettingsKeysForLogging(
       const validKeys = validNestedKeys[key]
 
       if (validKeys) {
-        for (const nestedKey of Object.keys(nestedObj)) {
+        for (const nestedKey in nestedObj) {
           // Only include known valid nested keys
           if (validKeys.has(nestedKey)) {
             allKeys.push(`${key}.${nestedKey}`)

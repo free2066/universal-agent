@@ -73,7 +73,8 @@ export async function detectAndUninstallDelistedPlugins(): Promise<string[]> {
   const knownMarketplaces = await loadKnownMarketplacesConfigSafe()
   const newlyFlagged: string[] = []
 
-  for (const marketplaceName of Object.keys(knownMarketplaces)) {
+  // Optimized: use for...in instead of Object.keys()
+  for (const marketplaceName in knownMarketplaces) {
     try {
       const marketplace = await getMarketplace(marketplaceName)
 

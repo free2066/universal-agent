@@ -1115,7 +1115,8 @@ export async function migrateFromEnabledPlugins(): Promise<void> {
     const sourceSettings = getSettingsForSource(source)
     const sourceEnabledPlugins = sourceSettings?.enabledPlugins || {}
 
-    for (const pluginId of Object.keys(sourceEnabledPlugins)) {
+    // Optimized: use for...in instead of Object.keys()
+    for (const pluginId in sourceEnabledPlugins) {
       // Skip non-standard plugin IDs
       if (!pluginId.includes('@')) continue
 
