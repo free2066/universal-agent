@@ -43,13 +43,24 @@ export function TaskListV2({
   // Track when each task was last observed transitioning to completed
   const completionTimestampsRef = React.useRef(new Map<string, number>());
   const previousCompletedIdsRef = React.useRef<Set<string> | null>(null);
+  
+  // Optimized: Single pass to collect completed and unresolved IDs
   if (previousCompletedIdsRef.current === null) {
-    previousCompletedIdsRef.current = new Set(tasks.filter(t => t.status === 'completed').map(t_0 => t_0.id));
+    const completedIds: string[] = [];
+    for (const t of tasks) {
+      if (t.status === 'completed') completedIds.push(t.id);
+    }
+    previousCompletedIdsRef.current = new Set(completedIds);
   }
   const maxDisplay = rows <= 10 ? 0 : Math.min(10, Math.max(3, rows - 14));
 
   // Update completion timestamps: reset when a task transitions to completed
-  const currentCompletedIds = new Set(tasks.filter(t_1 => t_1.status === 'completed').map(t_2 => t_2.id));
+  // Optimized: Single pass to build currentCompletedIds
+  const currentCompletedIds: string[] = [];
+  for (const t_1 of tasks) {
+    if (t_1.status === 'completed') currentCompletedIds.push(t_1.id);
+  }
+  const currentCompletedIdsSet = new Set(currentCompletedIds);
   const now = Date.now();
   for (const id of currentCompletedIds) {
     if (!previousCompletedIdsRef.current.has(id)) {

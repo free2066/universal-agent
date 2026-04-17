@@ -543,6 +543,9 @@ function cleanWord(word: string) {
   return word.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
+// Pre-compiled regex for slash command matching
+const SLASH_COMMAND_RE = /(^|[\s])(\/[a-zA-Z][a-zA-Z0-9:\-_]*)/g
+
 /**
  * Find all /command patterns in text for highlighting.
  * Returns array of {start, end} positions.
@@ -553,10 +556,10 @@ export function findSlashCommandPositions(
   text: string,
 ): Array<{ start: number; end: number }> {
   const positions: Array<{ start: number; end: number }> = []
-  // Match /command patterns preceded by whitespace or start-of-string
-  const regex = /(^|[\s])(\/[a-zA-Z][a-zA-Z0-9:\-_]*)/g
+  // Reset lastIndex for global regex
+  SLASH_COMMAND_RE.lastIndex = 0
   let match: RegExpExecArray | null = null
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = SLASH_COMMAND_RE.exec(text)) !== null) {
     const precedingChar = match[1] ?? ''
     const commandName = match[2] ?? ''
     // Start position is after the whitespace (if any)

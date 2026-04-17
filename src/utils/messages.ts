@@ -1172,9 +1172,10 @@ export function getSiblingToolUseIDs(
       _.type === 'assistant' && _.message.id === messageID,
   )
 
+  // Optimized: use flatMap to filter and map in single pass
   return new Set(
     siblingMessages.flatMap(_ =>
-      _.message.content.filter(_ => _.type === 'tool_use').map(_ => _.id),
+      _.message.content.flatMap(c => c.type === 'tool_use' ? [c.id] : []),
     ),
   )
 }
@@ -1932,7 +1933,8 @@ function sanitizeErrorToolResultContent(
       if (!Array.isArray(trContent)) return b
       if (trContent.every(c => c.type === 'text')) return b
       changed = true
-      const texts = trContent.filter(c => c.type === 'text').map(c => c.text)
+      // Optimized: use flatMap to filter and map in single pass
+      const texts = trContent.flatMap(c => c.type === 'text' ? [c.text] : [])
       const textOnly: TextBlockParam[] =
         texts.length > 0 ? [{ type: 'text', text: texts.join('\n\n') }] : []
       return { ...b, content: textOnly }

@@ -24,7 +24,7 @@ function getEndOfMonthTimestamp(): number {
 // ============================================================================
 // Rate limit header name constants (avoid string repetition)
 // ============================================================================
-const RL = {
+const RL = Object.freeze({
   STATUS: 'anthropic-ratelimit-unified-status',
   RESET: 'anthropic-ratelimit-unified-reset',
   CLAIM: 'anthropic-ratelimit-unified-representative-claim',
@@ -42,7 +42,7 @@ const RL = {
   THRESH_7D: 'anthropic-ratelimit-unified-7d-surpassed-threshold',
   OVERAGE_UTIL: 'anthropic-ratelimit-unified-overage-utilization',
   OVERAGE_THRESH: 'anthropic-ratelimit-unified-overage-surpassed-threshold',
-} as const
+} as const)
 
 type MockHeaders = {
   'anthropic-ratelimit-unified-status'?:

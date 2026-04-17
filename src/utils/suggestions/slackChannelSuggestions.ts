@@ -8,6 +8,9 @@ import { jsonParse } from '../slowOperations.js'
 
 const SLACK_SEARCH_TOOL = 'slack_search_channels'
 
+// Pre-compiled regex for channel matching - used in findSlackChannelPositions
+const SLACK_CHANNEL_RE = /(^|\s)#([a-z0-9][a-z0-9_-]{0,79})(?=\s|$)/g
+
 // Plain Map (not LRUCache) — findReusableCacheEntry needs to iterate all
 // entries for prefix matching, which LRUCache doesn't expose cleanly.
 const cache = new Map<string, string[]>()
@@ -111,9 +114,10 @@ export function findSlackChannelPositions(
   text: string,
 ): Array<{ start: number; end: number }> {
   const positions: Array<{ start: number; end: number }> = []
-  const re = /(^|\s)#([a-z0-9][a-z0-9_-]{0,79})(?=\s|$)/g
+  // Pre-compiled at module level for better performance
+  SLACK_CHANNEL_RE.lastIndex = 0
   let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
+  while ((m = SLACK_CHANNEL_RE.exec(text)) !== null) {
     if (!knownChannels.has(m[2]!)) continue
     const start = m.index + m[1]!.length
     positions.push({ start, end: start + 1 + m[2]!.length })

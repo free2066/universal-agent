@@ -1285,9 +1285,12 @@ function aggregateData(
     }
 
     if (result.session_summaries.length < 50) {
+      // Optimized: use indexOf + slice instead of split
+      const tIdx = session.start_time.indexOf('T');
+      const date = tIdx >= 0 ? session.start_time.slice(0, tIdx) : session.start_time;
       result.session_summaries.push({
         id: session.session_id.slice(0, 8),
-        date: session.start_time.split('T')[0] || '',
+        date: date || '',
         summary: session.summary || session.first_prompt.slice(0, 100),
         goal: sessionFacets?.underlying_goal,
       })
@@ -1295,8 +1298,11 @@ function aggregateData(
   }
 
   dates.sort()
-  result.date_range.start = dates[0]?.split('T')[0] || ''
-  result.date_range.end = dates[dates.length - 1]?.split('T')[0] || ''
+  // Optimized: use indexOf + slice instead of split
+  const startTIdx = dates[0]?.indexOf('T') ?? -1;
+  const endTIdx = dates[dates.length - 1]?.indexOf('T') ?? -1;
+  result.date_range.start = startTIdx >= 0 ? dates[0].slice(0, startTIdx) : (dates[0] || '');
+  result.date_range.end = endTIdx >= 0 ? dates[dates.length - 1].slice(0, endTIdx) : (dates[dates.length - 1] || '');
 
   // Calculate response time stats
   result.user_response_times = allResponseTimes
@@ -1308,7 +1314,12 @@ function aggregateData(
   }
 
   // Calculate days active and messages per day
-  const uniqueDays = new Set(dates.map(d => d.split('T')[0]))
+  // Optimized: extract dates in single pass
+  const uniqueDays = new Set<string>();
+  for (const d of dates) {
+    const idx = d.indexOf('T');
+    uniqueDays.add(idx >= 0 ? d.slice(0, idx) : d);
+  }
   result.days_active = uniqueDays.size
   result.messages_per_day =
     result.days_active > 0

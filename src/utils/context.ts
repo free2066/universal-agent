@@ -51,15 +51,27 @@ export function modelSupports1M(model: string): boolean {
 
 // UA: module-level cache for UA_EXTRA_MODELS (context window lookups)
 let _uaExtraCtxCache: Array<{ name: string; contextLength?: number; inputLimit?: number }> | null | undefined = undefined
+let _uaExtraCtxCacheEnv: string | undefined = undefined
+
 function getUAExtraCtxModels(): Array<{ name: string; contextLength?: number; inputLimit?: number }> | null {
-  // UA: 每次都重新读取，避免 bootstrap 阶段时序问题
+  // UA: cache both env string and parsed result to avoid repeated JSON.parse
+  const raw = process.env.UA_EXTRA_MODELS
+  if (!raw) {
+    _uaExtraCtxCache = null
+    _uaExtraCtxCacheEnv = undefined
+    return null
+  }
+  // Return cached result if env hasn't changed
+  if (raw === _uaExtraCtxCacheEnv && _uaExtraCtxCache !== undefined) {
+    return _uaExtraCtxCache
+  }
   try {
-    const raw = process.env.UA_EXTRA_MODELS
-    if (!raw) { _uaExtraCtxCache = null; return null }
     const parsed = JSON.parse(raw)
     _uaExtraCtxCache = Array.isArray(parsed) ? parsed : null
+    _uaExtraCtxCacheEnv = raw
   } catch {
     _uaExtraCtxCache = null
+    _uaExtraCtxCacheEnv = raw
   }
   return _uaExtraCtxCache
 }

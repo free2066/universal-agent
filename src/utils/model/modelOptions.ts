@@ -36,15 +36,27 @@ import { getGlobalConfig } from '../config.js'
 
 // UA: module-level cache for UA_EXTRA_MODELS in model selector
 let _uaExtraOptsCache: Array<{ name: string; displayName: string; contextLength?: number }> | null | undefined = undefined
+let _uaExtraOptsCacheEnv: string | undefined = undefined
+
 function getUAExtraOpts(): Array<{ name: string; displayName: string; contextLength?: number }> | null {
-  // UA: 每次都重新读取，避免 bootstrap 阶段时序问题
+  // UA: cache both env string and parsed result to avoid repeated JSON.parse
+  const raw = process.env.UA_EXTRA_MODELS
+  if (!raw) {
+    _uaExtraOptsCache = null
+    _uaExtraOptsCacheEnv = undefined
+    return null
+  }
+  // Return cached result if env hasn't changed
+  if (raw === _uaExtraOptsCacheEnv && _uaExtraOptsCache !== undefined) {
+    return _uaExtraOptsCache
+  }
   try {
-    const raw = process.env.UA_EXTRA_MODELS
-    if (!raw) { _uaExtraOptsCache = null; return null }
     const parsed = JSON.parse(raw)
     _uaExtraOptsCache = Array.isArray(parsed) ? parsed : null
+    _uaExtraOptsCacheEnv = raw
   } catch {
     _uaExtraOptsCache = null
+    _uaExtraOptsCacheEnv = raw
   }
   return _uaExtraOptsCache
 }
