@@ -18,7 +18,9 @@ export function getManagedPluginNames(): Set<string> | null {
     if (typeof value !== 'boolean' || !pluginId.includes('@')) {
       continue
     }
-    const name = pluginId.split('@')[0]
+    // Optimized: use indexOf + slice instead of split
+    const atIdx = pluginId.indexOf('@')
+    const name = atIdx >= 0 ? pluginId.slice(0, atIdx) : ''
     if (name) {
       names.add(name)
     }

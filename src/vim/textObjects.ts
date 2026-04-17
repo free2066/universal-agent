@@ -16,7 +16,7 @@ export type TextObjectRange = { start: number; end: number } | null
 /**
  * Delimiter pairs for text objects.
  */
-const PAIRS: Record<string, [string, string]> = {
+const PAIRS: Record<string, [string, string]> = Object.freeze({
   '(': ['(', ')'],
   ')': ['(', ')'],
   b: ['(', ')'],
@@ -30,7 +30,7 @@ const PAIRS: Record<string, [string, string]> = {
   '"': ['"', '"'],
   "'": ["'", "'"],
   '`': ['`', '`'],
-}
+})
 
 /**
  * Find a text object at the given position.

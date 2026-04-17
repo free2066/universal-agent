@@ -730,7 +730,9 @@ export async function main() {
       }
       const pmEqIdx = rawCliArgs.findIndex(a => a.startsWith('--permission-mode='));
       if (pmEqIdx !== -1) {
-        _pendingSSH.permissionMode = rawCliArgs[pmEqIdx]!.split('=')[1];
+        // Optimized: use indexOf + slice instead of split
+        const eqIdx = rawCliArgs[pmEqIdx]!.indexOf('=');
+        _pendingSSH.permissionMode = eqIdx >= 0 ? rawCliArgs[pmEqIdx]!.slice(eqIdx + 1) : '';
         rawCliArgs.splice(pmEqIdx, 1);
       }
       // Forward session-resume + model flags to the remote CLI's initial spawn.

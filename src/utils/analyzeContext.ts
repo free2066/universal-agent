@@ -701,9 +701,17 @@ export async function countMcpToolTokens(
 
   // Build tool details with isLoaded flag
   for (const [i, tool] of mcpTools.entries()) {
+    // Optimized: use indexOf + slice instead of split
+    const firstIdx = tool.name.indexOf('__');
+    let serverName = 'unknown';
+    if (firstIdx >= 0) {
+      const rest = tool.name.slice(firstIdx + 2);
+      const secondIdx = rest.indexOf('__');
+      serverName = secondIdx >= 0 ? rest.slice(0, secondIdx) : rest || 'unknown';
+    }
     mcpToolDetails.push({
       name: tool.name,
-      serverName: tool.name.split('__')[1] || 'unknown',
+      serverName,
       tokens: mcpToolTokensByTool[i]!,
       isLoaded: loadedMcpToolNames.has(tool.name) || !isDeferredTool(tool),
     })

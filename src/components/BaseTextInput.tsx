@@ -96,11 +96,14 @@ export function BaseTextInput(t0) {
     viewportCharOffset,
     viewportCharEnd
   } = inputState;
-  const filteredHighlights = cursorFiltered && viewportCharOffset > 0 ? cursorFiltered.filter(h_0 => h_0.end > viewportCharOffset && h_0.start < viewportCharEnd).map(h_1 => ({
-    ...h_1,
-    start: Math.max(0, h_1.start - viewportCharOffset),
-    end: h_1.end - viewportCharOffset
-  })) : cursorFiltered;
+  // Optimized: single pass with flatMap for filtering and mapping
+  const filteredHighlights = cursorFiltered && viewportCharOffset > 0 
+    ? cursorFiltered.flatMap(h => 
+        h.end > viewportCharOffset && h.start < viewportCharEnd 
+          ? [{ ...h, start: Math.max(0, h.start - viewportCharOffset), end: h.end - viewportCharOffset }]
+          : []
+        )
+    : cursorFiltered;
   const hasHighlights = filteredHighlights && filteredHighlights.length > 0;
   if (hasHighlights) {
     return <Box ref={cursorRef}><HighlightedInput text={renderedValue} highlights={filteredHighlights} />{showArgumentHint && <Text dimColor={true}>{props.value?.endsWith(" ") ? "" : " "}{props.argumentHint}</Text>}{children}</Box>;

@@ -315,7 +315,9 @@ function handleData(
       return
     }
     const reqHead = st.connectBuf.subarray(0, headerEnd).toString('utf8')
-    const firstLine = reqHead.split('\r\n')[0] ?? ''
+    // Optimized: use indexOf + slice instead of split
+    const crlfIdx = reqHead.indexOf('\r\n')
+    const firstLine = crlfIdx >= 0 ? reqHead.slice(0, crlfIdx) : reqHead
     const m = firstLine.match(/^CONNECT\s+(\S+)\s+HTTP\/1\.[01]$/i)
     if (!m) {
       sock.write('HTTP/1.1 405 Method Not Allowed\r\n\r\n')

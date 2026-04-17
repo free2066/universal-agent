@@ -2086,10 +2086,12 @@ async function loadPluginsFromMarketplaces({
       const err = toError(result.reason)
       logError(err)
       const pluginId = marketplacePluginEntries[i]![0]
+      // Optimized: use indexOf + slice instead of split
+      const atIdx = pluginId.indexOf('@')
       errors.push({
         type: 'generic-error',
         source: pluginId,
-        plugin: pluginId.split('@')[0],
+        plugin: atIdx >= 0 ? pluginId.slice(0, atIdx) : pluginId,
         error: err.message,
       })
     }

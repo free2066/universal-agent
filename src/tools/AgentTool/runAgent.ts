@@ -965,7 +965,9 @@ function resolveSkillName(
 
   // 2. Try prefixing with the agent's plugin name
   // Plugin agents have agentType like "pluginName:agentName"
-  const pluginPrefix = agentDefinition.agentType.split(':')[0]
+  // Optimized: use indexOf + slice instead of split
+  const colonIdx = agentDefinition.agentType.indexOf(':')
+  const pluginPrefix = colonIdx >= 0 ? agentDefinition.agentType.slice(0, colonIdx) : agentDefinition.agentType
   if (pluginPrefix) {
     const qualifiedName = `${pluginPrefix}:${skillName}`
     if (hasCommand(qualifiedName, allSkills)) {

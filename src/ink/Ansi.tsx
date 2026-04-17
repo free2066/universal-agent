@@ -172,7 +172,7 @@ function textStyleToSpanProps(style: TextStyle): SpanProps {
 }
 
 // Map termio named colors to the ansi: format
-const NAMED_COLOR_MAP: Record<NamedColor, string> = {
+const NAMED_COLOR_MAP: Record<NamedColor, string> = Object.freeze({
   black: 'ansi:black',
   red: 'ansi:red',
   green: 'ansi:green',
@@ -189,7 +189,7 @@ const NAMED_COLOR_MAP: Record<NamedColor, string> = {
   brightMagenta: 'ansi:magentaBright',
   brightCyan: 'ansi:cyanBright',
   brightWhite: 'ansi:whiteBright'
-};
+});
 
 /**
  * Convert termio's Color to the string format used by Ink.

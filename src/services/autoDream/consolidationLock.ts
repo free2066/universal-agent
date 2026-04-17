@@ -120,7 +120,8 @@ export async function listSessionsTouchedSince(
 ): Promise<string[]> {
   const dir = getProjectDir(getOriginalCwd())
   const candidates = await listCandidates(dir, true)
-  return candidates.filter(c => c.mtime > sinceMs).map(c => c.sessionId)
+  // Optimized: single pass with flatMap
+  return candidates.flatMap(c => c.mtime > sinceMs ? [c.sessionId] : [])
 }
 
 /**

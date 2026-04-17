@@ -30,7 +30,7 @@ import {
 // --
 // Edge/Gutter mapping
 
-const EDGE_MAP: Record<LayoutEdge, Edge> = {
+const EDGE_MAP: Record<LayoutEdge, Edge> = Object.freeze({
   all: Edge.All,
   horizontal: Edge.Horizontal,
   vertical: Edge.Vertical,
@@ -40,13 +40,13 @@ const EDGE_MAP: Record<LayoutEdge, Edge> = {
   bottom: Edge.Bottom,
   start: Edge.Start,
   end: Edge.End,
-}
+})
 
-const GUTTER_MAP: Record<LayoutGutter, Gutter> = {
+const GUTTER_MAP: Record<LayoutGutter, Gutter> = Object.freeze({
   all: Gutter.All,
   column: Gutter.Column,
   row: Gutter.Row,
-}
+})
 
 // --
 // Yoga adapter

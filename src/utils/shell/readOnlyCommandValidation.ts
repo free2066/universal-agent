@@ -896,7 +896,9 @@ export const GIT_READ_ONLY_COMMANDS: Record<string, ExternalCommandConfig> = {
             seenListFlag = true
           }
           if (token.includes('=')) {
-            lastFlag = token.split('=')[0] || ''
+            // Optimized: use indexOf + slice instead of split
+            const eqIdx = token.indexOf('=')
+            lastFlag = eqIdx >= 0 ? token.slice(0, eqIdx) : ''
             i++
           } else if (flagsWithArgs.has(token)) {
             lastFlag = token

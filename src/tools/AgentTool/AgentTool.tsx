@@ -542,8 +542,14 @@ export const AgentTool = buildTool({
       for (const tool of currentAppState.mcp.tools) {
         if (tool.name?.startsWith('mcp__')) {
           // Extract server name from tool name (format: mcp__serverName__toolName)
-          const serverName = tool.name.split('__')[1];
-          if (serverName) serversWithToolsSet.add(serverName);
+          // Optimized: use indexOf + slice instead of split
+          const firstIdx = tool.name.indexOf('__');
+          if (firstIdx >= 0) {
+            const rest = tool.name.slice(firstIdx + 2);
+            const secondIdx = rest.indexOf('__');
+            const serverName = secondIdx >= 0 ? rest.slice(0, secondIdx) : rest;
+            if (serverName) serversWithToolsSet.add(serverName);
+          }
         }
       }
       const serversWithTools = Array.from(serversWithToolsSet);

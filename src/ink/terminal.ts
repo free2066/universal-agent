@@ -28,35 +28,39 @@ export function isProgressReportingAvailable(): boolean {
     return false
   }
 
+  // Optimized: cache process.env reads at start of function
+  const env = process.env
+  const termProgram = env.TERM_PROGRAM
+
   // Explicitly exclude Windows Terminal, which interprets OSC 9;4 as
   // notifications rather than progress indicators
-  if (process.env.WT_SESSION) {
+  if (env.WT_SESSION) {
     return false
   }
 
   // ConEmu supports OSC 9;4 for progress (all versions)
   if (
-    process.env.ConEmuANSI ||
-    process.env.ConEmuPID ||
-    process.env.ConEmuTask
+    env.ConEmuANSI ||
+    env.ConEmuPID ||
+    env.ConEmuTask
   ) {
     return true
   }
 
-  const version = coerce(process.env.TERM_PROGRAM_VERSION)
+  const version = coerce(env.TERM_PROGRAM_VERSION)
   if (!version) {
     return false
   }
 
   // Ghostty 1.2.0+ supports OSC 9;4 for progress
   // https://ghostty.org/docs/install/release-notes/1-2-0
-  if (process.env.TERM_PROGRAM === 'ghostty') {
+  if (termProgram === 'ghostty') {
     return gte(version.version, '1.2.0')
   }
 
   // iTerm2 3.6.6+ supports OSC 9;4 for progress
   // https://iterm2.com/downloads.html
-  if (process.env.TERM_PROGRAM === 'iTerm.app') {
+  if (termProgram === 'iTerm.app') {
     return gte(version.version, '3.6.6')
   }
 
@@ -68,13 +72,15 @@ export function isProgressReportingAvailable(): boolean {
  * When supported, BSU/ESU sequences prevent visible flicker during redraws.
  */
 export function isSynchronizedOutputSupported(): boolean {
+  // Optimized: cache process.env reads
+  const env = process.env
   // tmux parses and proxies every byte but doesn't implement DEC 2026.
   // BSU/ESU pass through to the outer terminal but tmux has already
   // broken atomicity by chunking. Skip to save 16 bytes/frame + parser work.
-  if (process.env.TMUX) return false
+  if (env.TMUX) return false
 
-  const termProgram = process.env.TERM_PROGRAM
-  const term = process.env.TERM
+  const termProgram = env.TERM_PROGRAM
+  const term = env.TERM
 
   // Modern terminals with known DEC 2026 support
   if (
@@ -90,7 +96,7 @@ export function isSynchronizedOutputSupported(): boolean {
   }
 
   // kitty sets TERM=xterm-kitty or KITTY_WINDOW_ID
-  if (term?.includes('kitty') || process.env.KITTY_WINDOW_ID) return true
+  if (term?.includes('kitty') || env.KITTY_WINDOW_ID) return true
 
   // Ghostty may set TERM=xterm-ghostty without TERM_PROGRAM
   if (term === 'xterm-ghostty') return true
