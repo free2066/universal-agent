@@ -121,7 +121,9 @@ export async function resizeShellImageOutput(
   const parsed = parseDataUri(source)
   if (!parsed) return null
   const buf = Buffer.from(parsed.data, 'base64')
-  const ext = parsed.mediaType.split('/')[1] || 'png'
+  // Optimized: use indexOf + slice instead of split
+  const slashIdx2 = parsed.mediaType.indexOf('/');
+  const ext = slashIdx2 >= 0 ? parsed.mediaType.slice(slashIdx2 + 1) : 'png'
   const resized = await maybeResizeAndDownsampleImageBuffer(
     buf,
     buf.length,

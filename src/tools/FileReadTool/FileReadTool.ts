@@ -1151,7 +1151,9 @@ export async function readImageWithTokenBudget(
   }
 
   const detectedMediaType = detectImageFormatFromBuffer(imageBuffer)
-  const detectedFormat = detectedMediaType.split('/')[1] || 'png'
+  // Optimized: use indexOf + slice instead of split
+  const slashIdx = detectedMediaType.indexOf('/');
+  const detectedFormat = slashIdx >= 0 ? detectedMediaType.slice(slashIdx + 1) : 'png'
 
   // Try standard resize
   let result: ImageResult

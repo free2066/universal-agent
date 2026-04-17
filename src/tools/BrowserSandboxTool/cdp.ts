@@ -78,7 +78,10 @@ export function detectChromePath(): string | null {
   for (const cmd of ['chromium-browser', 'chromium', 'google-chrome-stable', 'google-chrome']) {
     try {
       const out = execSync(`which ${cmd} 2>/dev/null`, { encoding: 'utf8', timeout: 2000 });
-      const found = out.trim().split('\n')[0];
+      // Optimized: use indexOf + slice instead of split
+      const trimmed2 = out.trim();
+      const nlIdx = trimmed2.indexOf('\n');
+      const found = nlIdx >= 0 ? trimmed2.slice(0, nlIdx) : trimmed2;
       if (found && existsSync(found)) return found;
     } catch {}
   }
