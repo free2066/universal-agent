@@ -454,9 +454,10 @@ export async function maybeResizeAndDownsampleImageBlock(
   const imageBuffer = Buffer.from(imageBlock.source.data, 'base64')
   const originalSize = imageBuffer.length
 
-  // Extract extension from media type
+  // Extract extension from media type - optimized to avoid array allocation
   const mediaType = imageBlock.source.media_type
-  const ext = mediaType?.split('/')[1] || 'png'
+  const slashIdx = mediaType ? mediaType.indexOf('/') : -1
+  const ext = slashIdx >= 0 ? mediaType!.slice(slashIdx + 1) : 'png'
 
   // Resize if needed
   const resized = await maybeResizeAndDownsampleImageBuffer(
@@ -500,8 +501,9 @@ export async function compressImageBuffer(
   maxBytes: number = IMAGE_TARGET_RAW_SIZE,
   originalMediaType?: string,
 ): Promise<CompressedImageResult> {
-  // Extract format from originalMediaType if provided (e.g., "image/png" -> "png")
-  const fallbackFormat = originalMediaType?.split('/')[1] || 'jpeg'
+  // Extract format from originalMediaType - optimized to avoid array allocation
+  const slashIdx = originalMediaType ? originalMediaType.indexOf('/') : -1
+  const fallbackFormat = slashIdx >= 0 ? originalMediaType!.slice(slashIdx + 1) : 'jpeg'
   const normalizedFallback = fallbackFormat === 'jpg' ? 'jpeg' : fallbackFormat
 
   try {

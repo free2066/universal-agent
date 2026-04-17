@@ -56,17 +56,34 @@ export function estimateTokens(text: string, model?: string): number {
  * Count structural tokens that add overhead
  * (brackets, quotes, newlines, etc.)
  */
+
+// Pre-compile regex patterns for structural characters at module level
+const STRUCTURAL_CHAR_REGEXES: Record<string, RegExp> = {
+  '{': /\{/g,
+  '}': /\}/g,
+  '[': /\[/g,
+  ']': /\]/g,
+  '"': /"/g,
+  "'": /'/g,
+  '\n': /\n/g,
+  '\t': /\t/g,
+  ':': /:/g,
+  ',': /,/g,
+}
+
 function countStructureOverhead(text: string): number {
-  let overhead = 0;
+  let overhead = 0
   
-  // Count JSON/code structural characters
-  const structuralChars = ['{', '}', '[', ']', '"', "'", '\n', '\t', ':', ','];
-  for (const char of structuralChars) {
-    const count = (text.match(new RegExp('\\' + char, 'g')) || []).length;
-    overhead += count * 0.1; // Each structural char adds ~0.1 token overhead
+  // Count JSON/code structural characters using pre-compiled regexes
+  for (const char of Object.keys(STRUCTURAL_CHAR_REGEXES)) {
+    const re = STRUCTURAL_CHAR_REGEXES[char]
+    re.lastIndex = 0 // Reset lastIndex for global regex
+    const matches = text.match(re)
+    const count = matches ? matches.length : 0
+    overhead += count * 0.1 // Each structural char adds ~0.1 token overhead
   }
   
-  return overhead;
+  return overhead
 }
 
 /**

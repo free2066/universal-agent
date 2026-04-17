@@ -32,23 +32,23 @@ function getCommandFuse(commands: Command[]): Fuse<CommandSearchItem> {
     return fuseCache.fuse
   }
 
-  const commandData: CommandSearchItem[] = commands
-    .filter(cmd => !cmd.isHidden)
-    .map(cmd => {
-      const commandName = getCommandName(cmd)
-      const parts = commandName.split(SEPARATORS).filter(Boolean)
+  // Optimize: combine filter-map into single flatMap pass
+  const commandData: CommandSearchItem[] = commands.flatMap(cmd => {
+    if (cmd.isHidden) return []
+    const commandName = getCommandName(cmd)
+    const parts = commandName.split(SEPARATORS).filter(Boolean)
 
-      return {
-        descriptionKey: (cmd.description ?? '')
-          .split(' ')
-          .map(word => cleanWord(word))
-          .filter(Boolean),
-        partKey: parts.length > 1 ? parts : undefined,
-        commandName,
-        command: cmd,
-        aliasKey: cmd.aliases,
-      }
-    })
+    return [{
+      descriptionKey: (cmd.description ?? '')
+        .split(' ')
+        .map(word => cleanWord(word))
+        .filter(Boolean),
+      partKey: parts.length > 1 ? parts : undefined,
+      commandName,
+      command: cmd,
+      aliasKey: cmd.aliases,
+    }]
+  })
 
   const fuse = new Fuse(commandData, {
     includeScore: true,

@@ -31,7 +31,9 @@ async function ensureImageStoreDir(): Promise<void> {
  * Get the file path for an image by ID.
  */
 function getImagePath(imageId: number, mediaType: string): string {
-  const extension = mediaType.split('/')[1] || 'png'
+  // Optimized: use indexOf instead of split to avoid array allocation
+  const slashIdx = mediaType.indexOf('/')
+  const extension = slashIdx >= 0 ? mediaType.slice(slashIdx + 1) : 'png'
   return join(getImageStoreDir(), `${imageId}.${extension}`)
 }
 

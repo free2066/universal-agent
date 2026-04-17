@@ -59,12 +59,15 @@ export async function getAncestorPidsAsync(
     if (result.code !== 0 || !result.stdout?.trim()) {
       return []
     }
-    return result.stdout
-      .trim()
-      .split(',')
-      .filter(Boolean)
-      .map(p => parseInt(p, 10))
-      .filter(p => !isNaN(p))
+    // Optimize: combine filter-map-filter into single reduce pass
+    const pids: number[] = []
+    for (const part of result.stdout.trim().split(',')) {
+      if (part) {
+        const num = parseInt(part, 10)
+        if (!isNaN(num)) pids.push(num)
+      }
+    }
+    return pids
   }
 
   // For Unix, use a shell command that walks up the process tree
@@ -77,12 +80,15 @@ export async function getAncestorPidsAsync(
   if (result.code !== 0 || !result.stdout?.trim()) {
     return []
   }
-  return result.stdout
-    .trim()
-    .split('\n')
-    .filter(Boolean)
-    .map(p => parseInt(p, 10))
-    .filter(p => !isNaN(p))
+  // Optimize: combine filter-map-filter into single reduce pass
+  const pids: number[] = []
+  for (const part of result.stdout.trim().split('\n')) {
+    if (part) {
+      const num = parseInt(part, 10)
+      if (!isNaN(num)) pids.push(num)
+    }
+  }
+  return pids
 }
 
 /**
@@ -172,12 +178,15 @@ export function getChildPids(pid: string | number): number[] {
     if (!result) {
       return []
     }
-    return result
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map(p => parseInt(p, 10))
-      .filter(p => !isNaN(p))
+    // Optimize: combine filter-map-filter into single reduce pass
+    const pids: number[] = []
+    for (const part of result.trim().split('\n')) {
+      if (part) {
+        const num = parseInt(part, 10)
+        if (!isNaN(num)) pids.push(num)
+      }
+    }
+    return pids
   } catch {
     return []
   }

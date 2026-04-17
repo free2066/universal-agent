@@ -10,16 +10,16 @@ type Props = {
 };
 
 // Processing shimmer colors: dim gray to lighter gray (matches ThinkingShimmerText)
-const PROCESSING_DIM = {
+const PROCESSING_DIM = Object.freeze({
   r: 153,
   g: 153,
-  b: 153
-};
-const PROCESSING_BRIGHT = {
+  b: 153,
+})
+const PROCESSING_BRIGHT = Object.freeze({
   r: 185,
   g: 185,
-  b: 185
-};
+  b: 185,
+})
 const PULSE_PERIOD_S = 2; // 2 second period for all pulsing animations
 
 export function VoiceIndicator(props) {

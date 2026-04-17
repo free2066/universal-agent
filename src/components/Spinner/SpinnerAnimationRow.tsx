@@ -22,16 +22,16 @@ const SHOW_TOKENS_AFTER_MS = 30_000;
 // Thinking shimmer constants. Previously lived in a separate ThinkingShimmerText
 // component with its own useAnimationFrame(50) — inlined here to reuse our
 // existing 50ms clock and eliminate the redundant subscriber.
-const THINKING_INACTIVE = {
+const THINKING_INACTIVE = Object.freeze({
   r: 153,
   g: 153,
-  b: 153
-};
-const THINKING_INACTIVE_SHIMMER = {
+  b: 153,
+});
+const THINKING_INACTIVE_SHIMMER = Object.freeze({
   r: 185,
   g: 185,
-  b: 185
-};
+  b: 185,
+});
 const THINKING_DELAY_MS = 3000;
 const THINKING_GLOW_PERIOD_S = 2;
 export type SpinnerAnimationRowProps = {

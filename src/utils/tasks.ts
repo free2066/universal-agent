@@ -586,8 +586,9 @@ export async function claimTask(
 
     // Check for unresolved blockers (open or in_progress tasks block)
     const allTasks = await listTasks(taskListId)
+    // Optimize: combine filter-map into single operation
     const unresolvedTaskIds = new Set(
-      allTasks.filter(t => t.status !== 'completed').map(t => t.id),
+      allTasks.flatMap(t => t.status !== 'completed' ? [t.id] : []),
     )
     const blockedByTasks = task.blockedBy.filter(id =>
       unresolvedTaskIds.has(id),
@@ -650,8 +651,9 @@ async function claimTaskWithBusyCheck(
     }
 
     // Check for unresolved blockers (open or in_progress tasks block)
+    // Optimize: combine filter-map into single operation
     const unresolvedTaskIds = new Set(
-      allTasks.filter(t => t.status !== 'completed').map(t => t.id),
+      allTasks.flatMap(t => t.status !== 'completed' ? [t.id] : []),
     )
     const blockedByTasks = task.blockedBy.filter(id =>
       unresolvedTaskIds.has(id),

@@ -18,6 +18,9 @@ import {
   ripGrep,
 } from './ripgrep.js'
 
+// Pre-compile regex at module level
+const GLOB_CHARS_RE = /[*?[{]/
+
 /**
  * Extracts the static base directory from a glob pattern.
  * The base directory is everything before the first glob special character (* ? [ {).
@@ -28,8 +31,7 @@ export function extractGlobBaseDirectory(pattern: string): {
   relativePattern: string
 } {
   // Find the first glob special character: *, ?, [, {
-  const globChars = /[*?[{]/
-  const match = pattern.match(globChars)
+  const match = pattern.match(GLOB_CHARS_RE)
 
   if (!match || match.index === undefined) {
     // No glob characters - this is a literal path

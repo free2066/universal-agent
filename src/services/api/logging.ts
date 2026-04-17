@@ -744,13 +744,13 @@ export function logAPISuccessAndDuration({
   let hasToolCall: boolean | undefined
 
   if (isBetaTracingEnabled() && newMessages) {
-    // Model output - visible to all users
+    // Model output - visible to all users - optimized filter-map to single flatMap
     modelOutput =
       newMessages
         .flatMap(m =>
-          m.message.content
-            .filter(c => c.type === 'text')
-            .map(c => (c as { type: 'text'; text: string }).text),
+          m.message.content.flatMap(c =>
+            c.type === 'text' ? [(c as { type: 'text'; text: string }).text] : []
+          ),
         )
         .join('\n') || undefined
 
@@ -759,9 +759,9 @@ export function logAPISuccessAndDuration({
       thinkingOutput =
         newMessages
           .flatMap(m =>
-            m.message.content
-              .filter(c => c.type === 'thinking')
-              .map(c => (c as { type: 'thinking'; thinking: string }).thinking),
+            m.message.content.flatMap(c =>
+              c.type === 'thinking' ? [(c as { type: 'thinking'; thinking: string }).thinking] : []
+            ),
           )
           .join('\n') || undefined
     }

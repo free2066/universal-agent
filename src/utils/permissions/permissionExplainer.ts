@@ -113,10 +113,9 @@ function extractConversationContext(
   let totalChars = 0
 
   for (const msg of assistantMessages.reverse()) {
-    // Extract text content from assistant message
+    // Extract text content from assistant message - optimized filter-map to single flatMap
     const textBlocks = msg.message.content
-      .filter(c => c.type === 'text')
-      .map(c => ('text' in c ? c.text : ''))
+      .flatMap(c => c.type === 'text' && 'text' in c ? [c.text] : [])
       .join(' ')
 
     if (textBlocks && totalChars < maxChars) {

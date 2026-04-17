@@ -65,8 +65,9 @@ export function getLargeOutputInstructions(
  */
 export function extensionForMimeType(mimeType: string | undefined): string {
   if (!mimeType) return 'bin'
-  // Strip any charset/boundary parameter
-  const mt = (mimeType.split(';')[0] ?? '').trim().toLowerCase()
+  // Strip any charset/boundary parameter - optimized to avoid creating array
+  const semiIdx = mimeType.indexOf(';')
+  const mt = (semiIdx >= 0 ? mimeType.slice(0, semiIdx) : mimeType).trim().toLowerCase()
   switch (mt) {
     case 'application/pdf':
       return 'pdf'
@@ -124,7 +125,9 @@ export function extensionForMimeType(mimeType: string | undefined): string {
  */
 export function isBinaryContentType(contentType: string): boolean {
   if (!contentType) return false
-  const mt = (contentType.split(';')[0] ?? '').trim().toLowerCase()
+  // Optimized: use indexOf instead of split to avoid array allocation
+  const semiIdx = contentType.indexOf(';')
+  const mt = (semiIdx >= 0 ? contentType.slice(0, semiIdx) : contentType).trim().toLowerCase()
   if (mt.startsWith('text/')) return false
   // Structured text formats delivered with an application/ type. Use suffix
   // or exact match rather than substring so 'openxmlformats' (docx/xlsx) stays binary.

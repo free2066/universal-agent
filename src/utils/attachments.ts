@@ -2772,7 +2772,8 @@ export function extractAtMentionedFiles(content: string): string[] {
   // Example: "foo bar @baz moo" would extract "baz"
   // Example: 'check @"my file.txt" please' would extract "my file.txt"
 
-  // Two patterns: quoted paths and regular paths
+  // Pre-compiled regex patterns at module level would be better, but these are stateful with .exec()
+  // Reset lastIndex before use if moving to module level
   const quotedAtMentionRegex = /(^|\s)@"([^"]+)"/g
   const regularAtMentionRegex = /(^|\s)@([^\s]+)\b/g
 

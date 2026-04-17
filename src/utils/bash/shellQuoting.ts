@@ -1,5 +1,14 @@
 import { quote } from './shellQuote.js'
 
+// Pre-compile regex patterns at module level for better performance
+const BIT_SHIFT_LEFT_RE = /\d\s*<<\s*\d/
+const BASH_ARITH_LEFT_RE = /\[\[\s*\d+\s*<<\s*\d+\s*\]\]/
+const SUBSHELL_ARITH_LEFT_RE = /\$\(\(.*<<.*\)\)/
+const HEREDOC_RE = /<<-?\s*(?:(['"]?)(\w+)\1|\\(\w+))/
+const SINGLE_QUOTE_MULTILINE_RE = /'(?:[^'\\]|\\.)*\n(?:[^'\\]|\\.)*'/
+const DOUBLE_QUOTE_MULTILINE_RE = /"(?:[^"\\]|\\.)*\n(?:[^"\\]|\\.)*"/
+const STDIN_REDIRECT_RE = /(?:^|[\s;&|])<(?![<(])\s*\S+/
+
 /**
  * Detects if a command contains a heredoc pattern
  * Matches patterns like: <<EOF, <<'EOF', <<"EOF", <<-EOF, <<-'EOF', <<\EOF, etc.
@@ -9,16 +18,15 @@ function containsHeredoc(command: string): boolean {
   // Matches: <<EOF, <<'EOF', <<"EOF", <<-EOF, <<-'EOF', <<\EOF
   // Check for bit-shift operators first and exclude them
   if (
-    /\d\s*<<\s*\d/.test(command) ||
-    /\[\[\s*\d+\s*<<\s*\d+\s*\]\]/.test(command) ||
-    /\$\(\(.*<<.*\)\)/.test(command)
+    BIT_SHIFT_LEFT_RE.test(command) ||
+    BASH_ARITH_LEFT_RE.test(command) ||
+    SUBSHELL_ARITH_LEFT_RE.test(command)
   ) {
     return false
   }
 
   // Now check for heredoc patterns
-  const heredocRegex = /<<-?\s*(?:(['"]?)(\w+)\1|\\(\w+))/
-  return heredocRegex.test(command)
+  return HEREDOC_RE.test(command)
 }
 
 /**
@@ -26,14 +34,9 @@ function containsHeredoc(command: string): boolean {
  */
 function containsMultilineString(command: string): boolean {
   // Check for strings with actual newlines in them
-  // Handle escaped quotes by using a more sophisticated pattern
-  // Match single quotes: '...\n...' where content can include escaped quotes \'
-  // Match double quotes: "...\n..." where content can include escaped quotes \"
-  const singleQuoteMultiline = /'(?:[^'\\]|\\.)*\n(?:[^'\\]|\\.)*'/
-  const doubleQuoteMultiline = /"(?:[^"\\]|\\.)*\n(?:[^"\\]|\\.)*"/
-
   return (
-    singleQuoteMultiline.test(command) || doubleQuoteMultiline.test(command)
+    SINGLE_QUOTE_MULTILINE_RE.test(command) ||
+    DOUBLE_QUOTE_MULTILINE_RE.test(command)
   )
 }
 
@@ -82,7 +85,7 @@ export function hasStdinRedirect(command: string): boolean {
   // Look for < followed by whitespace and a filename/path
   // Negative lookahead to exclude: <<, <(
   // Must be preceded by whitespace or command separator or start of string
-  return /(?:^|[\s;&|])<(?![<(])\s*\S+/.test(command)
+  return STDIN_REDIRECT_RE.test(command)
 }
 
 /**

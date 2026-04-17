@@ -16,11 +16,11 @@ type Props = {
   shimmerColor: keyof Theme;
   stalledIntensity?: number;
 };
-const ERROR_RED = {
+const ERROR_RED = Object.freeze({
   r: 171,
   g: 43,
-  b: 63
-};
+  b: 63,
+});
 export function GlimmerMessage(t0) {
   const $ = _c(75);
   const {

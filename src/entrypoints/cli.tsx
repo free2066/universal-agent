@@ -12,12 +12,14 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
   try {
     const { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync, unlinkSync } = require('fs')
     const { resolve, dirname } = require('path')
-    const uagentDir = resolve(require('os').homedir(), '.uagent')
+    const os = require('os')
+    const HOME = os.homedir() // Cache homedir to avoid repeated calls
+    const uagentDir = resolve(HOME, '.uagent')
 
     // ── Step 0: Ensure ~/.claude.json has UA placeholder key approved ──────────
     // Prevents "Detected a custom API key" dialog on every startup
     try {
-      const claudeConfigPath = resolve(require('os').homedir(), '.claude.json')
+      const claudeConfigPath = resolve(HOME, '.claude.json')
       // CLI-3: keep UA_PLACEHOLDER_KEY as single source of truth
       // UA_KEY_NORMALIZED = last 20 chars of placeholder (what CC stores in customApiKeyResponses)
       const UA_PLACEHOLDER_KEY = 'ua-multi-model-placeholder'
