@@ -68,11 +68,11 @@ export function TaskListV2({
     }
   }
   for (const id_0 of completionTimestampsRef.current.keys()) {
-    if (!currentCompletedIds.has(id_0)) {
+    if (!currentCompletedIdsSet.has(id_0)) {
       completionTimestampsRef.current.delete(id_0);
     }
   }
-  previousCompletedIdsRef.current = currentCompletedIds;
+  previousCompletedIdsRef.current = currentCompletedIdsSet;
 
   // Schedule re-render when the next recent completion expires.
   // Depend on `tasks` so the timer is only reset when the task list changes,
