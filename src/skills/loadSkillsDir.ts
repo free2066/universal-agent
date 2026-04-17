@@ -49,13 +49,6 @@ import {
 } from '../utils/frontmatterParser.js'
 import { getFsImplementation } from '../utils/fsOperations.js'
 import { isPathGitignored } from '../utils/git/gitignore.js'
-
-// ============================================================================
-// Precompiled regex patterns (performance optimization)
-// ============================================================================
-const BACKSLASH_RE = /\\/g
-const SKILL_DIR_RE = /\$\{CLAUDE_SKILL_DIR\}/g
-const SESSION_ID_RE = /\$\{CLAUDE_SESSION_ID\}/g
 import { logError } from '../utils/log.js'
 import {
   extractDescriptionFromMarkdown,
@@ -73,6 +66,13 @@ import { isRestrictedToPluginOnly } from '../utils/settings/pluginOnlyPolicy.js'
 import { HooksSchema, type HooksSettings } from '../utils/settings/types.js'
 import { createSignal } from '../utils/signal.js'
 import { registerMCPSkillBuilders } from './mcpSkillBuilders.js'
+
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const BACKSLASH_RE = /\\/g
+const SKILL_DIR_RE = /\$\{CLAUDE_SKILL_DIR\}/g
+const SESSION_ID_RE = /\$\{CLAUDE_SESSION_ID\}/g
 
 export type LoadedFrom =
   | 'commands_DEPRECATED'

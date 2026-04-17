@@ -11,9 +11,6 @@ import { logForDebugging } from '../debug.js'
 import { EFFORT_LEVELS, parseEffortValue } from '../effort.js'
 import { isBareMode } from '../envUtils.js'
 import { isENOENT } from '../errors.js'
-
-// Precompiled regex for namespace generation
-const NAMESPACE_SEP_RE = /\//g
 import {
   coerceDescriptionToString,
   type FrontmatterData,
@@ -36,6 +33,9 @@ import {
 } from './pluginOptionsStorage.js'
 import type { CommandMetadata, PluginManifest } from './schemas.js'
 import { walkPluginMarkdown } from './walkPluginMarkdown.js'
+
+// Precompiled regex for namespace generation
+const NAMESPACE_SEP_RE = /\//g
 
 // Similar to MarkdownFile but for plugin sources
 type PluginMarkdownFile = {
