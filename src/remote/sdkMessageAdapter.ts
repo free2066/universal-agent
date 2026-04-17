@@ -36,7 +36,7 @@ function getISOTimestamp(): string {
   if (_cachedTimestamp && now - _cachedTimestampTime < 1) {
     return _cachedTimestamp
   }
-  _cachedTimestamp = getISOTimestamp()
+  _cachedTimestamp = new Date(now).toISOString()
   _cachedTimestampTime = now
   return _cachedTimestamp
 }
