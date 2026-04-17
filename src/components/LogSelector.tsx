@@ -94,7 +94,10 @@ function extractSnippet(text: string, query: string, contextChars: number): Snip
   // Note: Fuse does fuzzy matching, so this may miss some fuzzy matches.
   // This is acceptable for now - in the future we could use Fuse's includeMatches
   // option and work with the match indices directly.
-  const matchIndex = text.toLowerCase().indexOf(query.toLowerCase());
+  // Optimized: cache lowercased strings
+  const textLower = text.toLowerCase();
+  const queryLower = query.toLowerCase();
+  const matchIndex = textLower.indexOf(queryLower);
   if (matchIndex === -1) return null;
   const matchEnd = matchIndex + query.length;
   const snippetStart = Math.max(0, matchIndex - contextChars);

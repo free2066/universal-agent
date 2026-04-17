@@ -218,9 +218,11 @@ async function handleBroadcast(
 
   const senderColor = getTeammateColor()
 
+  // Optimized: cache senderNameLower to avoid repeated toLowerCase
+  const senderNameLower = senderName.toLowerCase()
   const recipients: string[] = []
   for (const member of teamFile.members) {
-    if (member.name.toLowerCase() === senderName.toLowerCase()) {
+    if (member.name.toLowerCase() === senderNameLower) {
       continue
     }
     recipients.push(member.name)

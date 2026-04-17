@@ -47,7 +47,10 @@ const VSCODE_FAMILY = new Set(['code', 'cursor', 'windsurf', 'codium'])
  * 'code' → matches.
  */
 export function classifyGuiEditor(editor: string): string | undefined {
-  const base = basename(editor.split(' ')[0] ?? '')
+  // Optimized: use indexOf + slice instead of split
+  const spaceIdx = editor.indexOf(' ');
+  const editorPath = spaceIdx >= 0 ? editor.slice(0, spaceIdx) : editor;
+  const base = basename(editorPath || '');
   return GUI_EDITORS.find(g => base.includes(g))
 }
 

@@ -124,7 +124,10 @@ function isSearchOrReadPowerShellCommand(command: string): {
   let hasRead = false;
   let hasNonNeutralCommand = false;
   for (const part of parts) {
-    const baseCommand = part.trim().split(/\s+/)[0];
+    // Optimized: use search + slice instead of split
+    const trimmed = part.trim();
+    const wsIdx = trimmed.search(/\s/);
+    const baseCommand = wsIdx >= 0 ? trimmed.slice(0, wsIdx) : trimmed;
     if (!baseCommand) {
       continue;
     }
@@ -175,7 +178,10 @@ const DISALLOWED_AUTO_BACKGROUND_COMMANDS = ['start-sleep',
  * @returns false for commands that should not be auto-backgrounded (like Start-Sleep)
  */
 function isAutobackgroundingAllowed(command: string): boolean {
-  const firstWord = command.trim().split(/\s+/)[0];
+  // Optimized: use search + slice instead of split
+  const trimmed = command.trim();
+  const wsIdx = trimmed.search(/\s/);
+  const firstWord = wsIdx >= 0 ? trimmed.slice(0, wsIdx) : trimmed;
   if (!firstWord) return true;
   const canonical = resolveToCanonical(firstWord);
   return !DISALLOWED_AUTO_BACKGROUND_COMMANDS.includes(canonical);
@@ -193,7 +199,9 @@ export function detectBlockedSleepPattern(command: string): string | null {
   // intentionally shallow — sleep inside script blocks, subshells, or later
   // pipeline stages is fine. Matches BashTool's splitCommandWithOperators
   // intent (src/utils/bash/commands.ts) without a full PS parser.
-  const first = command.trim().split(/[;|&\r\n]/)[0]?.trim() ?? '';
+  // Optimized: use indexOf + slice instead of split
+  const sepIdx = command.trim().search(/[;|&\r\n]/);
+  const first = (sepIdx >= 0 ? command.trim().slice(0, sepIdx) : command.trim()).trim();
   // Match: Start-Sleep N, Start-Sleep -Seconds N, Start-Sleep -s N, sleep N
   // (case-insensitive; -Seconds can be abbreviated to -s per PS convention)
   const m = /^(?:start-sleep|sleep)(?:\s+-s(?:econds)?)?\s+(\d+)\s*$/i.exec(first);
@@ -262,7 +270,9 @@ export type { PowerShellProgress } from '../../types/tools.js';
 const COMMON_BACKGROUND_COMMANDS = ['npm', 'yarn', 'pnpm', 'node', 'python', 'python3', 'go', 'cargo', 'make', 'docker', 'terraform', 'webpack', 'vite', 'jest', 'pytest', 'curl', 'Invoke-WebRequest', 'build', 'test', 'serve', 'watch', 'dev'] as const;
 function getCommandTypeForLogging(command: string): AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS {
   const trimmed = command.trim();
-  const firstWord = trimmed.split(/\s+/)[0] || '';
+  // Optimized: use search + slice instead of split
+  const wsIdx2 = trimmed.search(/\s/);
+  const firstWord = (wsIdx2 >= 0 ? trimmed.slice(0, wsIdx2) : trimmed) || '';
   for (const cmd of COMMON_BACKGROUND_COMMANDS) {
     if (firstWord.toLowerCase() === cmd.toLowerCase()) {
       return cmd as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS;

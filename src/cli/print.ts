@@ -1502,7 +1502,8 @@ export function runHeadlessStreaming(
       )
 
       // Update SDK state (need to mutate sdkMcpConfigs since it's shared)
-      for (const key of Object.keys(sdkMcpConfigs)) {
+      // Optimized: use for...in instead of Object.keys()
+      for (const key in sdkMcpConfigs) {
         delete sdkMcpConfigs[key]
       }
       Object.assign(sdkMcpConfigs, result.newSdkState.configs)
@@ -3646,7 +3647,8 @@ export function runHeadlessStreaming(
           // SettingsSchema().safeParse() doesn't reject the whole object
           // (z.string().optional() accepts string | undefined, not null).
           const merged = { ...existing, ...incoming }
-          for (const key of Object.keys(merged)) {
+          // Optimized: use for...in instead of Object.keys()
+          for (const key in merged) {
             if (merged[key as keyof typeof merged] === null) {
               delete merged[key as keyof typeof merged]
             }

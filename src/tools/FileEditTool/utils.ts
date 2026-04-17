@@ -473,7 +473,9 @@ export function getSnippet(
   contextLines: number = 4,
 ): { snippet: string; startLine: number } {
   // Use the original algorithm from FileEditTool.tsx
-  const before = originalFile.split(oldString)[0] ?? ''
+  // Optimized: use indexOf + slice instead of split
+  const idx = originalFile.indexOf(oldString);
+  const before = idx >= 0 ? originalFile.slice(0, idx) : '';
   const replacementLine = before.split(/\r?\n/).length - 1
   const newFileLines = applyEditToFile(
     originalFile,
@@ -1014,7 +1016,9 @@ function multiOccurrenceFind(fileContent: string, search: string): string | null
  * Avoids false positives in large files with similar code patterns.
  */
 function syntaxAwareFind(fileContent: string, search: string): string | null {
-  const firstLine = search.split('\n')[0]!.trim()
+  // Optimized: use indexOf + slice instead of split
+  const nlIdx = search.indexOf('\n');
+  const firstLine = (nlIdx >= 0 ? search.slice(0, nlIdx) : search).trim();
 
   // Detect declaration keywords
   const declMatch = firstLine.match(

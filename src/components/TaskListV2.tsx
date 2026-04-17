@@ -142,7 +142,11 @@ export function TaskListV2({
   const pendingCount = count(tasks, t_4 => t_4.status === 'pending');
   const inProgressCount = tasks.length - completedCount - pendingCount;
   // Unresolved tasks (open or in_progress) block dependent tasks
-  const unresolvedTaskIds = new Set(tasks.filter(t_5 => t_5.status !== 'completed').map(t_6 => t_6.id));
+  // Optimized: single pass to build Set
+  const unresolvedTaskIds = new Set<string>();
+  for (const t of tasks) {
+    if (t.status !== 'completed') unresolvedTaskIds.add(t.id);
+  }
 
   // Check if we need to truncate
   const needsTruncation = tasks.length > maxDisplay;

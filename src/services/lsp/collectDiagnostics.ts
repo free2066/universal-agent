@@ -46,12 +46,16 @@ export async function collectLSPDiagnosticsForFile(
 
     const allFiles = pending.flatMap(p => p.files)
 
-    // Find errors in the written file
-    currentFile = allFiles.find(f => f.uri === normalizedUri || f.uri === filePath)
-    // Find errors in other affected files (up to MAX_OTHER_FILES)
-    otherFiles = allFiles
-      .filter(f => f.uri !== normalizedUri && f.uri !== filePath)
-      .slice(0, MAX_OTHER_FILES)
+    // Optimized: single pass to find current file and other files
+    currentFile = undefined
+    otherFiles = []
+    for (const f of allFiles) {
+      if (f.uri === normalizedUri || f.uri === filePath) {
+        currentFile = f
+      } else if (otherFiles.length < MAX_OTHER_FILES) {
+        otherFiles.push(f)
+      }
+    }
 
     // Check if we have any errors (severity === 'Error' or severity === 1)
     const hasErrors = (f: DiagnosticFile) =>

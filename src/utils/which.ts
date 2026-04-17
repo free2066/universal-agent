@@ -13,7 +13,10 @@ async function whichNodeAsync(command: string): Promise<string | null> {
       return null
     }
     // where.exe returns multiple paths separated by newlines, return the first
-    return result.stdout.trim().split(/\r?\n/)[0] || null
+    // Optimized: use indexOf + slice instead of split
+    const trimmed = result.stdout.trim();
+    const nlIdx = trimmed.indexOf('\n');
+    return (nlIdx >= 0 ? trimmed.slice(0, nlIdx) : trimmed).replace(/\r$/, '') || null
   }
 
   // On POSIX systems (macOS, Linux, WSL), use which
@@ -38,7 +41,9 @@ function whichNodeSync(command: string): string | null {
         stdio: ['ignore', 'pipe', 'ignore'],
       })
       const output = result.toString().trim()
-      return output.split(/\r?\n/)[0] || null
+      // Optimized: use indexOf + slice instead of split
+      const nlIdx2 = output.indexOf('\n');
+      return (nlIdx2 >= 0 ? output.slice(0, nlIdx2) : output).replace(/\r$/, '') || null
     } catch {
       return null
     }

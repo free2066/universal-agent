@@ -128,7 +128,8 @@ function extractFromServerConfigRecord(
     // Collect all extensions from extensionToLanguage mapping
     const extMapping = config.extensionToLanguage
     if (isRecord(extMapping)) {
-      for (const ext of Object.keys(extMapping)) {
+      // Optimized: use for...in instead of Object.keys()
+      for (const ext in extMapping) {
         extensions.add(ext.toLowerCase())
       }
     }

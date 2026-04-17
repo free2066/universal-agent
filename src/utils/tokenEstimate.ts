@@ -75,7 +75,8 @@ function countStructureOverhead(text: string): number {
   let overhead = 0
   
   // Count JSON/code structural characters using pre-compiled regexes
-  for (const char of Object.keys(STRUCTURAL_CHAR_REGEXES)) {
+  // Optimized: use for...in instead of Object.keys()
+  for (const char in STRUCTURAL_CHAR_REGEXES) {
     const re = STRUCTURAL_CHAR_REGEXES[char]
     re.lastIndex = 0 // Reset lastIndex for global regex
     const matches = text.match(re)

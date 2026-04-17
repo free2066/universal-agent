@@ -19,6 +19,28 @@ import { logForDebugging } from '../../utils/debug.js';
 import { updateSettingsForSource } from '../../utils/settings/settings.js';
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js';
 import { validateModel } from '../../utils/model/validateModel.js';
+
+// Optimized: module-level cache for UA_EXTRA_MODELS parsed result
+let _uaExtraProfilesCache: { name: string; displayName?: string }[] | null | undefined = undefined
+let _uaExtraEnvCache: string | undefined = undefined
+
+function getUAExtraProfiles(): { name: string; displayName?: string }[] | null {
+  const envValue = process.env.UA_EXTRA_MODELS
+  if (!envValue) { _uaExtraProfilesCache = null; _uaExtraEnvCache = undefined; return null }
+  if (envValue === _uaExtraEnvCache && _uaExtraProfilesCache !== undefined) {
+    return _uaExtraProfilesCache
+  }
+  try {
+    const parsed = JSON.parse(envValue)
+    _uaExtraProfilesCache = Array.isArray(parsed) ? parsed : null
+    _uaExtraEnvCache = envValue
+  } catch {
+    _uaExtraProfilesCache = null
+    _uaExtraEnvCache = envValue
+  }
+  return _uaExtraProfilesCache
+}
+
 function ModelPickerWrapper(t0) {
   const $ = _c(17);
   const {
@@ -60,18 +82,16 @@ function ModelPickerWrapper(t0) {
         mainLoopModelForSession: null
       }));
       // UA: 更新 UA_MODEL_DISPLAY_NAME 环境变量
+      // Optimized: use cached profiles
       if (model) {
-        const uaExtra = process.env.UA_EXTRA_MODELS
-        if (uaExtra) {
-          try {
-            const profiles = JSON.parse(uaExtra)
-            const match = Array.isArray(profiles) ? profiles.find((p: any) => p.name === model) : null
-            if (match?.displayName) {
-              process.env.UA_MODEL_DISPLAY_NAME = match.displayName
-            } else {
-              delete process.env.UA_MODEL_DISPLAY_NAME
-            }
-          } catch {}
+        const profiles = getUAExtraProfiles()
+        if (profiles) {
+          const match = profiles.find(p => p.name === model)
+          if (match?.displayName) {
+            process.env.UA_MODEL_DISPLAY_NAME = match.displayName
+          } else {
+            delete process.env.UA_MODEL_DISPLAY_NAME
+          }
         }
       } else {
         delete process.env.UA_MODEL_DISPLAY_NAME
@@ -233,19 +253,17 @@ function SetModelAndClose({
         logForDebugging(`[model-switch] Failed to persist model setting: ${(err as Error).message}`, { level: 'warn' })
       }
       // UA: 更新 UA_MODEL_DISPLAY_NAME 环境变量（从 UA_EXTRA_MODELS 查找）
+      // Optimized: use cached profiles
       if (modelValue) {
-        const uaExtra = process.env.UA_EXTRA_MODELS
-        if (uaExtra) {
-          try {
-            const profiles = JSON.parse(uaExtra)
-            const match = Array.isArray(profiles) ? profiles.find((p: any) => p.name === modelValue) : null
-            if (match?.displayName) {
-              process.env.UA_MODEL_DISPLAY_NAME = match.displayName
-            } else {
-              // 如果找不到 displayName，清除之前设置的值
-              delete process.env.UA_MODEL_DISPLAY_NAME
-            }
-          } catch {}
+        const profiles = getUAExtraProfiles()
+        if (profiles) {
+          const match = profiles.find(p => p.name === modelValue)
+          if (match?.displayName) {
+            process.env.UA_MODEL_DISPLAY_NAME = match.displayName
+          } else {
+            // 如果找不到 displayName，清除之前设置的值
+            delete process.env.UA_MODEL_DISPLAY_NAME
+          }
         }
       } else {
         // 切换到 default 时清除
@@ -253,14 +271,12 @@ function SetModelAndClose({
       }
       // UA: 记录模型切换日志，帮助排查切换后 credentials 不对的问题
       if (process.env.UA_DEBUG_LOG) {
-        const uaExtra = process.env.UA_EXTRA_MODELS
+        // Optimized: use cached profiles
+        const profiles = getUAExtraProfiles()
         let displayName = modelValue ?? 'default'
-        if (uaExtra && modelValue) {
-          try {
-            const profiles = JSON.parse(uaExtra)
-            const match = Array.isArray(profiles) ? profiles.find((p: any) => p.name === modelValue) : null
-            if (match) displayName = `${match.displayName} (${modelValue})`
-          } catch {}
+        if (profiles && modelValue) {
+          const match = profiles.find(p => p.name === modelValue)
+          if (match) displayName = `${match.displayName} (${modelValue})`
         }
         void appendFile(process.env.UA_DEBUG_LOG,
           `[${new Date().toISOString()}] [model-switch] → ${displayName}\n` +

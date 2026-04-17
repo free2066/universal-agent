@@ -269,15 +269,20 @@ export function setupNetworkListeners(
   patterns: string[],
   maxRequests = 200,
 ): void {
+  // Optimized: precompile all regex patterns once
+  const compiledPatterns: RegExp[] = patterns.map(p => {
+    const escaped = p
+      .replace(/\*\*/g, '\x00DBLSTAR\x00')
+      .replace(/\*/g, '\x00STAR\x00')
+      .replace(/[.+?()\[\]{} ^$|\\]/g, '\\$&')
+      .replace(/\x00DBLSTAR\x00/g, '.*')
+      .replace(/\x00STAR\x00/g, '[^/]*');
+    return new RegExp(escaped);
+  });
+  
   const matchesPattern = (url: string): boolean => {
-    for (const p of patterns) {
-      const escaped = p
-        .replace(/\*\*/g, '\x00DBLSTAR\x00')
-        .replace(/\*/g, '\x00STAR\x00')
-        .replace(/[.+?()\[\]{} ^$|\\]/g, '\\$&')
-        .replace(/\x00DBLSTAR\x00/g, '.*')
-        .replace(/\x00STAR\x00/g, '[^/]*');
-      if (new RegExp(escaped).test(url)) return true;
+    for (const re of compiledPatterns) {
+      if (re.test(url)) return true;
     }
     return false;
   };

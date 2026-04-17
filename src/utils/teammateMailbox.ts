@@ -28,6 +28,9 @@ import { TEAM_LEAD_NAME } from './swarm/constants.js'
 import { sanitizePathComponent } from './tasks.js'
 import { getAgentName, getTeammateColor, getTeamName } from './teammate.js'
 
+// Optimized: cache TEAM_LEAD_NAME lowercased for repeated comparisons
+const TEAM_LEAD_NAME_LOWER = TEAM_LEAD_NAME.toLowerCase()
+
 // Lock options: retry with backoff so concurrent callers (multiple Claudes
 // in a swarm) wait for the lock instead of failing immediately. The sync
 // lockSync API blocked the event loop; the async API needs explicit retries
@@ -1166,7 +1169,7 @@ export function getLastPeerDmSummary(messages: Message[]): string | undefined {
         'to' in block.input &&
         typeof block.input.to === 'string' &&
         block.input.to !== '*' &&
-        block.input.to.toLowerCase() !== TEAM_LEAD_NAME.toLowerCase() &&
+        block.input.to.toLowerCase() !== TEAM_LEAD_NAME_LOWER &&
         'message' in block.input &&
         typeof block.input.message === 'string'
       ) {

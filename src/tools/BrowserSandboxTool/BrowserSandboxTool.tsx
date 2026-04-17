@@ -149,20 +149,32 @@ function getDefaultPatterns(): string[] {
   return ['**/api/**', '**/data/**', '**/query**', '**/*.json', '**/graphql**']
 }
 
-function matchesPattern(url: string, patterns: string[]): boolean {
-  // Use precompiled default patterns for performance
-  if (patterns === getDefaultPatterns()) {
-    return DEFAULT_PATTERN_REGEXES.some(re => re.test(url))
-  }
-  // Fallback for custom patterns
-  for (const p of patterns) {
+// Cache for compiled regex patterns
+const PATTERN_REGEX_CACHE = new Map<string, RegExp>()
+
+function compilePatternToRegex(p: string): RegExp {
+  let cached = PATTERN_REGEX_CACHE.get(p)
+  if (!cached) {
     const escaped = p
       .replace(/\*\*/g, '\x00DBLSTAR\x00')
       .replace(/\*/g, '\x00STAR\x00')
       .replace(/[.+?()\[\]{}^$|\\]/g, '\\$&')
       .replace(/\x00DBLSTAR\x00/g, '.*')
       .replace(/\x00STAR\x00/g, '[^/]*')
-    if (new RegExp(escaped).test(url)) return true
+    cached = new RegExp(escaped)
+    PATTERN_REGEX_CACHE.set(p, cached)
+  }
+  return cached
+}
+
+function matchesPattern(url: string, patterns: string[]): boolean {
+  // Use precompiled default patterns for performance
+  if (patterns === getDefaultPatterns()) {
+    return DEFAULT_PATTERN_REGEXES.some(re => re.test(url))
+  }
+  // Fallback for custom patterns - use cached regex
+  for (const p of patterns) {
+    if (compilePatternToRegex(p).test(url)) return true
   }
   return false
 }

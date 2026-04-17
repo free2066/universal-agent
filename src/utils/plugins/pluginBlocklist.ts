@@ -40,7 +40,8 @@ export function detectDelistedPlugins(
   const suffix = `@${marketplaceName}`
 
   const delisted: string[] = []
-  for (const pluginId of Object.keys(installedPlugins.plugins)) {
+  // Optimized: use for...in instead of Object.keys()
+  for (const pluginId in installedPlugins.plugins) {
     if (!pluginId.endsWith(suffix)) continue
 
     const pluginName = pluginId.slice(0, -suffix.length)

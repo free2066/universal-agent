@@ -211,7 +211,8 @@ function findUnmatched(entries: readonly ChannelEntry[], allowlist: ReturnType<t
   const scopes = ['enterprise', 'user', 'project', 'local'] as const;
   const configured = new Set<string>();
   for (const scope of scopes) {
-    for (const name of Object.keys(getMcpConfigsByScope(scope).servers)) {
+    // Optimized: use for...in instead of Object.keys()
+    for (const name in getMcpConfigsByScope(scope).servers) {
       configured.add(name);
     }
   }

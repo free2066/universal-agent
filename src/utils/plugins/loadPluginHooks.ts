@@ -131,8 +131,9 @@ export const loadPluginHooks = memoize(async (): Promise<void> => {
     const pluginMatchers = convertPluginHooksToMatchers(plugin)
 
     // Merge plugin hooks into the main collection
-    for (const event of Object.keys(pluginMatchers) as HookEvent[]) {
-      allPluginHooks[event].push(...pluginMatchers[event])
+    // Optimized: use for...in instead of Object.keys()
+    for (const event in pluginMatchers) {
+      allPluginHooks[event as HookEvent].push(...pluginMatchers[event as HookEvent])
     }
   }
 

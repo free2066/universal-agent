@@ -160,8 +160,12 @@ export function hashMcpConfig(config: ScopedMcpServerConfig): string {
   const stable = jsonStringify(rest, (_k, v: unknown) => {
     if (v && typeof v === 'object' && !Array.isArray(v)) {
       const obj = v as Record<string, unknown>
+      // Optimized: get keys once and sort
+      const keys = Object.keys(obj).sort()
       const sorted: Record<string, unknown> = {}
-      for (const k of Object.keys(obj).sort()) sorted[k] = obj[k]
+      for (let i = 0; i < keys.length; i++) {
+        sorted[keys[i]!] = obj[keys[i]!]
+      }
       return sorted
     }
     return v

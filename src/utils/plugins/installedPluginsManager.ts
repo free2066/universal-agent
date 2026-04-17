@@ -756,7 +756,8 @@ export function removeAllPluginsForMarketplace(marketplaceName: string): {
   const orphanedPaths = new Set<string>()
   const removedPluginIds: string[] = []
 
-  for (const pluginId of Object.keys(data.plugins)) {
+  // Optimized: use for...in instead of Object.keys()
+  for (const pluginId in data.plugins) {
     if (!pluginId.endsWith(suffix)) {
       continue
     }

@@ -160,7 +160,9 @@ function parsePatternCommand(
     }
 
     if (!afterDoubleDash && arg.startsWith('-')) {
-      const flag = arg.split('=')[0]
+      // Optimized: use indexOf + slice instead of split
+      const eqIdx = arg.indexOf('=');
+      const flag = eqIdx >= 0 ? arg.slice(0, eqIdx) : arg;
       // Pattern flags mark that we've found the pattern
       if (flag && ['-e', '--regexp', '-f', '--file'].includes(flag)) {
         patternFound = true
@@ -463,7 +465,9 @@ export const PATH_EXTRACTORS: Record<
       }
 
       if (!afterDoubleDash && arg.startsWith('-')) {
-        const flag = arg.split('=')[0]
+        // Optimized: use indexOf + slice instead of split
+        const eqIdx2 = arg.indexOf('=');
+        const flag = eqIdx2 >= 0 ? arg.slice(0, eqIdx2) : arg;
         // Pattern flags mark that we've found the filter
         if (flag && ['-e', '--expression'].includes(flag)) {
           filterFound = true

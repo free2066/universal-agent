@@ -154,7 +154,10 @@ function logClassifierResultForAnts(
 function skipSafeEnvVarPrefix(tokens: string[]): number | null {
   let i = 0
   while (i < tokens.length && ENV_VAR_ASSIGN_RE.test(tokens[i]!)) {
-    const varName = tokens[i]!.split('=')[0]!
+    // Optimized: use indexOf + slice instead of split
+    const token = tokens[i]!;
+    const eqIdx = token.indexOf('=');
+    const varName = eqIdx >= 0 ? token.slice(0, eqIdx) : token;
     const isAntOnlySafe =
       process.env.USER_TYPE === 'ant' && ANT_ONLY_SAFE_ENV_VARS.has(varName)
     if (!SAFE_ENV_VARS.has(varName) && !isAntOnlySafe) {
@@ -283,7 +286,9 @@ function suggestionForExactCommand(command: string): PermissionUpdate[] {
   // the middle, which fails permission validation and corrupts the settings
   // file. Use the first line as a prefix rule instead.
   if (command.includes('\n')) {
-    const firstLine = command.split('\n')[0]!.trim()
+    // Optimized: use indexOf + slice instead of split
+    const nlIdx = command.indexOf('\n');
+    const firstLine = (nlIdx >= 0 ? command.slice(0, nlIdx) : command).trim();
     if (firstLine) {
       return sharedSuggestionForPrefix(BashTool.name, firstLine)
     }

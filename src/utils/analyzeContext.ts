@@ -1237,17 +1237,16 @@ export async function analyzeContextUsage(
   const gridSquares: GridSquare[] = []
 
   // Separate reserved category for end placement (either autocompact or manual compact buffer)
-  const reservedCategory = categorySquares.find(
-    cat =>
-      cat.name === RESERVED_CATEGORY_NAME ||
-      cat.name === MANUAL_COMPACT_BUFFER_NAME,
-  )
-  const nonReservedCategories = categorySquares.filter(
-    cat =>
-      cat.name !== RESERVED_CATEGORY_NAME &&
-      cat.name !== MANUAL_COMPACT_BUFFER_NAME &&
-      cat.name !== 'Free space',
-  )
+  // Optimized: single pass to find reserved and non-reserved categories
+  let reservedCategory: CategorySquares | undefined
+  const nonReservedCategories: CategorySquares[] = []
+  for (const cat of categorySquares) {
+    if (cat.name === RESERVED_CATEGORY_NAME || cat.name === MANUAL_COMPACT_BUFFER_NAME) {
+      reservedCategory = cat
+    } else if (cat.name !== 'Free space') {
+      nonReservedCategories.push(cat)
+    }
+  }
 
   // Add all non-reserved, non-free-space squares first
   for (const cat of nonReservedCategories) {

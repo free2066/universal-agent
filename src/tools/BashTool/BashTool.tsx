@@ -135,7 +135,10 @@ export function isSearchOrReadBashCommand(command: string): {
     if (part === '||' || part === '&&' || part === '|' || part === ';') {
       continue;
     }
-    const baseCommand = part.trim().split(/\s+/)[0];
+    // Optimized: use indexOf + slice instead of split
+    const trimmed = part.trim();
+    const wsIdx = trimmed.search(/\s/);
+    const baseCommand = wsIdx >= 0 ? trimmed.slice(0, wsIdx) : trimmed;
     if (!baseCommand) {
       continue;
     }
@@ -271,7 +274,9 @@ function getCommandTypeForLogging(command: string): AnalyticsMetadata_I_VERIFIED
 
   // Check each part of the command to see if any match common background commands
   for (const part of parts) {
-    const baseCommand = part.split(' ')[0] || '';
+    // Optimized: use indexOf + slice instead of split
+    const spaceIdx = part.indexOf(' ');
+    const baseCommand = spaceIdx >= 0 ? part.slice(0, spaceIdx) : part;
     if (COMMON_BACKGROUND_COMMANDS.includes(baseCommand as (typeof COMMON_BACKGROUND_COMMANDS)[number])) {
       return baseCommand as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS;
     }
@@ -753,7 +758,9 @@ export const BashTool = buildTool({
         // File may already be gone — stdout preview is sufficient
       }
     }
-    const commandType = input.command.split(' ')[0];
+    // Optimized: use indexOf + slice instead of split
+    const spaceIdx = input.command.indexOf(' ');
+    const commandType = spaceIdx >= 0 ? input.command.slice(0, spaceIdx) : input.command;
     logEvent('tengu_bash_tool_command_executed', {
       command_type: commandType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       stdout_length: stdout.length,
