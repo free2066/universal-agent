@@ -9,6 +9,7 @@
 import type { SubscriptionType } from '../services/oauth/types.js'
 import { setMockBillingAccessOverride } from '../utils/billing.js'
 import type { OverageDisabledReason } from './claudeAiLimits.js'
+import { IS_ANT_USER } from '../utils/envUtils.js'
 
 /** Helper: Unix timestamp in seconds (avoids repeated Math.floor(Date.now() / 1000)) */
 function nowUnix(): number { return Math.floor(Date.now() / 1000) }
@@ -136,7 +137,7 @@ export function setMockHeader(
   key: MockHeaderKey,
   value: string | undefined,
 ): void {
-  if (process.env.USER_TYPE !== 'ant') {
+  if (!IS_ANT_USER) {
     return
   }
 
@@ -285,7 +286,7 @@ export function addExceededLimit(
   type: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet',
   hoursFromNow: number,
 ): void {
-  if (process.env.USER_TYPE !== 'ant') {
+  if (!IS_ANT_USER) {
     return
   }
 
@@ -313,7 +314,7 @@ export function setMockEarlyWarning(
   utilization: number,
   hoursFromNow?: number,
 ): void {
-  if (process.env.USER_TYPE !== 'ant') {
+  if (!IS_ANT_USER) {
     return
   }
 
@@ -651,7 +652,7 @@ export function getMockHeaderless429Message(): string | null {
 export function getMockHeaders(): MockHeaders | null {
   if (
     !mockEnabled ||
-    process.env.USER_TYPE !== 'ant' ||
+    !IS_ANT_USER ||
     Object.keys(mockHeaders).length === 0
   ) {
     return null
@@ -849,7 +850,7 @@ export function setMockSubscriptionType(
 }
 
 export function getMockSubscriptionType(): SubscriptionType | null {
-  if (!mockEnabled || process.env.USER_TYPE !== 'ant') {
+  if (!mockEnabled || !IS_ANT_USER) {
     return null
   }
   // Return the explicitly set subscription type, or default to 'max'
@@ -861,7 +862,7 @@ export function shouldUseMockSubscription(): boolean {
   return (
     mockEnabled &&
     mockSubscriptionType !== null &&
-    process.env.USER_TYPE === 'ant'
+    IS_ANT_USER
   )
 }
 

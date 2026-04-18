@@ -1,6 +1,13 @@
 import { LRUCache } from 'lru-cache'
 import { logError } from './log.js'
 import { jsonStringify } from './slowOperations.js'
+import { DEFAULT_CACHE_TTL_MS as IMPORTED_CACHE_TTL_MS } from '../constants/time.js'
+
+// ============================================================================
+// Cache constants
+// ============================================================================
+/** Default cache TTL in milliseconds (5 minutes) */
+const DEFAULT_CACHE_TTL_MS = IMPORTED_CACHE_TTL_MS
 
 type CacheEntry<T> = {
   value: T
@@ -39,7 +46,7 @@ type LRUMemoizedFunction<Args extends unknown[], Result> = {
  */
 export function memoizeWithTTL<Args extends unknown[], Result>(
   f: (...args: Args) => Result,
-  cacheLifetimeMs: number = 5 * 60 * 1000, // Default 5 minutes
+  cacheLifetimeMs: number = DEFAULT_CACHE_TTL_MS, // Default 5 minutes
 ): MemoizedFunction<Args, Result> {
   const cache = new Map<string, CacheEntry<Result>>()
 
@@ -119,7 +126,7 @@ export function memoizeWithTTL<Args extends unknown[], Result>(
  */
 export function memoizeWithTTLAsync<Args extends unknown[], Result>(
   f: (...args: Args) => Promise<Result>,
-  cacheLifetimeMs: number = 5 * 60 * 1000, // Default 5 minutes
+  cacheLifetimeMs: number = DEFAULT_CACHE_TTL_MS, // Default 5 minutes
 ): ((...args: Args) => Promise<Result>) & { cache: { clear: () => void } } {
   const cache = new Map<string, CacheEntry<Result>>()
   // In-flight cold-miss dedup. The old memoizeWithTTL (sync) accidentally

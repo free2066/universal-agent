@@ -4,6 +4,12 @@ import { homedir } from 'os'
 import { join } from 'path'
 
 // ============================================================================
+// Environment constants
+// ============================================================================
+export const USER_TYPE_ANT = 'ant'
+export const IS_ANT_USER = process.env.USER_TYPE === USER_TYPE_ANT
+
+// ============================================================================
 // Precompiled regex patterns (performance optimization)
 // ============================================================================
 const WHITESPACE_RE = /\s+/

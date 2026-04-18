@@ -3,6 +3,7 @@ import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import { MultiModelAnthropicAdapter, isNonAnthropicModel } from './multiModelAdapter.js'
 import type { GoogleAuth } from 'google-auth-library'
+import { API_TIMEOUT_MS } from '../../constants/time.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
   getAnthropicApiKey,
@@ -151,7 +152,7 @@ export async function getAnthropicClient({
   const ARGS = {
     defaultHeaders,
     maxRetries,
-    timeout: parseInt(process.env.API_TIMEOUT_MS || String(600 * 1000), 10),
+    timeout: parseInt(process.env.API_TIMEOUT_MS || String(API_TIMEOUT_MS), 10),
     dangerouslyAllowBrowser: true,
     fetchOptions: getProxyFetchOptions({
       forAnthropicAPI: true,

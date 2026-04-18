@@ -77,9 +77,10 @@ import {
 import { sleep } from './sleep.js'
 import { jsonParse } from './slowOperations.js'
 import { clearToolSchemaCache } from './toolSchemaCache.js'
+import { TTL_5_MINUTES_MS } from '../constants/time.js'
 
 /** Default TTL for API key helper cache in milliseconds (5 minutes) */
-const DEFAULT_API_KEY_HELPER_TTL = 5 * 60 * 1000
+const DEFAULT_API_KEY_HELPER_TTL_MS = TTL_5_MINUTES_MS
 
 /**
  * CCR and Claude Desktop spawn the CLI with OAuth and should never fall back
@@ -447,7 +448,7 @@ export function calculateApiKeyHelperTTL(): number {
     )
   }
 
-  return DEFAULT_API_KEY_HELPER_TTL
+  return DEFAULT_API_KEY_HELPER_TTL_MS
 }
 
 // Async API key helper with sync cache for non-blocking reads.

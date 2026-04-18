@@ -6,6 +6,7 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from './analytics/index.js'
+import { IS_ANT_USER } from '../utils/envUtils.js'
 
 /**
  * Get the current Kubernetes namespace:
@@ -15,7 +16,7 @@ import {
  * ...
  */
 const getKubernetesNamespace = memoize(async (): Promise<string | null> => {
-  if (process.env.USER_TYPE !== 'ant') {
+  if (!IS_ANT_USER) {
     return null
   }
   const namespacePath =
@@ -33,7 +34,7 @@ const getKubernetesNamespace = memoize(async (): Promise<string | null> => {
  * Get the OCI container ID from within a running container
  */
 export const getContainerId = memoize(async (): Promise<string | null> => {
-  if (process.env.USER_TYPE !== 'ant') {
+  if (!IS_ANT_USER) {
     return null
   }
   const containerIdPath = '/proc/self/mountinfo'
@@ -72,7 +73,7 @@ export async function logPermissionContextForAnts(
   toolPermissionContext: ToolPermissionContext | null,
   moment: 'summary' | 'initialization',
 ): Promise<void> {
-  if (process.env.USER_TYPE !== 'ant') {
+  if (!IS_ANT_USER) {
     return
   }
 

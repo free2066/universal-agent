@@ -17,6 +17,7 @@ import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { isPreapprovedHost } from './preapproved.js'
 import { makeSecondaryModelPrompt } from './prompt.js'
+import { TTL_15_MINUTES_MS } from '../../constants/time.js'
 
 // Custom error classes for domain blocking
 class DomainBlockedError extends Error {
@@ -59,9 +60,11 @@ type CacheEntry = {
   persistedSize?: number
 }
 
+import { TTL_15_MINUTES_MS } from '../../constants/time.js'
+
 // Cache with 15-minute TTL and 50MB size limit
 // LRUCache handles automatic expiration and eviction
-const CACHE_TTL_MS = 15 * 60 * 1000 // 15 minutes
+const CACHE_TTL_MS = TTL_15_MINUTES_MS
 const MAX_CACHE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB
 
 const URL_CACHE = new LRUCache<string, CacheEntry>({
