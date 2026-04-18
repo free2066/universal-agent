@@ -40,7 +40,7 @@ import {
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js'
 
 /** Cached user type check - evaluated once at module load time */
-const IS_ANT_USER = IS_ANT_USER
+const IS_ANT_USER = process.env.USER_TYPE === 'ant'
 import {
   type ConnectorTextBlock,
   type ConnectorTextDelta,

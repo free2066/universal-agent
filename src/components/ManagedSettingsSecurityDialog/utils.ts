@@ -102,12 +102,18 @@ export function hasDangerousSettingsChanged(
   }
 
   // Compare the dangerous settings - any change triggers a prompt
-  // Optimized: use direct property comparison instead of JSON.stringify
-  return (
-    oldDangerous.shellSettings !== newDangerous.shellSettings ||
-    oldDangerous.envVars !== newDangerous.envVars ||
-    oldDangerous.hooks !== newDangerous.hooks
-  )
+  // Use JSON.stringify for deep comparison since extractDangerousSettings() creates fresh objects
+  const oldJson = jsonStringify({
+    shellSettings: oldDangerous.shellSettings,
+    envVars: oldDangerous.envVars,
+    hooks: oldDangerous.hooks,
+  })
+  const newJson = jsonStringify({
+    shellSettings: newDangerous.shellSettings,
+    envVars: newDangerous.envVars,
+    hooks: newDangerous.hooks,
+  })
+  return oldJson !== newJson
 }
 
 /**
