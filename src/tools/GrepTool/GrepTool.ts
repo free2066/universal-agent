@@ -56,8 +56,12 @@ function getCacheKey(
   output_mode: string,
   case_insensitive: boolean,
   multiline: boolean,
+  context_before: number | undefined,
+  context_after: number | undefined,
+  context: number | undefined,
+  show_line_numbers: boolean,
 ): string {
-  return `${pattern}|${path}|${glob || ''}|${type || ''}|${output_mode}|${case_insensitive ? 'i' : ''}|${multiline ? 'm' : ''}`
+  return `${pattern}|${path}|${glob || ''}|${type || ''}|${output_mode}|${case_insensitive ? 'i' : ''}|${multiline ? 'm' : ''}|B${context_before ?? ''}|A${context_after ?? ''}|C${context ?? ''}|n${show_line_numbers ? '1' : '0'}`
 }
 
 function cleanExpiredCache(): void {
@@ -381,24 +385,67 @@ export const GrepTool = buildTool({
       output_mode,
       case_insensitive,
       multiline,
+      context_before,
+      context_after,
+      context ?? context_c,
+      show_line_numbers,
     )
     
     const cached = grepCache.get(cacheKey)
     if (cached && Date.now() - cached.timestamp < GREP_CACHE_TTL) {
-      // Apply pagination to cached result
-      const { items, appliedLimit } = applyHeadLimit(
-        cached.result.filenames,
-        head_limit,
-        offset,
-      )
-      const output: Output = {
-        ...cached.result,
-        filenames: items,
-        numFiles: items.length,
-        ...(appliedLimit !== undefined && { appliedLimit }),
-        ...(offset > 0 && { appliedOffset: offset }),
+      // Apply pagination to cached result based on mode
+      if (cached.result.mode === 'content' && cached.result.content !== undefined) {
+        // For content mode, split content into lines and re-apply pagination
+        const lines = cached.result.content.split('\n')
+        const { items, appliedLimit } = applyHeadLimit(
+          lines,
+          head_limit,
+          offset,
+        )
+        const output: Output = {
+          mode: 'content',
+          numFiles: 0,
+          filenames: [],
+          content: items.join('\n'),
+          numLines: items.length,
+          ...(appliedLimit !== undefined && { appliedLimit }),
+          ...(offset > 0 && { appliedOffset: offset }),
+        }
+        return { data: output }
+      } else if (cached.result.mode === 'count' && cached.result.content !== undefined) {
+        // For count mode, split content into lines and re-apply pagination
+        const lines = cached.result.content.split('\n')
+        const { items, appliedLimit } = applyHeadLimit(
+          lines,
+          head_limit,
+          offset,
+        )
+        const output: Output = {
+          mode: 'count',
+          numFiles: cached.result.numFiles,
+          filenames: [],
+          content: items.join('\n'),
+          numMatches: cached.result.numMatches,
+          ...(appliedLimit !== undefined && { appliedLimit }),
+          ...(offset > 0 && { appliedOffset: offset }),
+        }
+        return { data: output }
+      } else {
+        // For files_with_matches mode, apply pagination to filenames array
+        const { items, appliedLimit } = applyHeadLimit(
+          cached.result.filenames,
+          head_limit,
+          offset,
+        )
+        const output: Output = {
+          ...cached.result,
+          filenames: items,
+          numFiles: items.length,
+          ...(appliedLimit !== undefined && { appliedLimit }),
+          ...(offset > 0 && { appliedOffset: offset }),
+        }
+        return { data: output }
       }
-      return { data: output }
     }
     
     const args = ['--hidden']
@@ -530,17 +577,9 @@ export const GrepTool = buildTool({
     if (output_mode === 'content') {
       // For content mode, results are the actual content lines
       // Convert absolute paths to relative paths to save tokens
-
-      // Apply head_limit first — relativize is per-line work, so
-      // avoid processing lines that will be discarded (broad patterns can
-      // return 10k+ lines with head_limit keeping only ~30-100).
-      const { items: limitedResults, appliedLimit } = applyHeadLimit(
-        results,
-        head_limit,
-        offset,
-      )
-
-      const finalLines = limitedResults.map(line => {
+      
+      // First, relativize all lines (we'll cache the full result for pagination)
+      const relativizedLines = results.map(line => {
         // Lines have format: /absolute/path:line_content or /absolute/path:num:content
         const colonIndex = line.indexOf(':')
         if (colonIndex > 0) {
@@ -550,37 +589,39 @@ export const GrepTool = buildTool({
         }
         return line
       })
+      
+      // Cache the full result (before pagination)
+      grepCache.set(cacheKey, {
+        key: cacheKey,
+        result: { mode: 'content', numFiles: 0, filenames: [], content: relativizedLines.join('\n'), numLines: relativizedLines.length },
+        timestamp: Date.now(),
+      })
+      
+      // Apply head_limit to the relativized results
+      const { items: limitedResults, appliedLimit } = applyHeadLimit(
+        relativizedLines,
+        head_limit,
+        offset,
+      )
+      
       const output = {
         mode: 'content' as const,
         numFiles: 0, // Not applicable for content mode
         filenames: [],
-        content: finalLines.join('\n'),
-        numLines: finalLines.length,
+        content: limitedResults.join('\n'),
+        numLines: limitedResults.length,
         ...(appliedLimit !== undefined && { appliedLimit }),
         ...(offset > 0 && { appliedOffset: offset }),
       }
-      
-      // Cache the result (without pagination)
-      grepCache.set(cacheKey, {
-        key: cacheKey,
-        result: { mode: 'content', numFiles: 0, filenames: [], content: output.content, numLines: output.numLines },
-        timestamp: Date.now(),
-      })
       
       return { data: output }
     }
 
     if (output_mode === 'count') {
       // For count mode, pass through raw ripgrep output (filename:count format)
-      // Apply head_limit first to avoid relativizing entries that will be discarded.
-      const { items: limitedResults, appliedLimit } = applyHeadLimit(
-        results,
-        head_limit,
-        offset,
-      )
-
-      // Convert absolute paths to relative paths to save tokens
-      const finalCountLines = limitedResults.map(line => {
+      
+      // First, relativize all lines (we'll cache the full result for pagination)
+      const relativizedLines = results.map(line => {
         // Lines have format: /absolute/path:count
         const colonIndex = line.lastIndexOf(':')
         if (colonIndex > 0) {
@@ -591,10 +632,10 @@ export const GrepTool = buildTool({
         return line
       })
 
-      // Parse count output to extract total matches and file count
+      // Parse count output to extract total matches and file count (from full results)
       let totalMatches = 0
       let fileCount = 0
-      for (const line of finalCountLines) {
+      for (const line of relativizedLines) {
         const colonIndex = line.lastIndexOf(':')
         if (colonIndex > 0) {
           const countStr = line.substring(colonIndex + 1)
@@ -605,23 +646,30 @@ export const GrepTool = buildTool({
           }
         }
       }
+      
+      // Cache the full result (before pagination)
+      grepCache.set(cacheKey, {
+        key: cacheKey,
+        result: { mode: 'count', numFiles: fileCount, filenames: [], content: relativizedLines.join('\n'), numMatches: totalMatches },
+        timestamp: Date.now(),
+      })
+      
+      // Apply head_limit to the relativized results
+      const { items: limitedResults, appliedLimit } = applyHeadLimit(
+        relativizedLines,
+        head_limit,
+        offset,
+      )
 
       const output = {
         mode: 'count' as const,
         numFiles: fileCount,
         filenames: [],
-        content: finalCountLines.join('\n'),
+        content: limitedResults.join('\n'),
         numMatches: totalMatches,
         ...(appliedLimit !== undefined && { appliedLimit }),
         ...(offset > 0 && { appliedOffset: offset }),
       }
-      
-      // Cache the result (without pagination)
-      grepCache.set(cacheKey, {
-        key: cacheKey,
-        result: { mode: 'count', numFiles: fileCount, filenames: [], content: output.content, numMatches: totalMatches },
-        timestamp: Date.now(),
-      })
       
       return { data: output }
     }
