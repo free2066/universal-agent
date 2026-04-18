@@ -263,7 +263,7 @@ export function getPluginInstallationFromV2(pluginId: string): {
   const installedData = loadInstalledPluginsV2()
   const installations = installedData.plugins[pluginId]
 
-  if (!installations || installations.length === 0) {
+  if (!installations?.length) {
     return { scope: 'user' }
   }
 
@@ -857,7 +857,7 @@ export async function updatePluginOp(
   const diskData = loadInstalledPluginsFromDisk()
   const installations = diskData.plugins[pluginId]
 
-  if (!installations || installations.length === 0) {
+  if (!installations?.length) {
     return {
       success: false,
       message: `Plugin "${pluginName}" is not installed`,

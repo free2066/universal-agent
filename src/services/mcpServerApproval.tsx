@@ -17,7 +17,7 @@ export async function handleMcpjsonServerApprovals(root: Root): Promise<void> {
     servers: projectServers
   } = getMcpConfigsByScope('project');
   const pendingServers = Object.keys(projectServers).filter(serverName => getProjectMcpServerStatus(serverName) === 'pending');
-  if (pendingServers.length === 0) {
+  if (!pendingServers.length) {
     return;
   }
   await new Promise<void>(resolve => {

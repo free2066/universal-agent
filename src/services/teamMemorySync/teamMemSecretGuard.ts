@@ -29,7 +29,7 @@ export function checkTeamMemSecrets(
     }
 
     const matches = scanForSecrets(content)
-    if (matches.length === 0) {
+    if (!matches.length) {
       return null
     }
 

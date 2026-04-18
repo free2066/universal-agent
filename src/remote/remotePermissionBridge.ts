@@ -59,7 +59,7 @@ export function createToolStub(toolName: string): Tool {
     userFacingName: () => toolName,
     renderToolUseMessage: (input: Record<string, unknown>) => {
       const entries = Object.entries(input)
-      if (entries.length === 0) return ''
+      if (!entries.length) return ''
       return entries
         .slice(0, 3)
         .map(([key, value]) => {

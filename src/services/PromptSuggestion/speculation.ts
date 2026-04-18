@@ -258,7 +258,7 @@ export function prepareMessagesForInjection(messages: Message[]): Message[] {
       if (!('message' in msg) || !Array.isArray(msg.message.content)) return msg
       const content = msg.message.content.filter(keep)
       if (content.length === msg.message.content.length) return msg
-      if (content.length === 0) return null
+      if (!content.length) return null
       // Drop messages where all remaining blocks are whitespace-only text
       // (API rejects these with 400: "text content blocks must contain non-whitespace text")
       const hasNonWhitespaceContent = content.some(
@@ -279,7 +279,7 @@ function createSpeculationFeedbackMessage(
 ): Message | null {
   if (process.env.USER_TYPE !== 'ant') return null
 
-  if (messages.length === 0 || timeSavedMs === 0) return null
+  if (!messages.length || !timeSavedMs) return null
 
   const toolUses = countToolsInMessages(messages)
   const tokens = boundary?.type === 'complete' ? boundary.outputTokens : null

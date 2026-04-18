@@ -104,7 +104,7 @@ let flushTimer: NodeJS.Timeout | null = null
 let datadogInitialized: boolean | null = null
 
 async function flushLogs(): Promise<void> {
-  if (logBatch.length === 0) return
+  if (!logBatch.length) return
 
   const logsToSend = logBatch
   logBatch = []

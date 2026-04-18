@@ -181,7 +181,7 @@ function formatCost(cost: number, maxDecimalPlaces: number = 4): string {
 
 function formatModelUsage(): string {
   const modelUsageMap = getModelUsage()
-  if (Object.keys(modelUsageMap).length === 0) {
+  if (!Object.keys(modelUsageMap).length) {
     return 'Usage:                 0 input, 0 output, 0 cache read, 0 cache write'
   }
 

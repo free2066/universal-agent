@@ -11,7 +11,7 @@ import type { Tip, TipContext } from './types.js'
 export function selectTipWithLongestTimeSinceShown(
   availableTips: Tip[],
 ): Tip | undefined {
-  if (availableTips.length === 0) {
+  if (!availableTips.length) {
     return undefined
   }
 
@@ -39,7 +39,7 @@ export async function getTipToShowOnSpinner(
   }
 
   const tips = await getRelevantTips(context)
-  if (tips.length === 0) {
+  if (!tips.length) {
     return undefined
   }
 

@@ -90,7 +90,7 @@ export async function performBackgroundPluginInstallations(
       },
     }))
 
-    if (pendingNames.length === 0) {
+    if (!pendingNames.length) {
       return
     }
 

@@ -49,7 +49,7 @@ export async function generateToolUseSummary({
   isNonInteractiveSession,
   lastAssistantText,
 }: GenerateToolUseSummaryParams): Promise<string | null> {
-  if (tools.length === 0) {
+  if (!tools.length) {
     return null
   }
 

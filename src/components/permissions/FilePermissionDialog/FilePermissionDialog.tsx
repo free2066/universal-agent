@@ -137,7 +137,7 @@ export function FilePermissionDialog<T extends ToolInput = ToolInput>({
     edits: (ideDiffConfig.edits || []).map(e => ({
       old_string: e.old_string,
       new_string: e.new_string,
-      replace_all: e.replace_all || false
+      replace_all: !!e.replace_all
     })),
     editMode: ideDiffConfig.editMode || 'single'
   } : {

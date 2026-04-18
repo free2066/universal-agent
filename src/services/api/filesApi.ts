@@ -322,7 +322,7 @@ export async function downloadSessionFiles(
   config: FilesApiConfig,
   concurrency: number = DEFAULT_CONCURRENCY,
 ): Promise<DownloadResult[]> {
-  if (files.length === 0) {
+  if (!files.length) {
     return []
   }
 

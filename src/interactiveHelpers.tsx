@@ -158,7 +158,7 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
     const {
       errors: allErrors
     } = getSettingsWithAllErrors();
-    if (allErrors.length === 0) {
+    if (!allErrors.length) {
       await handleMcpjsonServerApprovals(root);
     }
 

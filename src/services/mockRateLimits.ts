@@ -213,7 +213,7 @@ export function setMockHeader(
   }
 
   // If all headers are cleared, disable mocking
-  if (Object.keys(mockHeaders).length === 0) {
+  if (!Object.keys(mockHeaders).length) {
     mockEnabled = false
   }
 }
@@ -244,7 +244,7 @@ function updateRetryAfter(): void {
 
 // Update the representative claim based on exceeded limits
 function updateRepresentativeClaim(): void {
-  if (exceededLimits.length === 0) {
+  if (!exceededLimits.length) {
     delete mockHeaders['anthropic-ratelimit-unified-representative-claim']
     delete mockHeaders['anthropic-ratelimit-unified-reset']
     delete mockHeaders['retry-after']
@@ -417,7 +417,7 @@ export function setMockRateLimitScenario(scenario: MockScenario): void {
 
     case 'overage-active': {
       // If no limits have been exceeded yet, default to 5-hour
-      if (exceededLimits.length === 0) {
+      if (!exceededLimits.length) {
         exceededLimits = [{ type: 'five_hour', resetsAt: fiveHoursFromNow }]
       }
       updateRepresentativeClaim()
@@ -653,7 +653,7 @@ export function getMockHeaders(): MockHeaders | null {
   if (
     !mockEnabled ||
     !IS_ANT_USER ||
-    Object.keys(mockHeaders).length === 0
+    !Object.keys(mockHeaders).length
   ) {
     return null
   }
@@ -663,7 +663,7 @@ export function getMockHeaders(): MockHeaders | null {
 export function getMockStatus(): string {
   if (
     !mockEnabled ||
-    (Object.keys(mockHeaders).length === 0 && !mockSubscriptionType)
+    (!Object.keys(mockHeaders).length && !mockSubscriptionType)
   ) {
     return 'No mock headers active (using real limits)'
   }

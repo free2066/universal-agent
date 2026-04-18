@@ -436,7 +436,7 @@ export function batchDeltaByBytes(
   delta: Record<string, string>,
 ): Array<Record<string, string>> {
   const keys = Object.keys(delta).sort()
-  if (keys.length === 0) return []
+  if (!keys.length) return []
 
   // Fixed overhead for `{"entries":{}}` — each entry then adds its marginal
   // bytes.  jsonStringify (≡ JSON.stringify under the hood) on the raw

@@ -174,7 +174,7 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
     events: FirstPartyEventLoggingEvent[],
   ): Promise<void> {
     try {
-      if (events.length === 0) {
+      if (!events.length) {
         try {
           await unlink(filePath)
         } catch {
@@ -196,7 +196,7 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
     filePath: string,
     events: FirstPartyEventLoggingEvent[],
   ): Promise<void> {
-    if (events.length === 0) return
+    if (!events.length) return
     try {
       // Ensure storage directory exists
       await mkdir(getStorageDir(), { recursive: true })
@@ -259,7 +259,7 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
     }
 
     const failedEvents = await this.sendEventsInBatches(events)
-    if (failedEvents.length === 0) {
+    if (!failedEvents.length) {
       await this.deleteFile(filePath)
       if (process.env.USER_TYPE === 'ant') {
         logForDebugging('1P event logging: previous batch retry succeeded')
@@ -315,7 +315,7 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
           log.instrumentationScope?.name === 'com.anthropic.claude_code.events',
       )
 
-      if (eventLogs.length === 0) {
+      if (!eventLogs.length) {
         resultCallback({ code: ExportResultCode.SUCCESS })
         return
       }
@@ -323,7 +323,7 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
       // Transform new logs (failed events are retried independently via backoff)
       const events = this.transformLogsToEvents(eventLogs).events
 
-      if (events.length === 0) {
+      if (!events.length) {
         resultCallback({ code: ExportResultCode.SUCCESS })
         return
       }
@@ -473,7 +473,7 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
     // Keep retrying while there are events and endpoint is healthy
     while (!this.isShutdown) {
       const events = await this.loadEventsFromFile(filePath)
-      if (events.length === 0) break
+      if (!events.length) break
 
       if (this.attempts >= this.maxAttempts) {
         if (process.env.USER_TYPE === 'ant') {

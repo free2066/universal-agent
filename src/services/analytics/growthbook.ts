@@ -259,7 +259,7 @@ export function setGrowthBookConfigOverride(
       if (value === undefined && !(feature in current)) return c
       if (value === undefined) {
         const { [feature]: _, ...rest } = current
-        if (Object.keys(rest).length === 0) {
+        if (!Object.keys(rest).length) {
           const { growthBookOverrides: __, ...configWithout } = c
           return configWithout
         }
@@ -282,7 +282,7 @@ export function clearGrowthBookConfigOverrides(): void {
     saveGlobalConfig(c => {
       if (
         !c.growthBookOverrides ||
-        Object.keys(c.growthBookOverrides).length === 0
+      Object.keys(c.growthBookOverrides).length === 0
       ) {
         return c
       }
@@ -341,7 +341,7 @@ async function processRemoteEvalPayload(
   // (transient server bug, truncated response) would pass, clear the maps
   // below, return true, and syncRemoteEvalToDisk would wholesale-write `{}`
   // to disk: total flag blackout for every process sharing ~/.claude.json.
-  if (!payload?.features || Object.keys(payload.features).length === 0) {
+  if (!payload?.features || !Object.keys(payload.features).length) {
     return false
   }
 

@@ -1134,7 +1134,7 @@ async function run(): Promise<CommanderCommand> {
     const maintenance = options.maintenance ?? false;
 
     // Extract disable slash commands flag
-    const disableSlashCommands = options.disableSlashCommands || false;
+    const disableSlashCommands = !!options.disableSlashCommands;
 
     // Extract tasks mode options (ant-only)
     const tasksOption = "external" === 'ant' && (options as {
@@ -1580,7 +1580,7 @@ async function run(): Promise<CommanderCommand> {
     }
 
     // Extract strict MCP config flag
-    const strictMcpConfig = options.strictMcpConfig || false;
+    const strictMcpConfig = !!options.strictMcpConfig;
 
     // Check if enterprise MCP configuration exists. When it does, only allow dynamic MCP
     // configs that contain special server types (sdk)
@@ -2851,7 +2851,7 @@ async function run(): Promise<CommanderCommand> {
         sdkUrl,
         replayUserMessages: effectiveReplayUserMessages,
         includePartialMessages: effectiveIncludePartialMessages,
-        forkSession: options.forkSession || false,
+        forkSession: !!options.forkSession,
         resumeSessionAt: options.resumeSessionAt || undefined,
         rewindFiles: options.rewindFiles,
         enableAuthStatus: options.enableAuthStatus,
