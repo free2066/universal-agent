@@ -8,6 +8,7 @@ import { getAPIProvider } from '../../utils/model/providers.js'
 import { MODEL_COSTS } from '../../utils/modelCost.js'
 import { isAnalyticsDisabled } from './config.js'
 import { getEventMetadata } from './metadata.js'
+import { IS_ANT_USER } from '../../utils/envUtils.js'
 
 const DATADOG_LOGS_ENDPOINT =
   'https://http-intake.logs.us5.datadoghq.com/api/v2/logs'
@@ -205,7 +206,7 @@ export async function trackDatadogEvent(
     }
 
     // Normalize model names for cardinality reduction (external users only)
-    if (process.env.USER_TYPE !== 'ant' && typeof allData.model === 'string') {
+    if (!IS_ANT_USER && typeof allData.model === 'string') {
       const shortName = getCanonicalName(allData.model.replace(/\[1m]$/i, ''))
       allData.model = shortName in MODEL_COSTS ? shortName : 'other'
     }
