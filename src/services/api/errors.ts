@@ -160,6 +160,8 @@ export function isMediaSizeErrorMessage(msg: AssistantMessage): boolean {
   )
 }
 export const CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE = 'Credit balance is too low'
+/** Lowercase version for case-insensitive error matching */
+const CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE_LOWER = CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE.toLowerCase()
 export const INVALID_API_KEY_ERROR_MESSAGE = 'Not logged in · Please run /login'
 export const INVALID_API_KEY_ERROR_MESSAGE_EXTERNAL =
   'Invalid API key · Fix external API key'
@@ -1099,7 +1101,7 @@ export function classifyAPIError(error: unknown): string {
     error instanceof Error &&
     error.message
       .toLowerCase()
-      .includes(CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE.toLowerCase())
+      .includes(CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE_LOWER)
   ) {
     return 'credit_balance_low'
   }

@@ -99,10 +99,9 @@ export function getPluginEditableScopes(): Map<string, ExtendedPluginScope> {
     if (!pluginId.includes('@')) {
       continue
     }
-    if (value === true) {
-      result.set(pluginId, 'flag') // 'flag' scope = session-only, no write-back
-    } else if (value === false) {
-      result.delete(pluginId)
+    // Simplified boolean handling
+    if (typeof value === 'boolean') {
+      value ? result.set(pluginId, 'flag') : result.delete(pluginId)
     }
   }
 

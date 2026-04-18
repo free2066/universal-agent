@@ -94,8 +94,11 @@ function shouldRetry529(querySource: QuerySource | undefined): boolean {
 // environment does not mark the session idle mid-wait.
 // TODO(ANT-344): the keep-alive via SystemAPIErrorMessage yields is a stopgap
 // until there's a dedicated keep-alive channel.
+// 5 min cap for backoff
 const PERSISTENT_MAX_BACKOFF_MS = 5 * 60 * 1000
+// 6 hr cap before reset
 const PERSISTENT_RESET_CAP_MS = 6 * 60 * 60 * 1000
+// Prevent idle timeout mid-wait
 const HEARTBEAT_INTERVAL_MS = 30_000
 
 /**
@@ -104,13 +107,7 @@ const HEARTBEAT_INTERVAL_MS = 30_000
  * 关闭需要设置环境变量 CLAUDE_CODE_UNATTENDED_RETRY=false
  */
 function isPersistentRetryEnabled(): boolean {
-  const envValue = process.env.CLAUDE_CODE_UNATTENDED_RETRY
-  // 未设置或非 false 值都开启持久重试模式
-  if (envValue === undefined || envValue !== 'false') {
-    return true
-  }
-  // 只有显式设置为 'false' 才关闭
-  return false
+  return process.env.CLAUDE_CODE_UNATTENDED_RETRY !== 'false'
 }
 
 function isTransientCapacityError(error: unknown): boolean {

@@ -102,18 +102,12 @@ export function hasDangerousSettingsChanged(
   }
 
   // Compare the dangerous settings - any change triggers a prompt
-  const oldJson = jsonStringify({
-    shellSettings: oldDangerous.shellSettings,
-    envVars: oldDangerous.envVars,
-    hooks: oldDangerous.hooks,
-  })
-  const newJson = jsonStringify({
-    shellSettings: newDangerous.shellSettings,
-    envVars: newDangerous.envVars,
-    hooks: newDangerous.hooks,
-  })
-
-  return oldJson !== newJson
+  // Optimized: use direct property comparison instead of JSON.stringify
+  return (
+    oldDangerous.shellSettings !== newDangerous.shellSettings ||
+    oldDangerous.envVars !== newDangerous.envVars ||
+    oldDangerous.hooks !== newDangerous.hooks
+  )
 }
 
 /**
@@ -126,14 +120,10 @@ export function formatDangerousSettingsList(
   const items: string[] = []
 
   // Shell settings (names only)
-  for (const key of Object.keys(dangerous.shellSettings)) {
-    items.push(key)
-  }
+  items.push(...Object.keys(dangerous.shellSettings))
 
   // Env vars (names only)
-  for (const key of Object.keys(dangerous.envVars)) {
-    items.push(key)
-  }
+  items.push(...Object.keys(dangerous.envVars))
 
   // Hooks
   if (dangerous.hasHooks) {

@@ -255,8 +255,9 @@ export function setGrowthBookConfigOverride(
   try {
     saveGlobalConfig(c => {
       const current = c.growthBookOverrides ?? {}
+      // Optimized: merged undefined check and 'in' operator check
+      if (value === undefined && !(feature in current)) return c
       if (value === undefined) {
-        if (!(feature in current)) return c
         const { [feature]: _, ...rest } = current
         if (Object.keys(rest).length === 0) {
           const { growthBookOverrides: __, ...configWithout } = c
@@ -927,7 +928,7 @@ export async function checkGate_CACHED_OR_BLOCKING(
 
   // Fast path: disk cache already says true — trust it
   const cached = getGlobalConfig().cachedGrowthBookFeatures?.[gate]
-  if (cached === true) {
+  if (cached) {
     // Log experiment exposure if data is available, otherwise defer
     if (experimentDataByFeature.has(gate)) {
       logExposureForFeature(gate)

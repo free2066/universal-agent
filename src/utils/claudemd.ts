@@ -801,8 +801,7 @@ export const getMemoryFiles = memoize(
     const config = getCurrentProjectConfig()
     const includeExternal =
       forceIncludeExternal ||
-      config.hasClaudeMdExternalIncludesApproved ||
-      false
+      !!config.hasClaudeMdExternalIncludesApproved
 
     // Process Managed file first (always loaded - policy settings)
     const managedClaudeMd = getMemoryPath('Managed')

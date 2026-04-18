@@ -2973,15 +2973,13 @@ export function updateUsage(
     // from overwriting the real value with 0.
     ...(feature('CACHED_MICROCOMPACT')
       ? {
-          cache_deleted_input_tokens:
-            (partUsage as unknown as { cache_deleted_input_tokens?: number })
-              .cache_deleted_input_tokens != null &&
-            (partUsage as unknown as { cache_deleted_input_tokens: number })
-              .cache_deleted_input_tokens > 0
-              ? (partUsage as unknown as { cache_deleted_input_tokens: number })
-                  .cache_deleted_input_tokens
-              : ((usage as unknown as { cache_deleted_input_tokens?: number })
-                  .cache_deleted_input_tokens ?? 0),
+          cache_deleted_input_tokens: (() => {
+            const cacheDeleted = (partUsage as Record<string, unknown>).cache_deleted_input_tokens
+            if (typeof cacheDeleted === 'number' && cacheDeleted > 0) {
+              return cacheDeleted
+            }
+            return (usage as Record<string, unknown>).cache_deleted_input_tokens ?? 0
+          })(),
         }
       : {}),
     inference_geo: usage.inference_geo,

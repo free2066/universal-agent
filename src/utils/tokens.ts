@@ -164,7 +164,7 @@ export function doesMostRecentAssistantMessageExceed200k(
   const lastAsst = messages.findLast(m => m.type === 'assistant')
   if (!lastAsst) return false
   const usage = getTokenUsage(lastAsst)
-  return usage ? getTokenCountFromUsage(usage) > THRESHOLD : false
+  return usage !== undefined && getTokenCountFromUsage(usage) > THRESHOLD
 }
 
 /**

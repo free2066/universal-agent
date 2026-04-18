@@ -112,11 +112,7 @@ function uaLogAsync(msg: string): void {
 
 // UA 修改：持久重试模式 - 默认开启持久重试
 function isPersistentRetryEnabled(): boolean {
-  const envValue = process.env.CLAUDE_CODE_UNATTENDED_RETRY
-  if (envValue === undefined || envValue !== 'false') {
-    return true
-  }
-  return false
+  return process.env.CLAUDE_CODE_UNATTENDED_RETRY !== 'false'
 }
 
 /** Convert Anthropic BetaMessageStreamParams → UA ChatOptions messages array (NO system) */
@@ -670,14 +666,17 @@ export class MultiModelAnthropicAdapter {
         // streaming request are retried before the rejection propagates.
         // UA 修改：支持持久重试模式
         const persistent = isPersistentRetryEnabled()
-        const baseDelays = [15_000, 30_000, 60_000]
+        const BASE_RETRY_DELAY_MS = 15_000
+        const MAX_RETRY_DELAY_MS = 5 * 60 * 1000
+        const RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const
+        
+        const calculateExponentialBackoff = (attempt: number): number =>
+          Math.min(BASE_RETRY_DELAY_MS * Math.pow(2, attempt), MAX_RETRY_DELAY_MS)
+        
         const getStreamDelay = (attempt: number): number => {
-          if (persistent) {
-            // 持久模式：指数退避，最大 5 分钟
-            return Math.min(15_000 * Math.pow(2, attempt), 5 * 60 * 1000)
-          }
-          // 普通模式：固定延迟数组
-          return baseDelays[attempt] ?? 60_000
+          return persistent
+            ? calculateExponentialBackoff(attempt)
+            : (RETRY_DELAYS_MS[attempt] ?? 60_000)
         }
         
         const attemptStream = async (attempt: number): Promise<any> => {
@@ -709,7 +708,7 @@ export class MultiModelAnthropicAdapter {
                     }
                   }
                 } else {
-                  process.stderr.write(`[UA:429] stream rate limited, retry ${retryNum}/${baseDelays.length} in ${delay / 1000}s...\n`)
+                  process.stderr.write(`[UA:429] stream rate limited, retry ${retryNum}/${RETRY_DELAYS_MS.length} in ${delay / 1000}s...\n`)
                   await new Promise<void>(res => setTimeout(res, delay))
                 }
                 // Reset queue for the fresh attempt
@@ -759,7 +758,7 @@ export class MultiModelAnthropicAdapter {
       if (is429) {
         const persistent = isPersistentRetryEnabled()
         const maxRetries = persistent ? Infinity : 3
-        const baseDelays = [15_000, 30_000, 60_000]
+        const RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const
         
         if (retryCount < maxRetries) {
           // 持久模式：使用指数退避，最大 5 分钟
@@ -769,7 +768,7 @@ export class MultiModelAnthropicAdapter {
             // 指数退避：15s → 30s → 60s → 120s → ... → 最大 5 分钟
             delay = Math.min(15_000 * Math.pow(2, retryCount), 5 * 60 * 1000)
           } else {
-            delay = baseDelays[retryCount] ?? 60_000
+            delay = RETRY_DELAYS_MS[retryCount] ?? 60_000
           }
           
           const retryNum = retryCount + 1

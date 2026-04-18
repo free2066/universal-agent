@@ -55,6 +55,9 @@ import {
   isSafeOutputCommand,
   resolveToCanonical,
 } from './readOnlyValidation.js'
+
+// Precompiled regex for whitespace splitting (performance optimization)
+const WHITESPACE_RE = /\s+/
 import { POWERSHELL_TOOL_NAME } from './toolName.js'
 
 // Matches `$var = `, `$var += `, `$env:X = `, `$x ??= ` etc. Used to strip
@@ -266,7 +269,7 @@ function filterRulesByContentsMatchingInput(
       // `del`, or plain `Remove-Item` — resolveToCanonical won't match the
       // module-qualified form against COMMON_ALIASES.
       if (rule.type === 'exact') {
-        const rawRuleCmdName = rule.command.split(/\s+/)[0] ?? ''
+        const rawRuleCmdName = rule.command.split(WHITESPACE_RE)[0] ?? ''
         const ruleCanonical = resolveToCanonical(
           stripModulePrefixForRule(rawRuleCmdName),
         )
@@ -285,7 +288,7 @@ function filterRulesByContentsMatchingInput(
           }
         }
       } else if (rule.type === 'prefix') {
-        const rawRuleCmdName = rule.prefix.split(/\s+/)[0] ?? ''
+        const rawRuleCmdName = rule.prefix.split(WHITESPACE_RE)[0] ?? ''
         const ruleCanonical = resolveToCanonical(
           stripModulePrefixForRule(rawRuleCmdName),
         )
@@ -310,7 +313,7 @@ function filterRulesByContentsMatchingInput(
       } else if (rule.type === 'wildcard') {
         // Resolve the wildcard pattern's command name to canonical and re-match
         // This ensures 'deny rm *' also blocks 'Remove-Item secret.txt'
-        const rawRuleCmdName = rule.pattern.split(/\s+/)[0] ?? ''
+        const rawRuleCmdName = rule.pattern.split(WHITESPACE_RE)[0] ?? ''
         const ruleCanonical = resolveToCanonical(
           stripModulePrefixForRule(rawRuleCmdName),
         )

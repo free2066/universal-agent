@@ -157,9 +157,9 @@ export function shouldExtractMemory(messages: Message[]): boolean {
   // IMPORTANT: The token threshold (minimumTokensBetweenUpdate) is ALWAYS required.
   // Even if the tool call threshold is met, extraction won't happen until the
   // token threshold is also satisfied. This prevents excessive extractions.
+  // Optimized: extracted common condition hasMetTokenThreshold
   const shouldExtract =
-    (hasMetTokenThreshold && hasMetToolCallThreshold) ||
-    (hasMetTokenThreshold && !hasToolCallsInLastTurn)
+    hasMetTokenThreshold && (hasMetToolCallThreshold || !hasToolCallsInLastTurn)
 
   if (shouldExtract) {
     const lastMessage = messages[messages.length - 1]

@@ -3,6 +3,14 @@
 import { getRelativeTimeFormat, getTimeZone } from './intl.js'
 
 // ============================================================================
+// Time duration constants
+// ============================================================================
+const MS_PER_SECOND = 1000
+const MS_PER_MINUTE = 60 * MS_PER_SECOND
+const MS_PER_HOUR = 60 * MS_PER_MINUTE
+const MS_PER_DAY = 24 * MS_PER_HOUR
+
+// ============================================================================
 // Precompiled regex patterns for formatting
 // ============================================================================
 
@@ -36,7 +44,7 @@ export function formatDuration(
   ms: number,
   options?: { hideTrailingZeros?: boolean; mostSignificantOnly?: boolean },
 ): string {
-  if (ms < 60000) {
+  if (ms < MS_PER_MINUTE) {
     // Special case for 0
     if (ms === 0) {
       return '0s'
@@ -46,14 +54,14 @@ export function formatDuration(
       const s = (ms / 1000).toFixed(1)
       return `${s}s`
     }
-    const s = Math.floor(ms / 1000).toString()
+    const s = Math.floor(ms / MS_PER_SECOND).toString()
     return `${s}s`
   }
 
-  let days = Math.floor(ms / 86400000)
-  let hours = Math.floor((ms % 86400000) / 3600000)
-  let minutes = Math.floor((ms % 3600000) / 60000)
-  let seconds = Math.round((ms % 60000) / 1000)
+  let days = Math.floor(ms / MS_PER_DAY)
+  let hours = Math.floor((ms % MS_PER_DAY) / MS_PER_HOUR)
+  let minutes = Math.floor((ms % MS_PER_HOUR) / MS_PER_MINUTE)
+  let seconds = Math.round((ms % MS_PER_MINUTE) / MS_PER_SECOND)
 
   // Handle rounding carry-over (e.g., 59.5s rounds to 60s)
   if (seconds === 60) {

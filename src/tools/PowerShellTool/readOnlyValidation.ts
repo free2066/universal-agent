@@ -1324,7 +1324,11 @@ export function isAllowlistedCommand(
     // SAFE_EXTERNAL_EXES). SECURITY: match the raw first token of cmd.text,
     // not cmd.name. stripModulePrefix collapses scripts\where.exe →
     // cmd.name='where.exe', but cmd.text preserves 'scripts\where.exe ...'.
-    const rawFirstToken = cmd.text.split(/\s/, 1)[0]?.toLowerCase() ?? ''
+    // Optimized: use indexOf + slice instead of split to avoid array creation
+    const rawText = cmd.text
+    const spaceIdx = rawText.indexOf(' ')
+    const firstToken = spaceIdx > 0 ? rawText.slice(0, spaceIdx) : rawText
+    const rawFirstToken = firstToken.toLowerCase()
     if (!SAFE_EXTERNAL_EXES.has(rawFirstToken)) {
       return false
     }

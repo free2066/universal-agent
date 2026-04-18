@@ -32,7 +32,8 @@ const IDE_PATTERN_REGEX_CACHE = new Map<string, RegExp[]>()
 function getIdePatternRegexes(ideName: string): RegExp[] {
   let regexes = IDE_PATTERN_REGEX_CACHE.get(ideName)
   if (!regexes) {
-    const patterns = ideNameToDirMap[ideName.toLowerCase()]
+    const ideNameLower = ideName.toLowerCase()
+    const patterns = ideNameToDirMap[ideNameLower]
     regexes = patterns?.map(p => new RegExp('^' + p)) ?? []
     IDE_PATTERN_REGEX_CACHE.set(ideName, regexes)
   }
@@ -43,7 +44,8 @@ function getIdePatternRegexes(ideName: string): RegExp[] {
 // https://www.jetbrains.com/help/pycharm/directories-used-by-the-ide-to-store-settings-caches-plugins-and-logs.html#plugins-directory
 function buildCommonPluginDirectoryPaths(ideName: string): string[] {
   const directories: string[] = []
-  const idePatterns = ideNameToDirMap[ideName.toLowerCase()]
+  const ideNameLower = ideName.toLowerCase()
+  const idePatterns = ideNameToDirMap[ideNameLower]
   if (!idePatterns) {
     return directories
   }
@@ -58,7 +60,7 @@ function buildCommonPluginDirectoryPaths(ideName: string): string[] {
         join(HOME_DIR, 'Library', 'Application Support', 'JetBrains'),
         join(HOME_DIR, 'Library', 'Application Support'),
       )
-      if (ideName.toLowerCase() === 'androidstudio') {
+      if (ideNameLower === 'androidstudio') {
         directories.push(
           join(HOME_DIR, 'Library', 'Application Support', 'Google'),
         )
@@ -71,7 +73,7 @@ function buildCommonPluginDirectoryPaths(ideName: string): string[] {
         join(localAppData, 'JetBrains'),
         join(appData),
       )
-      if (ideName.toLowerCase() === 'androidstudio') {
+      if (ideNameLower === 'androidstudio') {
         directories.push(join(localAppData, 'Google'))
       }
       break
@@ -84,7 +86,7 @@ function buildCommonPluginDirectoryPaths(ideName: string): string[] {
       for (const pattern of idePatterns) {
         directories.push(join(HOME_DIR, '.' + pattern))
       }
-      if (ideName.toLowerCase() === 'androidstudio') {
+      if (ideNameLower === 'androidstudio') {
         directories.push(join(HOME_DIR, '.config', 'Google'))
       }
       break

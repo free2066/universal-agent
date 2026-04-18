@@ -17,6 +17,7 @@ import { getBranch, getDefaultBranch, getIsGit, gitExe } from './utils/git.js'
 import { shouldIncludeGitInstructions } from './utils/gitSettings.js'
 import { logError } from './utils/log.js'
 
+// Git status output limit to avoid context bloat
 const MAX_STATUS_CHARS = 2000
 
 // System prompt injection for cache breaking (ant-only, ephemeral debugging state)
