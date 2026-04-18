@@ -55,10 +55,10 @@ import {
   isSafeOutputCommand,
   resolveToCanonical,
 } from './readOnlyValidation.js'
+import { POWERSHELL_TOOL_NAME } from './toolName.js'
 
 // Precompiled regex for whitespace splitting (performance optimization)
 const WHITESPACE_RE = /\s+/
-import { POWERSHELL_TOOL_NAME } from './toolName.js'
 
 // Matches `$var = `, `$var += `, `$env:X = `, `$x ??= ` etc. Used to strip
 // nested assignment prefixes in the parse-failed fallback path.

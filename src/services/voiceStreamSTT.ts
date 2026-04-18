@@ -26,13 +26,12 @@ import { logError } from '../utils/log.js'
 import { getWebSocketTLSOptions } from '../utils/mtls.js'
 import { getWebSocketProxyAgent, getWebSocketProxyUrl } from '../utils/proxy.js'
 import { jsonParse, jsonStringify } from '../utils/slowOperations.js'
-
-const KEEPALIVE_MSG = '{"type":"KeepAlive"}'
-const CLOSE_STREAM_MSG = '{"type":"CloseStream"}'
-
 import { getFeatureValue_CACHED_MAY_BE_STALE } from './analytics/growthbook.js'
 
 // ─── Constants ───────────────────────────────────────────────────────
+
+const KEEPALIVE_MSG = '{"type":"KeepAlive"}'
+const CLOSE_STREAM_MSG = '{"type":"CloseStream"}'
 
 const VOICE_STREAM_PATH = '/api/ws/speech_to_text/voice_stream'
 

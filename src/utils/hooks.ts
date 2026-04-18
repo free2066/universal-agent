@@ -48,12 +48,6 @@ import {
   getAgentTranscriptPath,
 } from './sessionStorage.js'
 import type { AgentId } from '../types/ids.js'
-
-// ============================================================================
-// Regex pattern cache for hook matching (performance optimization)
-// ============================================================================
-const _hookPatternCache = new Map<string, RegExp>()
-const MAX_HOOK_PATTERN_CACHE = 50
 import {
   getSettings_DEPRECATED,
   getSettingsForSource,
@@ -169,6 +163,12 @@ import type { AppState } from '../state/AppState.js'
 import { jsonStringify, jsonParse } from './slowOperations.js'
 import { isEnvTruthy } from './envUtils.js'
 import { errorMessage, getErrnoCode } from './errors.js'
+
+// ============================================================================
+// Regex pattern cache for hook matching (performance optimization)
+// ============================================================================
+const _hookPatternCache = new Map<string, RegExp>()
+const MAX_HOOK_PATTERN_CACHE = 50
 
 const TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
 

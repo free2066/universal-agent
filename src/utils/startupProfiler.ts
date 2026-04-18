@@ -18,6 +18,8 @@ import {
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
 import { getFsImplementation } from './fsOperations.js'
+import { formatMs, formatTimelineLine, getPerformance } from './profilerBase.js'
+import { writeFileSync_DEPRECATED } from './slowOperations.js'
 
 // ============================================================================
 // Precomputed report formatting strings
@@ -26,8 +28,6 @@ import { getFsImplementation } from './fsOperations.js'
 /** Separator line for profiling reports */
 const REPORT_SEPARATOR = '='.repeat(80)
 const REPORT_LINE = '-'.repeat(80)
-import { formatMs, formatTimelineLine, getPerformance } from './profilerBase.js'
-import { writeFileSync_DEPRECATED } from './slowOperations.js'
 
 // Module-level state - decided once at module load
 // eslint-disable-next-line custom-rules/no-process-env-top-level

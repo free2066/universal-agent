@@ -85,21 +85,6 @@ import { quote } from './bash/shellQuote.js'
 import { formatNumber, formatTokens } from './format.js'
 import { getPewterLedgerVariant } from './planModeV2.js'
 import { jsonStringify } from './slowOperations.js'
-
-// ============================================================================
-// Regex cache for extractTag function (performance optimization)
-// ============================================================================
-const TAG_REGEX_CACHE = new Map<
-  string,
-  { pattern: RegExp; openingTag: RegExp; closingTag: RegExp }
->()
-
-// Hook attachments that have a hookName field (excludes HookPermissionDecisionAttachment)
-type HookAttachmentWithName = Exclude<
-  HookAttachment,
-  HookPermissionDecisionAttachment
->
-
 import type { APIError } from '@anthropic-ai/sdk'
 import type {
   BetaContentBlock,
@@ -177,10 +162,21 @@ function getTeammateMailbox(): typeof import('./teammateMailbox.js') {
   return require('./teammateMailbox.js')
 }
 
-import {
-  isToolReferenceBlock,
-  isToolSearchEnabledOptimistic,
-} from './toolSearch.js'
+import { isToolReferenceBlock, isToolSearchEnabledOptimistic } from './toolSearch.js'
+
+// ============================================================================
+// Regex cache for extractTag function (performance optimization)
+// ============================================================================
+const TAG_REGEX_CACHE = new Map<
+  string,
+  { pattern: RegExp; openingTag: RegExp; closingTag: RegExp }
+>()
+
+// Hook attachments that have a hookName field (excludes HookPermissionDecisionAttachment)
+type HookAttachmentWithName = Exclude<
+  HookAttachment,
+  HookPermissionDecisionAttachment
+>
 
 const MEMORY_CORRECTION_HINT =
   "\n\nNote: The user's next message may contain a correction or preference. Pay close attention — if they explain what went wrong or how they'd prefer you to work, consider saving that to memory for future sessions."

@@ -25,13 +25,6 @@ import { readFileSync } from '../../fileRead.js'
 import { getFsImplementation } from '../../fsOperations.js'
 import { safeParseJSON } from '../../json.js'
 import { profileCheckpoint } from '../../startupProfiler.js'
-
-// ============================================================================
-// Regex cache for parseRegQueryStdout (performance optimization)
-// ============================================================================
-const REG_QUERY_CACHE = new Map<string, RegExp>()
-const MAX_REG_QUERY_CACHE = 50
-
 import {
   getManagedFilePath,
   getManagedSettingsDropInDir,
@@ -56,6 +49,10 @@ import {
 // ---------------------------------------------------------------------------
 // Types and cache
 // ---------------------------------------------------------------------------
+
+// Regex cache for parseRegQueryStdout (performance optimization)
+const REG_QUERY_CACHE = new Map<string, RegExp>()
+const MAX_REG_QUERY_CACHE = 50
 
 type MdmResult = { settings: SettingsJson; errors: ValidationError[] }
 const EMPTY_RESULT: MdmResult = Object.freeze({ settings: {}, errors: [] })
