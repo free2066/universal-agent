@@ -17,5 +17,5 @@ export function isAutoDreamEnabled(): boolean {
     'tengu_onyx_plover',
     null,
   )
-  return gb?.enabled === true
+  return !!gb?.enabled
 }

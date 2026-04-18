@@ -2,6 +2,7 @@ import { useMemo, useRef } from 'react'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
 import type { Message } from '../types/message.js'
 import { getUserMessageText } from '../utils/messages.js'
+import { IS_ANT_USER } from '../utils/envUtils.js'
 
 const EXTERNAL_COMMAND_PATTERNS = [
   /\bcurl\b/,
@@ -93,7 +94,7 @@ export function useIssueFlagBanner(
   messages: Message[],
   submitCount: number,
 ): boolean {
-  if (process.env.USER_TYPE !== 'ant') {
+  if (!IS_ANT_USER) {
     return false
   }
 

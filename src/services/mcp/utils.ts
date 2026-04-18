@@ -248,7 +248,7 @@ export function isToolFromMcpServer(
  * @returns True if the tool is from an MCP server
  */
 export function isMcpTool(tool: Tool): boolean {
-  return tool.name?.startsWith('mcp__') || tool.isMcp === true
+  return tool.name?.startsWith('mcp__') || !!tool.isMcp
 }
 
 /**
@@ -257,7 +257,7 @@ export function isMcpTool(tool: Tool): boolean {
  * @returns True if the command is from an MCP server
  */
 export function isMcpCommand(command: Command): boolean {
-  return command.name?.startsWith('mcp__') || command.isMcp === true
+  return command.name?.startsWith('mcp__') || !!command.isMcp
 }
 
 /**

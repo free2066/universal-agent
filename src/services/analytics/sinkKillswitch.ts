@@ -21,5 +21,5 @@ export function isSinkKilled(sink: SinkName): boolean {
   >(SINK_KILLSWITCH_CONFIG_NAME, {})
   // getFeatureValue_CACHED_MAY_BE_STALE guards on `!== undefined`, so a
   // cached JSON null leaks through instead of falling back to {}.
-  return config?.[sink] === true
+  return !!config?.[sink]
 }

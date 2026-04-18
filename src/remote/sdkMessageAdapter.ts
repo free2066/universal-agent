@@ -23,6 +23,13 @@ import { fromSDKCompactMetadata } from '../utils/messages/mappers.js'
 import { createUserMessage } from '../utils/messages.js'
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/** Maximum length for error details before truncation */
+const MAX_ERROR_DETAIL_LENGTH = 500
+
+// ============================================================================
 // Timestamp caching for batch message processing
 // ============================================================================
 
@@ -307,8 +314,8 @@ function convertHookResponseMessage(
     const errorDetails = msg.stderr || msg.output || 'Unknown error'
     // Trim excessively long hook output so it doesn't flood the transcript
     const trimmedDetails =
-      errorDetails.length > 500
-        ? `${errorDetails.slice(0, 500)}… (output truncated)`
+      errorDetails.length > MAX_ERROR_DETAIL_LENGTH
+        ? `${errorDetails.slice(0, MAX_ERROR_DETAIL_LENGTH)}… (output truncated)`
         : errorDetails
 
     return {

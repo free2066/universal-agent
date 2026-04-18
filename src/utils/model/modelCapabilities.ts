@@ -9,7 +9,7 @@ import { OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import { getAnthropicClient } from '../../services/api/client.js'
 import { isClaudeAISubscriber } from '../auth.js'
 import { logForDebugging } from '../debug.js'
-import { getClaudeConfigHomeDir } from '../envUtils.js'
+import { getClaudeConfigHomeDir, IS_ANT_USER } from '../envUtils.js'
 import { safeParseJSON } from '../json.js'
 import { lazySchema } from '../lazySchema.js'
 import { isEssentialTrafficOnly } from '../privacyLevel.js'
@@ -45,7 +45,7 @@ function getCachePath(): string {
 }
 
 function isModelCapabilitiesEligible(): boolean {
-  if (process.env.USER_TYPE !== 'ant') return false
+  if (!IS_ANT_USER) return false
   if (getAPIProvider() !== 'firstParty') return false
   if (!isFirstPartyAnthropicBaseUrl()) return false
   return true

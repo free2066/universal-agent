@@ -7,6 +7,15 @@ import type { Message } from '../../types/message.js';
 import { getCwd } from '../../utils/cwd.js';
 import { renderMessagesToPlainText } from '../../utils/exportRenderer.js';
 import { writeFileSync_DEPRECATED } from '../../utils/slowOperations.js';
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/** Maximum length for export preview before truncation */
+const MAX_EXPORT_PREVIEW_LENGTH = 50
+
+// ============================================================================
 function formatTimestamp(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -36,8 +45,8 @@ export function extractFirstPrompt(messages: Message[]): string {
   // Optimized: use indexOf + slice instead of split
   const newlineIdx = result.indexOf('\n')
   result = newlineIdx >= 0 ? result.slice(0, newlineIdx) : result
-  if (result.length > 50) {
-    result = result.substring(0, 49) + '…';
+  if (result.length > MAX_EXPORT_PREVIEW_LENGTH) {
+    result = result.substring(0, MAX_EXPORT_PREVIEW_LENGTH - 1) + '…';
   }
   return result;
 }
