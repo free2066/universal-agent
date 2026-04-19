@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Tool Use Summary Generator
  *
@@ -82,7 +81,7 @@ export async function generateToolUseSummary({
     })
 
     const summary = response.message.content
-      .reduce<string>((acc, block) => {
+      .reduce<string[]>((acc, block) => {
         if (block.type === 'text') acc.push(block.text)
         return acc
       }, [])
