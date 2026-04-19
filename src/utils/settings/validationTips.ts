@@ -154,7 +154,8 @@ export function getValidationTip(context: TipContext): ValidationTip | null {
 
   // Add documentation link based on path prefix
   if (!tip.docLink && context.path) {
-    const pathPrefix = context.path.split('.')[0]
+    const dotIdx = context.path.indexOf('.')
+    const pathPrefix = dotIdx >= 0 ? context.path.slice(0, dotIdx) : context.path
     if (pathPrefix) {
       tip.docLink = PATH_DOC_LINKS[pathPrefix]
     }

@@ -157,9 +157,10 @@ function getToolResultIds(message: Message): string[] {
   if (message.type !== 'user') return []
   const content = message.message.content
   if (!Array.isArray(content)) return []
-  return content
-    .filter(block => block.type === 'tool_result')
-    .map(block => block.tool_use_id)
+  return content.reduce<string[]>((acc, block) => {
+    if (block.type === 'tool_result') acc.push(block.tool_use_id)
+    return acc
+  }, [])
 }
 
 /**

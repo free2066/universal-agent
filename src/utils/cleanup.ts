@@ -46,8 +46,8 @@ export function addCleanupResults(
 }
 
 export function convertFileNameToDate(filename: string): Date {
-  const isoStr = filename
-    .split('.')[0]!
+  const dotIdx = filename.indexOf('.')
+  const isoStr = (dotIdx >= 0 ? filename.slice(0, dotIdx) : filename)
     .replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, 'T$1:$2:$3.$4Z')
   return new Date(isoStr)
 }

@@ -37,11 +37,16 @@ export interface PtyInfo {
   exitCode?: number
 }
 
+import type { IPty } from 'node-pty'
+import type { ChildProcess } from 'child_process'
+
+type PtyHandle = IPty | ChildProcess
+
 interface PtyEntry {
   info: PtyInfo
   buffer: string
   emitter: EventEmitter
-  pty: any  // node-pty IPty or child_process.ChildProcess
+  pty: PtyHandle
 }
 
 // ── Try to load node-pty ────────────────────────────────────
@@ -86,7 +91,7 @@ export class PtyService {
 
     const emitter = new EventEmitter()
     let pid = 0
-    let ptyHandle: any
+    let ptyHandle: PtyHandle
 
     if (this.nodePty) {
       // Use native pty

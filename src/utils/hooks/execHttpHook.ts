@@ -60,6 +60,7 @@ function getHttpHookPolicy(): {
 
 /** Regex cache for url pattern matching */
 const urlPatternCache = new Map<string, RegExp>()
+const MAX_URL_PATTERN_CACHE_SIZE = 100
 
 /**
  * Match a URL against a pattern with * as a wildcard (any characters).
@@ -68,6 +69,11 @@ const urlPatternCache = new Map<string, RegExp>()
 function urlMatchesPattern(url: string, pattern: string): boolean {
   let regex = urlPatternCache.get(pattern)
   if (!regex) {
+    // Enforce cache size limit
+    if (urlPatternCache.size >= MAX_URL_PATTERN_CACHE_SIZE) {
+      const firstKey = urlPatternCache.keys().next().value
+      urlPatternCache.delete(firstKey)
+    }
     const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
     const regexStr = escaped.replace(/\*/g, '.*')
     regex = new RegExp(`^${regexStr}$`)

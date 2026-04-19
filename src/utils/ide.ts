@@ -1225,7 +1225,8 @@ export function toIDEDisplayName(terminal: string | null): string {
   }
 
   // Extract command name from path/arguments (e.g., "/usr/bin/code --wait" -> "code")
-  const command = terminal.split(' ')[0]
+  const spaceIdx = terminal.indexOf(' ')
+  const command = spaceIdx >= 0 ? terminal.slice(0, spaceIdx) : terminal
   const commandName = command ? basename(command).toLowerCase() : null
   if (commandName) {
     const mappedName = EDITOR_DISPLAY_NAMES[commandName]

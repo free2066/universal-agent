@@ -224,7 +224,8 @@ async function tryOllama(): Promise<RankedFreeModel | null> {
     }
     // Use whatever is installed
     if (installed.length > 0) {
-      const first = installed[0].split(':')[0];
+      const colonIdx = installed[0].indexOf(':')
+      const first = colonIdx >= 0 ? installed[0].slice(0, colonIdx) : installed[0];
       return { id: `ollama:${first}`, name: `${first} (local Ollama)`, score: 60, contextLength: 32768, supportsTools: false, isFree: true };
     }
   } catch (err) {

@@ -128,7 +128,8 @@ export function normalizeLanguageForSTT(language: string | undefined): {
   if (SUPPORTED_LANGUAGE_CODES.has(lower)) return { code: lower }
   const fromName = LANGUAGE_NAME_TO_CODE[lower]
   if (fromName) return { code: fromName }
-  const base = lower.split('-')[0]
+  const dashIdx = lower.indexOf('-')
+  const base = dashIdx >= 0 ? lower.slice(0, dashIdx) : lower
   if (base && SUPPORTED_LANGUAGE_CODES.has(base)) return { code: base }
   return { code: DEFAULT_STT_LANGUAGE, fellBackFrom: language }
 }

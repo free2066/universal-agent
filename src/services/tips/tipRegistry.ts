@@ -151,7 +151,8 @@ const externalTips: Tip[] = [
         const config = getGlobalConfig()
         const worktreeCount = await getWorktreeCount()
         return worktreeCount <= 1 && config.numStartups > 50
-      } catch (_) {
+      } catch {
+        // Intentionally ignored: feature detection is best-effort
         return false
       }
     },

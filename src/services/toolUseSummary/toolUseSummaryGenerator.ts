@@ -82,8 +82,10 @@ export async function generateToolUseSummary({
     })
 
     const summary = response.message.content
-      .filter(block => block.type === 'text')
-      .map(block => (block.type === 'text' ? block.text : ''))
+      .reduce<string>((acc, block) => {
+        if (block.type === 'text') acc.push(block.text)
+        return acc
+      }, [])
       .join('')
       .trim()
 

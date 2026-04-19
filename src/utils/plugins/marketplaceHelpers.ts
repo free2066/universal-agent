@@ -11,6 +11,9 @@ import type { KnownMarketplace, MarketplaceSource } from './schemas.js'
 // Regex pattern caching for marketplace matching
 // ============================================================================
 
+/** Maximum cache size to prevent memory leaks */
+const MAX_PATTERN_CACHE_SIZE = 50
+
 /** Cache for compiled host pattern regexes */
 const hostPatternCache = new Map<string, RegExp>()
 
@@ -22,6 +25,11 @@ function getHostPatternRegex(pattern: string): RegExp | null {
   let regex = hostPatternCache.get(pattern)
   if (!regex) {
     try {
+      // Enforce cache size limit
+      if (hostPatternCache.size >= MAX_PATTERN_CACHE_SIZE) {
+        const firstKey = hostPatternCache.keys().next().value
+        hostPatternCache.delete(firstKey)
+      }
       regex = new RegExp(pattern)
       hostPatternCache.set(pattern, regex)
     } catch {
@@ -36,6 +44,11 @@ function getPathPatternRegex(pattern: string): RegExp | null {
   let regex = pathPatternCache.get(pattern)
   if (!regex) {
     try {
+      // Enforce cache size limit
+      if (pathPatternCache.size >= MAX_PATTERN_CACHE_SIZE) {
+        const firstKey = pathPatternCache.keys().next().value
+        pathPatternCache.delete(firstKey)
+      }
       regex = new RegExp(pattern)
       pathPatternCache.set(pattern, regex)
     } catch {

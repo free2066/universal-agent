@@ -72,7 +72,7 @@ export async function collectLSPDiagnosticsForFile(
   // Format diagnostics into <lsp_diagnostics> block
   const parts: string[] = []
 
-  const formatDiag = (diag: any): string => {
+  const formatDiag = (diag: LSPDiagnostic): string => {
     const loc = diag.range
       ? `line ${(diag.range.start?.line ?? 0) + 1}`
       : ''
@@ -81,7 +81,7 @@ export async function collectLSPDiagnosticsForFile(
     return `  ${loc}: ${diag.message}${code}${source}`
   }
 
-  const isError = (d: any) => d.severity === 'Error' || d.severity === 1
+  const isError = (d: LSPDiagnostic) => d.severity === 'Error' || d.severity === 1
 
   if (currentFile) {
     const errors = currentFile.diagnostics.filter(isError)

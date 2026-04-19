@@ -99,7 +99,8 @@ export class FileIndex {
     const seen = new Set<string>()
     const paths: string[] = []
     let chunkStart = performance.now()
-    for (let i = 0; i < fileList.length; i++) {
+    const fileListLen = fileList.length
+    for (let i = 0; i < fileListLen; i++) {
       const line = fileList[i]!
       if (line.length > 0 && !seen.has(line)) {
         seen.add(line)
@@ -116,7 +117,8 @@ export class FileIndex {
 
     chunkStart = performance.now()
     let firstChunk = true
-    for (let i = 0; i < paths.length; i++) {
+    const pathsLen = paths.length
+    for (let i = 0; i < pathsLen; i++) {
       this.indexPath(i)
       if ((i & 0xff) === 0xff && performance.now() - chunkStart > CHUNK_MS) {
         this.readyCount = i + 1
@@ -128,16 +130,17 @@ export class FileIndex {
         chunkStart = performance.now()
       }
     }
-    this.readyCount = paths.length
+    this.readyCount = pathsLen
     markQueryable()
   }
 
   private buildIndex(paths: string[]): void {
     this.resetArrays(paths)
-    for (let i = 0; i < paths.length; i++) {
+    const pathsLen = paths.length
+    for (let i = 0; i < pathsLen; i++) {
       this.indexPath(i)
     }
-    this.readyCount = paths.length
+    this.readyCount = pathsLen
   }
 
   private resetArrays(paths: string[]): void {

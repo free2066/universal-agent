@@ -72,9 +72,10 @@ const getRunningRemoteHosts: () => Promise<string[]> =
             name: string
             latest_build?: { status?: string }
           }>
-          return workspaces
-            .filter(w => w.latest_build?.status === 'running')
-            .map(w => w.name)
+          return workspaces.reduce<string[]>((acc, w) => {
+            if (w.latest_build?.status === 'running') acc.push(w.name)
+            return acc
+          }, [])
         } catch {
           return []
         }
@@ -582,9 +583,11 @@ function extractToolStats(log: LogOption): {
                 }
               }
 
+              const GIT_COMMIT_CMD = 'git commit'
+              const GIT_PUSH_CMD = 'git push'
               const command = (input.command as string) || ''
-              if (command.includes('git commit')) gitCommits++
-              if (command.includes('git push')) gitPushes++
+              if (command.includes(GIT_COMMIT_CMD)) gitCommits++
+              if (command.includes(GIT_PUSH_CMD)) gitPushes++
             }
           }
         }

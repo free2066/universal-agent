@@ -215,11 +215,10 @@ function coerceTodoItems(source: unknown): TodoLikeItem[] {
   if (!Array.isArray(source)) {
     return []
   }
-  return source
-    .filter(item => item && typeof item === 'object')
-    .map(item => {
+  return source.reduce<TodoLikeItem[]>((acc, item) => {
+    if (item && typeof item === 'object') {
       const record = item as Record<string, unknown>
-      return {
+      acc.push({
         id:
           typeof record.id === 'string' && record.id.trim()
             ? record.id.trim()
@@ -232,8 +231,10 @@ function coerceTodoItems(source: unknown): TodoLikeItem[] {
           typeof record.status === 'string' && record.status.trim()
             ? record.status.trim()
             : undefined,
-      }
-    })
+      })
+    }
+    return acc
+  }, [])
 }
 
 function getTodoItemsFromPaths(

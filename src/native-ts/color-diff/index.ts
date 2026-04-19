@@ -182,9 +182,15 @@ type Theme = {
 }
 
 function defaultSyntaxThemeName(themeName: string): string {
-  if (themeName.includes('ansi')) return 'ansi'
-  if (themeName.includes('dark')) return 'Monokai Extended'
-  return 'GitHub'
+  const THEME_ANSI = 'ansi'
+  const THEME_DARK = 'dark'
+  const DEFAULT_ANSI_THEME = 'ansi'
+  const DEFAULT_DARK_THEME = 'Monokai Extended'
+  const DEFAULT_LIGHT_THEME = 'GitHub'
+  
+  if (themeName.includes(THEME_ANSI)) return DEFAULT_ANSI_THEME
+  if (themeName.includes(THEME_DARK)) return DEFAULT_DARK_THEME
+  return DEFAULT_LIGHT_THEME
 }
 
 // highlight.js scope → syntect Monokai Extended foreground (measured from the
@@ -430,7 +436,8 @@ function detectLanguage(
   const ext = extname(filePath).slice(1)
 
   // Filename-based lookup (handles Dockerfile, Makefile, CMakeLists.txt, etc.)
-  const stem = base.split('.')[0] ?? ''
+  const dotIdx = base.indexOf('.')
+  const stem = dotIdx >= 0 ? base.slice(0, dotIdx) : base
   const byName = FILENAME_LANGS[base] ?? FILENAME_LANGS[stem]
   if (byName && hljs().getLanguage(byName)) return byName
   if (ext) {

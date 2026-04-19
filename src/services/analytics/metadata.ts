@@ -658,7 +658,11 @@ const buildEnvContext = memoize(async (): Promise<EnvContext> => {
       githubActionRef: env_GITHUB_ACTION_PATH?.includes(
         'claude-code-action/',
       )
-        ? env_GITHUB_ACTION_PATH.split('claude-code-action/')[1]
+        ? (() => {
+            const MARKER = 'claude-code-action/'
+            const markerIdx = env_GITHUB_ACTION_PATH.indexOf(MARKER)
+            return markerIdx >= 0 ? env_GITHUB_ACTION_PATH.slice(markerIdx + MARKER.length) : undefined
+          })()
         : undefined,
     }),
     ...(getWslVersion() && { wslVersion: getWslVersion() }),

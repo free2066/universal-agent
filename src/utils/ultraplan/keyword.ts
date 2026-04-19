@@ -14,6 +14,9 @@ const OPEN_TO_CLOSE: Record<string, string> = {
 // Regex caching for keyword matching
 // ============================================================================
 
+/** Maximum cache size to prevent memory leaks */
+const MAX_KEYWORD_CACHE_SIZE = 100
+
 /** Cache for keyword test regexes (case-insensitive) */
 const keywordTestCache = new Map<string, RegExp>()
 
@@ -24,6 +27,11 @@ const keywordWordCache = new Map<string, RegExp>()
 function getKeywordTestRegex(keyword: string): RegExp {
   let regex = keywordTestCache.get(keyword)
   if (!regex) {
+    // Enforce cache size limit
+    if (keywordTestCache.size >= MAX_KEYWORD_CACHE_SIZE) {
+      const firstKey = keywordTestCache.keys().next().value
+      keywordTestCache.delete(firstKey)
+    }
     regex = new RegExp(keyword, 'i')
     keywordTestCache.set(keyword, regex)
   }
@@ -35,6 +43,11 @@ function getKeywordTestRegex(keyword: string): RegExp {
 function getKeywordWordRegex(keyword: string): RegExp {
   let regex = keywordWordCache.get(keyword)
   if (!regex) {
+    // Enforce cache size limit
+    if (keywordWordCache.size >= MAX_KEYWORD_CACHE_SIZE) {
+      const firstKey = keywordWordCache.keys().next().value
+      keywordWordCache.delete(firstKey)
+    }
     regex = new RegExp(`\\b${keyword}\\b`, 'gi')
     keywordWordCache.set(keyword, regex)
   }

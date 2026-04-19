@@ -60,7 +60,8 @@ function generateActionsTable(): string {
  * Infer context from action prefix when not in DEFAULT_BINDINGS.
  */
 function inferContextFromAction(action: string): string {
-  const prefix = action.split(':')[0]
+  const colonIdx = action.indexOf(':')
+  const prefix = colonIdx >= 0 ? action.slice(0, colonIdx) : action
   const prefixToContext: Record<string, string> = {
     app: 'Global',
     history: 'Global or Chat',

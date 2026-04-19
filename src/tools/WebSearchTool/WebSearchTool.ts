@@ -78,9 +78,10 @@ async function searchWithTavily(
       throw new Error(`Tavily API error ${resp.status}: ${errText}`)
     }
     tavilyData = await resp.json()
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e)
     logError(e)
-    return { query, results: [`Web search failed: ${e?.message || e}`], durationSeconds: 0 }
+    return { query, results: [`Web search failed: ${message}`], durationSeconds: 0 }
   }
 
   const durationSeconds = (performance.now() - startTime) / 1000

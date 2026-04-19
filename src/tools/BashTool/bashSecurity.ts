@@ -2304,7 +2304,8 @@ export function bashCommandIsSafe_DEPRECATED(
   // goes through all validators — which is the safe direction.
   const { processedCommand } = extractHeredocs(command, { quotedOnly: true })
 
-  const baseCommand = command.split(' ')[0] || ''
+  const spaceIdx = command.indexOf(' ')
+  const baseCommand = spaceIdx >= 0 ? command.slice(0, spaceIdx) : command
   const { withDoubleQuotes, fullyUnquoted, unquotedKeepQuoteChars } =
     extractQuotedContent(processedCommand, baseCommand === 'jq')
 

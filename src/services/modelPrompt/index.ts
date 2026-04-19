@@ -46,7 +46,8 @@ function getPromptFamily(modelName: string): string | null {
   if (lower.startsWith('gemini')) return 'gemini'  // startsWith implies includes
 
   // o-series reasoning models (o1, o3, o4, o1-mini, o3-mini, etc.)
-  if (O_SERIES_MODEL_RE.test(lower) || lower.includes('-o1') || lower.includes('-o3') || lower.includes('-o4')) {
+  const O_MODEL_SUFFIXES = ['-o1', '-o3', '-o4'] as const
+  if (O_SERIES_MODEL_RE.test(lower) || O_MODEL_SUFFIXES.some(suffix => lower.includes(suffix))) {
     return 'gpt-o'
   }
 

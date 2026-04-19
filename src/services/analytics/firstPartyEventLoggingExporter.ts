@@ -381,14 +381,15 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
     events: FirstPartyEventLoggingEvent[],
   ): Promise<FirstPartyEventLoggingEvent[]> {
     // Chunk events into batches
+    const eventsLen = events.length
     const batches: FirstPartyEventLoggingEvent[][] = []
-    for (let i = 0; i < events.length; i += this.maxBatchSize) {
+    for (let i = 0; i < eventsLen; i += this.maxBatchSize) {
       batches.push(events.slice(i, i + this.maxBatchSize))
     }
 
     if (process.env.USER_TYPE === 'ant') {
       logForDebugging(
-        `1P event logging: exporting ${events.length} events in ${batches.length} batch(es)`,
+        `1P event logging: exporting ${eventsLen} events in ${batches.length} batch(es)`,
       )
     }
 
@@ -398,13 +399,14 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
     // probe again with a single batch next tick.
     const failedBatchEvents: FirstPartyEventLoggingEvent[] = []
     let lastErrorContext: string | undefined
-    for (let i = 0; i < batches.length; i++) {
+    const batchesLen = batches.length
+    for (let i = 0; i < batchesLen; i++) {
       const batch = batches[i]!
       try {
         await this.sendBatchWithRetry({ events: batch })
       } catch (error) {
         lastErrorContext = getAxiosErrorContext(error)
-        for (let j = i; j < batches.length; j++) {
+        for (let j = i; j < batchesLen; j++) {
           failedBatchEvents.push(...batches[j]!)
         }
         if (process.env.USER_TYPE === 'ant') {

@@ -254,7 +254,8 @@ export async function getCompoundCommandPrefixesStatic(
   // is lowercased; the emitted prefix keeps the first-seen casing.
   const groups = new Map<string, string[]>()
   for (const prefix of prefixes) {
-    const root = prefix.split(' ')[0]!
+    const spaceIdx = prefix.indexOf(' ')
+    const root = spaceIdx >= 0 ? prefix.slice(0, spaceIdx) : prefix
     const key = root.toLowerCase()
     const group = groups.get(key)
     if (group) {
