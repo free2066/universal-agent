@@ -59,6 +59,24 @@ const PDF_PAGE_LIMIT_RE = /maximum of \d+ PDF pages/
 
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
 
+/**
+ * Helper to check if an error is an APIError with a specific status code.
+ * Reduces repetitive instanceof + status checks throughout this file.
+ */
+function isAPIErrorWithStatus(
+  error: unknown,
+  status: number,
+): error is APIError {
+  return error instanceof APIError && error.status === status
+}
+
+/**
+ * Helper to check if an APIError message includes all required substrings.
+ */
+function hasMessageParts(error: APIError, ...parts: string[]): boolean {
+  return parts.every(part => error.message.includes(part))
+}
+
 export function startsWithApiErrorPrefix(text: string): boolean {
   return (
     text.startsWith(API_ERROR_MESSAGE_PREFIX) ||
@@ -620,12 +638,7 @@ export function getAssistantMessageFromError(
   }
 
   // Check for image size errors (e.g., "image exceeds 5 MB maximum: 5316852 bytes > 5242880 bytes")
-  if (
-    error instanceof APIError &&
-    error.status === 400 &&
-    error.message.includes('image exceeds') &&
-    error.message.includes('maximum')
-  ) {
+  if (isAPIErrorWithStatus(error, 400) && hasMessageParts(error, 'image exceeds', 'maximum')) {
     return createAssistantAPIErrorMessage({
       content: getImageTooLargeErrorMessage(),
       errorDetails: error.message,
@@ -633,12 +646,7 @@ export function getAssistantMessageFromError(
   }
 
   // Check for many-image dimension errors (API enforces stricter 2000px limit for many-image requests)
-  if (
-    error instanceof APIError &&
-    error.status === 400 &&
-    error.message.includes('image dimensions exceed') &&
-    error.message.includes('many-image')
-  ) {
+  if (isAPIErrorWithStatus(error, 400) && hasMessageParts(error, 'image dimensions exceed', 'many-image')) {
     return createAssistantAPIErrorMessage({
       content: getIsNonInteractiveSession()
         ? 'An image in the conversation exceeds the dimension limit for many-image requests (2000px). Start a new session with fewer images.'
@@ -653,10 +661,8 @@ export function getAssistantMessageFromError(
   // so the truthy guard keeps this inert there.
   if (
     AFK_MODE_BETA_HEADER &&
-    error instanceof APIError &&
-    error.status === 400 &&
-    error.message.includes(AFK_MODE_BETA_HEADER) &&
-    error.message.includes('anthropic-beta')
+    isAPIErrorWithStatus(error, 400) &&
+    hasMessageParts(error, AFK_MODE_BETA_HEADER, 'anthropic-beta')
   ) {
     return createAssistantAPIErrorMessage({
       content: 'Auto mode is unavailable for your plan',
@@ -1041,47 +1047,33 @@ export function classifyAPIError(error: unknown): string {
   }
 
   // Image size errors
-  if (
-    error instanceof APIError &&
-    error.status === 400 &&
-    error.message.includes('image exceeds') &&
-    error.message.includes('maximum')
-  ) {
+  // Image size errors
+  if (isAPIErrorWithStatus(error, 400) && hasMessageParts(error, 'image exceeds', 'maximum')) {
     return 'image_too_large'
   }
 
   // Many-image dimension errors
-  if (
-    error instanceof APIError &&
-    error.status === 400 &&
-    error.message.includes('image dimensions exceed') &&
-    error.message.includes('many-image')
-  ) {
+  if (isAPIErrorWithStatus(error, 400) && hasMessageParts(error, 'image dimensions exceed', 'many-image')) {
     return 'image_too_large'
   }
 
   // Tool use errors (400)
   if (
-    error instanceof APIError &&
-    error.status === 400 &&
-    error.message.includes(
-      '`tool_use` ids were found without `tool_result` blocks immediately after',
-    )
+    isAPIErrorWithStatus(error, 400) &&
+    error.message.includes('`tool_use` ids were found without `tool_result` blocks immediately after')
   ) {
     return 'tool_use_mismatch'
   }
 
   if (
-    error instanceof APIError &&
-    error.status === 400 &&
+    isAPIErrorWithStatus(error, 400) &&
     error.message.includes('unexpected `tool_use_id` found in `tool_result`')
   ) {
     return 'unexpected_tool_result'
   }
 
   if (
-    error instanceof APIError &&
-    error.status === 400 &&
+    isAPIErrorWithStatus(error, 400) &&
     error.message.includes('`tool_use` ids must be unique')
   ) {
     return 'duplicate_tool_use_id'
@@ -1089,8 +1081,7 @@ export function classifyAPIError(error: unknown): string {
 
   // Invalid model errors (400)
   if (
-    error instanceof APIError &&
-    error.status === 400 &&
+    isAPIErrorWithStatus(error, 400) &&
     error.message.toLowerCase().includes('invalid model name')
   ) {
     return 'invalid_model'

@@ -1730,70 +1730,54 @@ export async function getMatchingHooks(
     // Hooks with different `if` conditions are distinct even if otherwise identical.
     const getIfCondition = (hook: { if?: string }): string => hook.if ?? ''
 
-    const uniqueCommandHooks = Array.from(
-      new Map(
-        matchedHooks
-          .filter(
-            (
-              m,
-            ): m is MatchedHook & { hook: HookCommand & { type: 'command' } } =>
-              m.hook.type === 'command',
-          )
-          // shell is part of identity: {command:'echo x', shell:'bash'}
-          // and {command:'echo x', shell:'powershell'} are distinct hooks,
-          // not duplicates. Default to 'bash' so legacy configs (no shell
-          // field) still dedup against explicit shell:'bash'.
-          .map(m => [
-            hookDedupKey(
-              m,
-              `${m.hook.shell ?? DEFAULT_HOOK_SHELL}\0${m.hook.command}\0${getIfCondition(m.hook)}`,
-            ),
-            m,
-          ]),
-      ).values(),
-    )
-    const uniquePromptHooks = Array.from(
-      new Map(
-        matchedHooks
-          .filter(m => m.hook.type === 'prompt')
-          .map(m => [
-            hookDedupKey(
-              m,
-              `${(m.hook as { prompt: string }).prompt}\0${getIfCondition(m.hook as { if?: string })}`,
-            ),
-            m,
-          ]),
-      ).values(),
-    )
-    const uniqueAgentHooks = Array.from(
-      new Map(
-        matchedHooks
-          .filter(m => m.hook.type === 'agent')
-          .map(m => [
-            hookDedupKey(
-              m,
-              `${(m.hook as { prompt: string }).prompt}\0${getIfCondition(m.hook as { if?: string })}`,
-            ),
-            m,
-          ]),
-      ).values(),
-    )
-    const uniqueHttpHooks = Array.from(
-      new Map(
-        matchedHooks
-          .filter(m => m.hook.type === 'http')
-          .map(m => [
-            hookDedupKey(
-              m,
-              `${(m.hook as { url: string }).url}\0${getIfCondition(m.hook as { if?: string })}`,
-            ),
-            m,
-          ]),
-      ).values(),
-    )
-    const callbackHooks = matchedHooks.filter(m => m.hook.type === 'callback')
-    // Function hooks don't need deduplication - each callback is unique
-    const functionHooks = matchedHooks.filter(m => m.hook.type === 'function')
+    // Single-pass grouping to avoid multiple array traversals (was 6, now 1)
+    const commandMap = new Map<string, MatchedHook>()
+    const promptMap = new Map<string, MatchedHook>()
+    const agentMap = new Map<string, MatchedHook>()
+    const httpMap = new Map<string, MatchedHook>()
+    const callbackHooks: MatchedHook[] = []
+    const functionHooks: MatchedHook[] = []
+
+    for (const m of matchedHooks) {
+      if (m.hook.type === 'command') {
+        // shell is part of identity: {command:'echo x', shell:'bash'}
+        // and {command:'echo x', shell:'powershell'} are distinct hooks,
+        // not duplicates. Default to 'bash' so legacy configs (no shell
+        // field) still dedup against explicit shell:'bash'.
+        const key = hookDedupKey(
+          m,
+          `${m.hook.shell ?? DEFAULT_HOOK_SHELL}\0${m.hook.command}\0${getIfCondition(m.hook)}`,
+        )
+        if (!commandMap.has(key)) commandMap.set(key, m)
+      } else if (m.hook.type === 'prompt') {
+        const key = hookDedupKey(
+          m,
+          `${(m.hook as { prompt: string }).prompt}\0${getIfCondition(m.hook as { if?: string })}`,
+        )
+        if (!promptMap.has(key)) promptMap.set(key, m)
+      } else if (m.hook.type === 'agent') {
+        const key = hookDedupKey(
+          m,
+          `${(m.hook as { prompt: string }).prompt}\0${getIfCondition(m.hook as { if?: string })}`,
+        )
+        if (!agentMap.has(key)) agentMap.set(key, m)
+      } else if (m.hook.type === 'http') {
+        const key = hookDedupKey(
+          m,
+          `${(m.hook as { url: string }).url}\0${getIfCondition(m.hook as { if?: string })}`,
+        )
+        if (!httpMap.has(key)) httpMap.set(key, m)
+      } else if (m.hook.type === 'callback') {
+        callbackHooks.push(m)
+      } else if (m.hook.type === 'function') {
+        functionHooks.push(m)
+      }
+    }
+
+    const uniqueCommandHooks = Array.from(commandMap.values())
+    const uniquePromptHooks = Array.from(promptMap.values())
+    const uniqueAgentHooks = Array.from(agentMap.values())
+    const uniqueHttpHooks = Array.from(httpMap.values())
     const uniqueHooks = [
       ...uniqueCommandHooks,
       ...uniquePromptHooks,
