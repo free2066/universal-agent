@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * models/llm/openai.ts — OpenAI 及兼容 Provider 实现
  *
@@ -16,6 +15,17 @@
 
 import OpenAI from 'openai';
 import type { LLMClient, ChatOptions, ChatResponse, Message } from '../types.js';
+
+// Extended types for streaming responses that may include usage or reasoning_content
+interface ExtendedChatCompletionChunk extends OpenAI.ChatCompletionChunk {
+  usage?: OpenAI.CompletionUsage;
+}
+
+interface ExtendedDelta {
+  content?: string;
+  reasoning_content?: string;
+  tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
+}
 import { withInferenceTimeout, safeParseJSON, toOpenAIUserContent, msgText } from './shared.js';
 import { isUsageInvalid, estimateInputTokens, estimateOutputTokens } from '../../utils/tokenEstimate.js';
 
@@ -76,7 +86,7 @@ export class OpenAIClient implements LLMClient {
             input_tokens: usage.prompt_tokens ?? 0,
             output_tokens: usage.completion_tokens ?? 0,
           } : undefined,
-        };
+        } as ChatResponse;
       }
 
       return {
@@ -86,7 +96,7 @@ export class OpenAIClient implements LLMClient {
           input_tokens: usage.prompt_tokens ?? 0,
           output_tokens: usage.completion_tokens ?? 0,
         } : undefined,
-      };
+      } as ChatResponse;
     });
   }
 
@@ -133,7 +143,7 @@ export class OpenAIClient implements LLMClient {
 
       for await (const chunk of stream) {
         // Extract usage from chunk if present (last chunk may contain usage)
-        const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+        const chunkUsage = (chunk as ExtendedChatCompletionChunk).usage;
         if (chunkUsage) {
           streamUsage = {
             input_tokens: chunkUsage.prompt_tokens ?? 0,
@@ -141,17 +151,13 @@ export class OpenAIClient implements LLMClient {
           };
         }
 
-        const delta = chunk.choices[0]?.delta as {
-          content?: string;
-          reasoning_content?: string;
-          tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }>;
-        };
+        const delta = chunk.choices[0]?.delta as ExtendedDelta;
         if (!delta) continue;
 
         if (delta.content) {
           onChunk(delta.content);
           textContent += delta.content;
-        } else if ((delta as any).reasoning_content) {
+        } else if (delta.reasoning_content) {
           // GLM-5/MiMo: reasoning phase only emits reasoning_content, not content.
           // Call onChunk with empty string so downstream stream generators (buildRealStreamResult)
           // don't deadlock waiting for the first real-content chunk.
@@ -195,7 +201,7 @@ export class OpenAIClient implements LLMClient {
             }
           : streamUsage;
         
-        return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage };
+        return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage } as ChatResponse;
       }
 
       // Fallback to estimation if usage is invalid
@@ -206,7 +212,7 @@ export class OpenAIClient implements LLMClient {
           }
         : streamUsage;
 
-      return { type: 'text', content: textContent, usage: finalUsage };
+      return { type: 'text', content: textContent, usage: finalUsage } as ChatResponse;
     });
   }
 
@@ -289,7 +295,7 @@ export class DeepSeekClient extends OpenAIClient {
               input_tokens: usage.prompt_tokens ?? 0,
               output_tokens: usage.completion_tokens ?? 0,
             } : undefined,
-          };
+          } as ChatResponse;
         }
         return {
           type: 'text',
@@ -298,7 +304,7 @@ export class DeepSeekClient extends OpenAIClient {
             input_tokens: usage.prompt_tokens ?? 0,
             output_tokens: usage.completion_tokens ?? 0,
           } : undefined,
-        };
+        } as ChatResponse;
       });
     }
     return super.chat(options);
@@ -327,7 +333,7 @@ export class DeepSeekClient extends OpenAIClient {
         const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
         for await (const chunk of stream) {
           // Extract usage from chunk if present
-          const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+          const chunkUsage = (chunk as ExtendedChatCompletionChunk).usage;
           if (chunkUsage) {
             streamUsage = {
               input_tokens: chunkUsage.prompt_tokens ?? 0,
@@ -371,7 +377,7 @@ export class DeepSeekClient extends OpenAIClient {
               }
             : streamUsage;
           
-          return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage };
+          return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage } as ChatResponse;
         }
         
         const finalUsage = isUsageInvalid(streamUsage)
@@ -381,7 +387,7 @@ export class DeepSeekClient extends OpenAIClient {
             }
           : streamUsage;
         
-        return { type: 'text', content: textContent, usage: finalUsage };
+        return { type: 'text', content: textContent, usage: finalUsage } as ChatResponse;
       });
     }
     return super.streamChat(options, onChunk);
@@ -437,7 +443,7 @@ export class QwenClient extends OpenAIClient {
         let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
         for await (const chunk of stream) {
           // Extract usage from chunk if present (last chunk may contain usage)
-          const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+          const chunkUsage = (chunk as ExtendedChatCompletionChunk).usage;
           if (chunkUsage) {
             streamUsage = {
               input_tokens: chunkUsage.prompt_tokens ?? 0,
@@ -480,7 +486,7 @@ export class QwenClient extends OpenAIClient {
               }
             : streamUsage;
           
-          return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage };
+          return { type: 'tool_calls', content: textContent, toolCalls, usage: finalUsage } as ChatResponse;
         }
         
         const finalUsage = isUsageInvalid(streamUsage)
@@ -490,7 +496,7 @@ export class QwenClient extends OpenAIClient {
             }
           : streamUsage;
         
-        return { type: 'text', content: textContent, usage: finalUsage };
+        return { type: 'text', content: textContent, usage: finalUsage } as ChatResponse;
       });
     }
     return super.streamChat(options, onChunk);
@@ -604,7 +610,7 @@ export class OpenRouterClient implements LLMClient {
             input_tokens: usage.prompt_tokens ?? 0,
             output_tokens: usage.completion_tokens ?? 0,
           } : undefined,
-        };
+        } as ChatResponse;
       }
 
       return {
@@ -614,7 +620,7 @@ export class OpenRouterClient implements LLMClient {
           input_tokens: usage.prompt_tokens ?? 0,
           output_tokens: usage.completion_tokens ?? 0,
         } : undefined,
-      };
+      } as ChatResponse;
     });
   }
 
@@ -642,7 +648,7 @@ export class OpenRouterClient implements LLMClient {
       let streamUsage: { input_tokens: number; output_tokens: number } | undefined;
       for await (const chunk of stream) {
         // Extract usage from chunk if present (last chunk may contain usage)
-        const chunkUsage = (chunk as any).usage as OpenAI.CompletionUsage | undefined;
+        const chunkUsage = (chunk as ExtendedChatCompletionChunk).usage;
         if (chunkUsage) {
           streamUsage = {
             input_tokens: chunkUsage.prompt_tokens ?? 0,
@@ -675,7 +681,7 @@ export class OpenRouterClient implements LLMClient {
               output_tokens: estimateOutputTokens(textContent, this.model),
             }
           : streamUsage;
-        return { type: 'tool_calls', content: textContent, toolCalls: Array.from(toolCallMap.entries()).sort((a, b) => a[0] - b[0]).map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) })), usage: finalUsage };
+        return { type: 'tool_calls', content: textContent, toolCalls: Array.from(toolCallMap.entries()).sort((a, b) => a[0] - b[0]).map(([, tc]) => ({ id: tc.id, name: tc.name, arguments: safeParseJSON(tc.args, tc.name) })), usage: finalUsage } as ChatResponse;
       }
       const finalUsage = isUsageInvalid(streamUsage)
         ? {
@@ -683,7 +689,7 @@ export class OpenRouterClient implements LLMClient {
             output_tokens: estimateOutputTokens(textContent, this.model),
           }
         : streamUsage;
-      return { type: 'text', content: textContent, usage: finalUsage };
+      return { type: 'text', content: textContent, usage: finalUsage } as ChatResponse;
     });
   }
 
