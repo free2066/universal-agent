@@ -13,7 +13,7 @@ const MAX_DIAGNOSTICS_SUMMARY_CHARS = 4000
 
 export interface Diagnostic {
   message: string
-  severity: 'Error' | 'Warning' | 'Info' | 'Hint'
+  severity: 'Error' | 'Warning' | 'Info' | 'Hint' | 1 | 2 | 3 | 4
   range: {
     start: { line: number; character: number }
     end: { line: number; character: number }

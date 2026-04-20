@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * src/services/lsp/collectDiagnostics.ts
  *
@@ -12,7 +11,7 @@
  */
 
 import { checkForLSPDiagnostics } from './LSPDiagnosticRegistry.js'
-import type { DiagnosticFile } from '../diagnosticTracking.js'
+import type { Diagnostic, DiagnosticFile } from '../diagnosticTracking.js'
 
 const MAX_ERRORS_PER_FILE = 10
 const MAX_OTHER_FILES = 3
@@ -72,7 +71,7 @@ export async function collectLSPDiagnosticsForFile(
   // Format diagnostics into <lsp_diagnostics> block
   const parts: string[] = []
 
-  const formatDiag = (diag: LSPDiagnostic): string => {
+  const formatDiag = (diag: Diagnostic): string => {
     const loc = diag.range
       ? `line ${(diag.range.start?.line ?? 0) + 1}`
       : ''
@@ -81,7 +80,7 @@ export async function collectLSPDiagnosticsForFile(
     return `  ${loc}: ${diag.message}${code}${source}`
   }
 
-  const isError = (d: LSPDiagnostic) => d.severity === 'Error' || d.severity === 1
+  const isError = (d: Diagnostic) => d.severity === 'Error' || d.severity === 1
 
   if (currentFile) {
     const errors = currentFile.diagnostics.filter(isError)

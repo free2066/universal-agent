@@ -95,7 +95,8 @@ const SEVERITY_TO_NUM: Record<string, number> = {
   Hint: 4,
 }
 
-function severityToNumber(severity: string | undefined): number {
+function severityToNumber(severity: string | number | undefined): number {
+  if (typeof severity === 'number') return severity
   return (severity !== undefined && SEVERITY_TO_NUM[severity]) || 4
 }
 
@@ -105,7 +106,7 @@ function severityToNumber(severity: string | undefined): number {
  */
 function createDiagnosticKey(diag: {
   message: string
-  severity?: string
+  severity?: string | number
   range?: unknown
   source?: string
   code?: unknown
