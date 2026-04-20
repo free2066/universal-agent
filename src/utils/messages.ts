@@ -5434,14 +5434,15 @@ export function ensureToolResultPairing(
     // Capture diagnostic info to help identify root cause
     const messageTypes = messages.map((m, idx) => {
       if (m.type === 'assistant') {
-        const toolUses = m.message.content
-          .filter(b => b.type === 'tool_use')
-          .map(b => (b as ToolUseBlock | ToolUseBlockParam).id)
-        const serverToolUses = m.message.content
-          .filter(
-            b => b.type === 'server_tool_use' || b.type === 'mcp_tool_use',
-          )
-          .map(b => (b as { id: string }).id)
+        const toolUses: string[] = []
+        const serverToolUses: string[] = []
+        for (const b of m.message.content) {
+          if (b.type === 'tool_use') {
+            toolUses.push((b as ToolUseBlock | ToolUseBlockParam).id)
+          } else if (b.type === 'server_tool_use' || b.type === 'mcp_tool_use') {
+            serverToolUses.push((b as { id: string }).id)
+          }
+        }
         const parts = [
           `id=${m.message.id}`,
           `tool_uses=[${toolUses.join(',')}]`,
@@ -5452,12 +5453,12 @@ export function ensureToolResultPairing(
         return `[${idx}] assistant(${parts.join(', ')})`
       }
       if (m.type === 'user' && Array.isArray(m.message.content)) {
-        const toolResults = m.message.content
-          .filter(
-            b =>
-              typeof b === 'object' && 'type' in b && b.type === 'tool_result',
-          )
-          .map(b => (b as ToolResultBlockParam).tool_use_id)
+        const toolResults: string[] = []
+        for (const b of m.message.content) {
+          if (typeof b === 'object' && 'type' in b && b.type === 'tool_result') {
+            toolResults.push((b as ToolResultBlockParam).tool_use_id)
+          }
+        }
         if (toolResults.length > 0) {
           return `[${idx}] user(tool_results=[${toolResults.join(',')}])`
         }

@@ -181,8 +181,10 @@ export function parseToolPreset(preset: string): ToolPreset | null {
  */
 export function getToolsForDefaultPreset(): string[] {
   const tools = getAllBaseTools()
-  const isEnabled = tools.map(tool => tool.isEnabled())
-  return tools.filter((_, i) => isEnabled[i]).map(tool => tool.name)
+  return tools.reduce<string[]>((acc, tool) => {
+    if (tool.isEnabled()) acc.push(tool.name)
+    return acc
+  }, [])
 }
 
 /**

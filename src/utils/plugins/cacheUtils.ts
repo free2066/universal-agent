@@ -189,7 +189,10 @@ async function removeIfEmpty(dirPath: string): Promise<void> {
 async function readSubdirs(dirPath: string): Promise<string[]> {
   try {
     const entries = await readdir(dirPath, { withFileTypes: true })
-    return entries.filter(d => d.isDirectory()).map(d => d.name)
+    return entries.reduce<string[]>((acc, d) => {
+      if (d.isDirectory()) acc.push(d.name)
+      return acc
+    }, [])
   } catch {
     return []
   }

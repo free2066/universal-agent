@@ -345,9 +345,10 @@ export const LSPTool = buildTool({
         if (input.operation === 'workspaceSymbol') {
           // SymbolInformation has location.uri — filter by extracting locations
           const symbols = result as SymbolInformation[]
-          const locations = symbols
-            .filter(s => s?.location?.uri)
-            .map(s => s.location)
+          const locations = symbols.reduce<Location[]>((acc, s) => {
+            if (s?.location?.uri) acc.push(s.location)
+            return acc
+          }, [])
           const filteredLocations = await filterGitIgnoredLocations(
             locations,
             cwd,
