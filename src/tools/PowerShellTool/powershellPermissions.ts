@@ -204,7 +204,8 @@ function filterRulesByContentsMatchingInput(
   // (for canonical resolution) versions. For module-qualified inputs like
   // `Microsoft.PowerShell.Utility\Invoke-Expression foo`, rawCmdName holds the
   // full token so `command.slice(rawCmdName.length)` yields the correct rest.
-  const rawCmdName = command.split(/\s+/)[0] ?? ''
+  const wsIdx = command.search(/\s/)
+  const rawCmdName = wsIdx >= 0 ? command.slice(0, wsIdx) : command ?? ''
   const inputCmdName = stripModulePrefix(rawCmdName)
   const inputCanonical = resolveToCanonical(inputCmdName)
 
@@ -757,7 +758,7 @@ export async function powershellToolHasPermission(
     exactMatchResult.behavior === 'allow' &&
     !parsed.valid &&
     preParseAskDecision === null &&
-    classifyCommandName(command.split(/\s+/)[0] ?? '') !== 'application'
+    classifyCommandName((() => { const wsIdx = command.search(/\s/); return wsIdx >= 0 ? command.slice(0, wsIdx) : command; })()) !== 'application'
   ) {
     return exactMatchResult
   }
@@ -825,7 +826,8 @@ export async function powershellToolHasPermission(
         normalized = normalized.slice(m[0].length)
       }
       normalized = normalized.replace(/^[&.]\s+/, '') // & cmd, . cmd (dot-source)
-      const rawFirst = normalized.split(/\s+/)[0] ?? ''
+      const wsIdx = normalized.search(/\s/)
+      const rawFirst = wsIdx >= 0 ? normalized.slice(0, wsIdx) : normalized ?? ''
       const firstTok = rawFirst.replace(/^['"]|['"]$/g, '')
       const normalizedFrag = firstTok + normalized.slice(rawFirst.length)
       // SECURITY: parse-independent dangerous-removal hard-deny. The

@@ -313,7 +313,7 @@ function stripBackslashEscapes(path: string): string {
   const withoutEscapes = withPlaceholder.replace(/\\(.)/g, '$1')
 
   // Replace placeholders back to single backslashes
-  return withoutEscapes.replace(new RegExp(placeholder, 'g'), '\\')
+  return withoutEscapes.replaceAll(placeholder, '\\')
 }
 
 /**

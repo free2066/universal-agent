@@ -125,8 +125,9 @@ export class PermissionService {
    */
   evaluateRequest(req: PermissionRequest): PermissionAction {
     const results = req.patterns.map(p => this.evaluate(req.permission, p))
-    if (results.includes('deny')) return 'deny'
-    if (results.includes('ask')) return 'ask'
+    const resultSet = new Set(results)
+    if (resultSet.has('deny')) return 'deny'
+    if (resultSet.has('ask')) return 'ask'
     return 'allow'
   }
 

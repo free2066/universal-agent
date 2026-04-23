@@ -8,6 +8,7 @@ import {
 } from '../memdir/paths.js'
 import { isAgentMemoryPath } from '../tools/AgentTool/agentMemory.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
+import { WIN_SEP_RE } from './pathConstants.js'
 import {
   posixPathToWindowsPath,
   windowsPathToPosixPath,
@@ -20,9 +21,6 @@ const teamMemPaths = feature('TEAMMEM')
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 const IS_WINDOWS = process.platform === 'win32'
-
-// Precompiled regex for path separator conversion (performance optimization)
-const WIN_SEP_RE = /\\/g
 
 // Normalize path separators to posix (/). Does NOT translate drive encoding.
 function toPosix(p: string): string {

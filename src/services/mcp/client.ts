@@ -2543,7 +2543,8 @@ export async function transformResultContent(
         if (isImage) {
           // Resize and compress image blob, enforcing API dimension limits
           const imageBuffer = Buffer.from(resource.blob, 'base64')
-          const ext = resource.mimeType?.split('/')[1] || 'png'
+          const slashIdx = resource.mimeType?.indexOf('/') ?? -1
+          const ext = slashIdx >= 0 ? resource.mimeType!.slice(slashIdx + 1) : 'png'
           const resized = await maybeResizeAndDownsampleImageBuffer(
             imageBuffer,
             imageBuffer.length,

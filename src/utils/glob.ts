@@ -6,6 +6,7 @@ import type { ToolPermissionContext } from '../Tool.js'
 import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
 import { isFsInaccessible } from './errors.js'
+import { WIN_SEP_RE } from './pathConstants.js'
 import {
   getFileReadIgnorePatterns,
   normalizePatternsToPath,
@@ -230,7 +231,7 @@ async function globNative({
       }
 
       const absolutePath = join(currentDir, entry.name)
-      const relativePath = relative(searchDir, absolutePath).replace(/\\/g, '/')
+      const relativePath = relative(searchDir, absolutePath).replace(WIN_SEP_RE, '/')
       if (!relativePath || relativePath.startsWith('..')) {
         continue
       }
@@ -323,7 +324,7 @@ async function loadDirectoryIgnoreMatchers(
   matcher.add(combined)
   return [
     {
-      basePath: relative(searchDir, currentDir).replace(/\\/g, '/'),
+      basePath: relative(searchDir, currentDir).replace(WIN_SEP_RE, '/'),
       matcher,
     },
   ]

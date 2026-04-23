@@ -5,14 +5,12 @@ import {
 } from 'src/services/analytics/index.js'
 import { logForDebugging } from './debug.js'
 import { isEnvTruthy } from './envUtils.js'
+import { WIN_SEP_RE } from './pathConstants.js'
 import { getPlatform } from './platform.js'
 
 // Track warnings to avoid spam — bounded to prevent unbounded memory growth
 export const MAX_WARNING_KEYS = 1000
 const warningCounts = new Map<string, number>()
-
-// Precompiled regex for Windows path separator conversion
-const WIN_SEP_RE = /\\/g
 
 // Check if running from a build directory (development mode)
 // This is a sync version of the logic in getCurrentInstallationType()

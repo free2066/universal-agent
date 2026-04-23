@@ -94,7 +94,8 @@ async function copyOrWriteToFile(text: string, filename: string): Promise<string
   }
 }
 function truncateLine(text: string, maxLen: number): string {
-  const firstLine = text.split('\n')[0] ?? '';
+  const nlIdx = text.indexOf('\n')
+  const firstLine = (nlIdx >= 0 ? text.slice(0, nlIdx) : text) ?? '';
   if (stringWidth(firstLine) <= maxLen) {
     return firstLine;
   }

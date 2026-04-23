@@ -183,8 +183,9 @@ export class FileIndex {
     }
 
     // Smart case: lowercase query → case-insensitive; any uppercase → case-sensitive
-    const caseSensitive = query !== query.toLowerCase()
-    const needle = caseSensitive ? query : query.toLowerCase()
+    const queryLower = query.toLowerCase()
+    const caseSensitive = query !== queryLower
+    const needle = caseSensitive ? query : queryLower
     const nLen = Math.min(needle.length, MAX_QUERY_LEN)
     const needleChars: string[] = new Array(nLen)
     let needleBitmap = 0

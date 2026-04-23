@@ -36,6 +36,10 @@ import type {
 /** 正则表达式常量，用于移除 UUID 中的连字符 */
 const UUID_HYPHEN_REGEX = /-/g
 
+/** 429 rate-limit retry delays in milliseconds */
+const RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const
+const MAX_RETRY_DELAY_MS = 60_000
+
 /**
  * 生成 24 字符的短 ID（基于 UUID）
  * 用于 message_id 和 tool_use_id 的生成
@@ -667,16 +671,15 @@ export class MultiModelAnthropicAdapter {
         // UA 修改：支持持久重试模式
         const persistent = isPersistentRetryEnabled()
         const BASE_RETRY_DELAY_MS = 15_000
-        const MAX_RETRY_DELAY_MS = 5 * 60 * 1000
-        const RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const
+        const MAX_PERSISTENT_RETRY_DELAY_MS = 5 * 60 * 1000
         
         const calculateExponentialBackoff = (attempt: number): number =>
-          Math.min(BASE_RETRY_DELAY_MS * Math.pow(2, attempt), MAX_RETRY_DELAY_MS)
+          Math.min(BASE_RETRY_DELAY_MS * Math.pow(2, attempt), MAX_PERSISTENT_RETRY_DELAY_MS)
         
         const getStreamDelay = (attempt: number): number => {
           return persistent
             ? calculateExponentialBackoff(attempt)
-            : (RETRY_DELAYS_MS[attempt] ?? 60_000)
+            : (RETRY_DELAYS_MS[attempt] ?? MAX_RETRY_DELAY_MS)
         }
         
         const attemptStream = async (attempt: number): Promise<any> => {
@@ -758,17 +761,13 @@ export class MultiModelAnthropicAdapter {
       if (is429) {
         const persistent = isPersistentRetryEnabled()
         const maxRetries = persistent ? Infinity : 3
-        const RETRY_DELAYS_MS = [15_000, 30_000, 60_000] as const
         
         if (retryCount < maxRetries) {
-          // 持久模式：使用指数退避，最大 5 分钟
-          // 普通模式：使用固定延迟数组
           let delay: number
           if (persistent) {
-            // 指数退避：15s → 30s → 60s → 120s → ... → 最大 5 分钟
             delay = Math.min(15_000 * Math.pow(2, retryCount), 5 * 60 * 1000)
           } else {
-            delay = RETRY_DELAYS_MS[retryCount] ?? 60_000
+            delay = RETRY_DELAYS_MS[retryCount] ?? MAX_RETRY_DELAY_MS
           }
           
           const retryNum = retryCount + 1

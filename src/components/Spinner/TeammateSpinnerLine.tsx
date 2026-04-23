@@ -50,7 +50,9 @@ function getMessagePreview(messages: InProcessTeammateTaskState['messages']): st
           // Look for common descriptive fields
           const desc = input.description as string | undefined || input.prompt as string | undefined || input.command as string | undefined || input.query as string | undefined || input.pattern as string | undefined;
           if (desc) {
-            toolLine = desc.split('\n')[0] ?? toolLine;
+            const nlIdx = desc.indexOf('\n')
+            const firstLine = nlIdx >= 0 ? desc.slice(0, nlIdx) : desc
+            toolLine = firstLine ?? toolLine;
           }
         }
         allLines.push(truncateToWidth(toolLine, maxLineLength));

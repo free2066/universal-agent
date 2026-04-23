@@ -318,8 +318,10 @@ export function getPluginErrorMessage(error: PluginError): string {
     case 'mcp-config-invalid':
       return `MCP server ${error.serverName} invalid: ${error.validationError}`
     case 'mcp-server-suppressed-duplicate': {
+      const colonIdx = error.duplicateOf.indexOf(':')
+      const pluginPart = colonIdx >= 0 ? error.duplicateOf.slice(colonIdx + 1) : '?'
       const dup = error.duplicateOf.startsWith('plugin:')
-        ? `server provided by plugin "${error.duplicateOf.split(':')[1] ?? '?'}"`
+        ? `server provided by plugin "${pluginPart}"`
         : `already-configured "${error.duplicateOf}"`
       return `MCP server "${error.serverName}" skipped — same command/URL as ${dup}`
     }

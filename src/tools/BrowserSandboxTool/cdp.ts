@@ -83,7 +83,9 @@ export function detectChromePath(): string | null {
       const nlIdx = trimmed2.indexOf('\n');
       const found = nlIdx >= 0 ? trimmed2.slice(0, nlIdx) : trimmed2;
       if (found && existsSync(found)) return found;
-    } catch {}
+    } catch {
+      // Ignore: browser command may not be available on this platform
+    }
   }
 
   return null;

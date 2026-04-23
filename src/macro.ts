@@ -32,9 +32,13 @@ declare global {
       try {
         const pkg = JSON.parse(readFileSync(p, 'utf8'))
         if (pkg.version) { version = pkg.version; break }
-      } catch {}
+      } catch {
+        // Ignore: package.json may not exist or be malformed
+      }
     }
-  } catch {}
+  } catch {
+    // Ignore: version detection is non-critical, fallback to 'unknown'
+  }
   ;(globalThis as any).MACRO = {
     VERSION: version,
     VERSION_CHANGELOG: '',

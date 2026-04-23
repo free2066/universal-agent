@@ -1632,8 +1632,9 @@ function isGitSafe(args: string[]): boolean {
         return false
       }
     }
-    const hasInlineValue = arg.includes('=')
-    const flagName = hasInlineValue ? arg.split('=')[0] || '' : arg
+    const eqIdx = arg.indexOf('=')
+    const hasInlineValue = eqIdx >= 0
+    const flagName = hasInlineValue ? arg.slice(0, eqIdx) || '' : arg
     if (DANGEROUS_GIT_GLOBAL_FLAGS.has(flagName)) {
       return false
     }

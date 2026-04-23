@@ -272,8 +272,12 @@ async function loadLogList(path: string): Promise<LogOption[]> {
           ? parseISOString(lastMessage.timestamp)
           : parseISOString(date),
         firstPrompt:
-          firstPrompt.split('\n')[0]?.slice(0, 50) +
-            (firstPrompt.length > 50 ? '…' : '') || 'No prompt',
+          (() => {
+            const nlIdx = firstPrompt.indexOf('\n')
+            const endIdx = nlIdx >= 0 ? Math.min(nlIdx, 50) : 50
+            const snippet = firstPrompt.slice(0, endIdx)
+            return (snippet + (firstPrompt.length > endIdx ? '…' : '')) || 'No prompt'
+          })(),
         messageCount: messages.length,
         isSidechain,
       }

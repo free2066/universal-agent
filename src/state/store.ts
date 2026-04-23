@@ -27,14 +27,16 @@ export function createStore<T>(
       // leave React components with stale state).
       try {
         onChange?.({ newState: next, oldState: prev })
-      } catch (e) {
-        console.error('[store] onChange threw:', e)
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e)
+        console.error(`[store] onChange threw: ${message}`)
       }
       for (const listener of listeners) {
         try {
           listener()
-        } catch (e) {
-          console.error('[store] listener threw:', e)
+        } catch (e: unknown) {
+          const message = e instanceof Error ? e.message : String(e)
+          console.error(`[store] listener threw: ${message}`)
         }
       }
     },

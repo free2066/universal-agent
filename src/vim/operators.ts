@@ -309,7 +309,8 @@ export function executePaste(
 
     const insertLine = after ? currentLine + 1 : currentLine
     const contentLines = content.split('\n')
-    const repeatedLines = Array.from({ length: count }, () => contentLines).flat()
+    const repeatedLines: string[] = []
+    for (let i = 0; i < count; i++) repeatedLines.push(...contentLines)
 
     const newLines = [
       ...lines.slice(0, insertLine),

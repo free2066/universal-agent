@@ -177,7 +177,7 @@ export class DiagnosticTrackingService {
         this.lastProcessedTimestamps.set(normalizedPath, timestamp)
       }
     } catch (_error) {
-      // Fail silently if IDE doesn't support diagnostics
+      // Intentionally ignored: IDE doesn't support diagnostics — non-critical feature detection
     }
   }
 
@@ -204,7 +204,7 @@ export class DiagnosticTrackingService {
       )
       allDiagnosticFiles = this.parseDiagnosticResult(result)
     } catch (_error) {
-      // If fetching all diagnostics fails, return empty
+      // Intentionally ignored: fetching all diagnostics failed — return empty to avoid blocking
       return []
     }
     const diagnosticsForFileUrisWithBaselines = allDiagnosticFiles

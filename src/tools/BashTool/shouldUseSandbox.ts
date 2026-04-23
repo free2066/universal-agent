@@ -37,7 +37,9 @@ function containsExcludedCommand(command: string): boolean {
     try {
       const commandParts = splitCommand_DEPRECATED(command)
       for (const part of commandParts) {
-        const baseCommand = part.trim().split(' ')[0]
+        const trimmed = part.trim()
+        const spaceIdx = trimmed.indexOf(' ')
+        const baseCommand = spaceIdx >= 0 ? trimmed.slice(0, spaceIdx) : trimmed
         if (baseCommand && disabledCommands.commands.includes(baseCommand)) {
           return true
         }

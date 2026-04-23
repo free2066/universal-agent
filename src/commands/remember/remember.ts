@@ -116,10 +116,11 @@ export const call: LocalCommandCall = async (args, _context) => {
       type: 'text',
       text: `已记住: "${content}"\n→ 写入 ${getTargetLabel(target)}\n→ 路径: ${memoryPath}`,
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
     return {
       type: 'text',
-      text: `写入失败: ${err?.message ?? err}`,
+      text: `写入失败: ${message}`,
     }
   }
 }

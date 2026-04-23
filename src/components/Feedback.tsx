@@ -477,7 +477,8 @@ function createFallbackTitle(description: string): string {
   // Create a safe fallback title based on the bug description
 
   // Try to extract a meaningful title from the first line
-  const firstLine = description.split('\n')[0] || '';
+  const nlIdx = description.indexOf('\n')
+  const firstLine = (nlIdx >= 0 ? description.slice(0, nlIdx) : description) || '';
 
   // If the first line is very short, use it directly
   if (firstLine.length <= 60 && firstLine.length > 5) {

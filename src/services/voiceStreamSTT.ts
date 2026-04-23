@@ -129,15 +129,16 @@ export async function connectVoiceStream(
   // pod, same OAuth Bearer auth — just a CF zone that doesn't block us.
   // Desktop dictation still uses claude.ai (Swift URLSession has a
   // browser-class JA3 fingerprint, so CF lets it through).
+  const voiceStreamBaseUrl = process.env.VOICE_STREAM_BASE_URL
   const wsBaseUrl =
-    process.env.VOICE_STREAM_BASE_URL ||
+    voiceStreamBaseUrl ||
     getOauthConfig()
       .BASE_API_URL.replace('https://', 'wss://')
       .replace('http://', 'ws://')
 
-  if (process.env.VOICE_STREAM_BASE_URL) {
+  if (voiceStreamBaseUrl) {
     logForDebugging(
-      `[voice_stream] Using VOICE_STREAM_BASE_URL override: ${process.env.VOICE_STREAM_BASE_URL}`,
+      `[voice_stream] Using VOICE_STREAM_BASE_URL override: ${voiceStreamBaseUrl}`,
     )
   }
 
