@@ -107,7 +107,9 @@ function getCommandSemantic(command: string): CommandSemantic {
  * Extract just the command name (first word) from a single command string.
  */
 function extractBaseCommand(command: string): string {
-  return command.trim().split(WHITESPACE_RE)[0] || ''
+  const trimmed = command.trim()
+  const wsIdx = trimmed.search(WHITESPACE_RE)
+  return wsIdx >= 0 ? trimmed.slice(0, wsIdx) : trimmed || ''
 }
 
 /**

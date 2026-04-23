@@ -79,10 +79,9 @@ export async function getMyAdminRequests(
     'x-organization-uuid': orgUUID,
   }
 
-  let url = `${getOauthConfig().BASE_API_URL}/api/oauth/organizations/${orgUUID}/admin_requests/me?request_type=${requestType}`
-  for (const status of statuses) {
-    url += `&statuses=${status}`
-  }
+  const baseUrl = `${getOauthConfig().BASE_API_URL}/api/oauth/organizations/${orgUUID}/admin_requests/me?request_type=${requestType}`
+  const statusParams = statuses.map(s => `statuses=${s}`).join('&')
+  const url = statusParams ? `${baseUrl}&${statusParams}` : baseUrl
 
   const response = await axios.get<AdminRequest[] | null>(url, {
     headers,

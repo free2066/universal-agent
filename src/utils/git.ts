@@ -377,7 +377,11 @@ export const getChangedFiles = async (): Promise<string[]> => {
   return stdout
     .trim()
     .split('\n')
-    .map(line => line.trim().split(' ', 2)[1]?.trim()) // Remove status prefix (e.g., "M ", "A ", "??")
+    .map(line => {
+      const trimmed = line.trim()
+      const spaceIdx = trimmed.indexOf(' ')
+      return spaceIdx >= 0 ? trimmed.slice(spaceIdx + 1).trim() : undefined
+    }) // Remove status prefix (e.g., "M ", "A ", "??")
     .filter(line => typeof line === 'string') // Remove empty entries
 }
 

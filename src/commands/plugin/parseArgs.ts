@@ -19,7 +19,8 @@ export function parsePluginArgs(args?: string): ParsedCommand {
     return { type: 'menu' }
   }
 
-  const parts = args.trim().split(/\s+/)
+  const trimmedArgs = args.trim()
+  const parts = trimmedArgs.split(/\s+/)
   const command = parts[0]?.toLowerCase()
 
   switch (command) {

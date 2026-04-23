@@ -91,9 +91,9 @@ export function openFileInExternalEditor(
   // Spawn the user's actual binary (preserves code-insiders, abs paths, etc.).
   // Split into binary + extra args so multi-word values like 'start /wait
   // notepad' or 'code --wait' propagate all tokens to spawn.
-  const parts = editor.split(' ')
-  const base = parts[0] ?? editor
-  const editorArgs = parts.slice(1)
+  const spaceIdx = editor.indexOf(' ')
+  const base = spaceIdx >= 0 ? editor.slice(0, spaceIdx) : editor
+  const editorArgs = spaceIdx >= 0 ? editor.slice(spaceIdx + 1).split(' ') : []
   const guiFamily = classifyGuiEditor(editor)
 
   if (guiFamily) {

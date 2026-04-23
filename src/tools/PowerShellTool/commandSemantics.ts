@@ -111,7 +111,8 @@ function extractBaseCommand(segment: string): string {
   // Strip PowerShell call operators: & "cmd", . "cmd"
   // (& and . at segment start followed by whitespace invoke the next token)
   const stripped = segment.trim().replace(CALL_OPERATOR_RE, '')
-  const firstToken = stripped.split(WHITESPACE_RE)[0] || ''
+  const wsIdx = stripped.search(WHITESPACE_RE)
+  const firstToken = wsIdx >= 0 ? stripped.slice(0, wsIdx) : stripped || ''
   // Strip surrounding quotes if command was invoked as & "grep.exe"
   const unquoted = firstToken.replace(QUOTE_RE, '')
   // Strip path: C:\bin\grep.exe → grep.exe, .\rg.exe → rg.exe

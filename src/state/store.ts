@@ -1,3 +1,5 @@
+import { logError } from '../utils/log.js'
+
 type Listener = () => void
 type OnChange<T> = (args: { newState: T; oldState: T }) => void
 
@@ -28,15 +30,13 @@ export function createStore<T>(
       try {
         onChange?.({ newState: next, oldState: prev })
       } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : String(e)
-        console.error(`[store] onChange threw: ${message}`)
+        logError(e instanceof Error ? e : new Error(`[store] onChange threw: ${e}`))
       }
       for (const listener of listeners) {
         try {
           listener()
         } catch (e: unknown) {
-          const message = e instanceof Error ? e.message : String(e)
-          console.error(`[store] listener threw: ${message}`)
+          logError(e instanceof Error ? e : new Error(`[store] listener threw: ${e}`))
         }
       }
     },

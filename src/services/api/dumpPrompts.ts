@@ -71,18 +71,22 @@ function appendToFile(filePath: string, entries: string[]): void {
     .catch(() => {})
 }
 
+/** Compute approximate byte length of system prompt (string or content block array) */
+function computeSystemLength(system: unknown[] | string | undefined): number {
+  if (typeof system === 'string') return system.length
+  if (Array.isArray(system)) {
+    return system.reduce<number>(
+      (n, b) => n + ((b as { text?: string }).text?.length ?? 0),
+      0,
+    )
+  }
+  return 0
+}
+
 function initFingerprint(req: Record<string, unknown>): string {
   const tools = req.tools as Array<{ name?: string }> | undefined
   const system = req.system as unknown[] | string | undefined
-  const sysLen =
-    typeof system === 'string'
-      ? system.length
-      : Array.isArray(system)
-        ? system.reduce(
-            (n: number, b) => n + ((b as { text?: string }).text?.length ?? 0),
-            0,
-          )
-        : 0
+  const sysLen = computeSystemLength(system)
   const toolNames = tools?.map(t => t.name ?? '').join(',') ?? ''
   return `${req.model}|${toolNames}|${sysLen}`
 }

@@ -49,9 +49,9 @@ export type ParsedPluginIdentifier = {
  * This is intentional as marketplace names should not contain '@'.
  */
 export function parsePluginIdentifier(plugin: string): ParsedPluginIdentifier {
-  if (plugin.includes('@')) {
-    const parts = plugin.split('@')
-    return { name: parts[0] || '', marketplace: parts[1] }
+  const atIdx = plugin.indexOf('@')
+  if (atIdx >= 0) {
+    return { name: plugin.slice(0, atIdx) || '', marketplace: plugin.slice(atIdx + 1) }
   }
   return { name: plugin }
 }

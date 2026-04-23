@@ -284,26 +284,33 @@ function resolveEdges4Into(
   if (v.unit === 0) v = eH
   if (v.unit === 0) v = eA
   if (v.unit === 0) v = eS
-  out[0] = v.unit === 1 ? v.value : v.unit === 2 ? v.value * pctDenom : 0
+  out[0] = resolveEdgeValue(v, pctDenom)
 
   // Top: edges[1] → Vertical → All
   v = edges[1]!
   if (v.unit === 0) v = eV
   if (v.unit === 0) v = eA
-  out[1] = v.unit === 1 ? v.value : v.unit === 2 ? v.value * pctDenom : 0
+  out[1] = resolveEdgeValue(v, pctDenom)
 
   // Right: edges[2] → Horizontal → All → End
   v = edges[2]!
   if (v.unit === 0) v = eH
   if (v.unit === 0) v = eA
   if (v.unit === 0) v = eE
-  out[2] = v.unit === 1 ? v.value : v.unit === 2 ? v.value * pctDenom : 0
+  out[2] = resolveEdgeValue(v, pctDenom)
 
   // Bottom: edges[3] → Vertical → All
   v = edges[3]!
   if (v.unit === 0) v = eV
   if (v.unit === 0) v = eA
-  out[3] = v.unit === 1 ? v.value : v.unit === 2 ? v.value * pctDenom : 0
+  out[3] = resolveEdgeValue(v, pctDenom)
+}
+
+/** Resolve a yoga edge value: unit 1 = pixel, unit 2 = percent, else 0 */
+function resolveEdgeValue(v: Value, pctDenom: number): number {
+  if (v.unit === 1) return v.value
+  if (v.unit === 2) return v.value * pctDenom
+  return 0
 }
 
 // --

@@ -195,7 +195,7 @@ async function loadAgentFromFile(
         FILE_READ_TOOL_NAME,
       ]) {
         if (!toolSet.has(tool)) {
-          tools = [...tools, tool]
+          tools.push(tool)
         }
       }
     }

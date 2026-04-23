@@ -353,10 +353,8 @@ async function processRemoteEvalPayload(
   for (const [key, feature] of Object.entries(payload.features)) {
     const f = feature as MalformedFeatureDefinition
     if ('value' in f && !('defaultValue' in f)) {
-      transformedFeatures[key] = {
-        ...f,
-        defaultValue: f.value,
-      }
+      const transformed = Object.assign({}, f, { defaultValue: f.value })
+      transformedFeatures[key] = transformed
     } else {
       transformedFeatures[key] = f
     }

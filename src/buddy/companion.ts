@@ -29,7 +29,8 @@ function hashString(s: string): number {
     return Number(BigInt(Bun.hash(s)) & 0xffffffffn)
   }
   let h = 2166136261
-  for (let i = 0; i < s.length; i++) {
+  const len = s.length
+  for (let i = 0; i < len; i++) {
     h ^= s.charCodeAt(i)
     h = Math.imul(h, 16777619)
   }

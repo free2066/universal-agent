@@ -58,7 +58,13 @@ const call: LocalCommandCall = async args => {
     }
   }
 
-  const [sub, a, b] = args.trim().split(/\s+/)
+  const trimmed = args.trim()
+  const firstWs = trimmed.search(/\s/)
+  const sub = firstWs >= 0 ? trimmed.slice(0, firstWs) : trimmed
+  const rest = firstWs >= 0 ? trimmed.slice(firstWs + 1) : ''
+  const secondWs = rest.search(/\s/)
+  const a = secondWs >= 0 ? rest.slice(0, secondWs) : rest
+  const b = secondWs >= 0 ? rest.slice(secondWs + 1) : ''
 
   switch (sub) {
     case 'close': {
