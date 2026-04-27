@@ -54,7 +54,7 @@ export const CLAUDE_AI_OAUTH_SCOPES = [
 // When logging in, request all scopes in order to handle both Console -> Claude.ai redirect
 // Ensure that `OAuthConsentPage` in apps repo is kept in sync with this list.
 export const ALL_OAUTH_SCOPES = Array.from(
-  new Set([...CONSOLE_OAUTH_SCOPES, ...CLAUDE_AI_OAUTH_SCOPES]),
+  new Set([...CONSOLE_OAUTH_SCOPES, ...CLAUDE_AI_OAUTH_SCOPES] as const),
 )
 
 type OauthConfig = {

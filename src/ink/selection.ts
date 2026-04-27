@@ -256,7 +256,7 @@ export function selectWordAt(
 // Printable ASCII minus terminal URL delimiters. Restricting to single-
 // codeunit ASCII keeps cell-count === string-index, so the column-span
 // check below is exact (no wide-char/grapheme drift).
-const URL_BOUNDARY = new Set([...'<>"\'` '])
+const URL_BOUNDARY = new Set('<>"\'` ')
 function isUrlChar(c: string): boolean {
   if (c.length !== 1) return false
   const code = c.charCodeAt(0)
@@ -344,7 +344,7 @@ export function findPlainTextUrlAt(
     let opens = 0
     let closes = 0
     for (let i = 0; i < url.length; i++) {
-      const ch = url.charAt(i)
+      const ch = url[i]
       if (ch === opener) opens++
       else if (ch === last) closes++
     }

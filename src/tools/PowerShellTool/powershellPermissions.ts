@@ -270,7 +270,8 @@ function filterRulesByContentsMatchingInput(
       // `del`, or plain `Remove-Item` — resolveToCanonical won't match the
       // module-qualified form against COMMON_ALIASES.
       if (rule.type === 'exact') {
-        const rawRuleCmdName = rule.command.split(WHITESPACE_RE)[0] ?? ''
+        const wsIdx = rule.command.search(WHITESPACE_RE)
+        const rawRuleCmdName = wsIdx >= 0 ? rule.command.slice(0, wsIdx) : rule.command ?? ''
         const ruleCanonical = resolveToCanonical(
           stripModulePrefixForRule(rawRuleCmdName),
         )
@@ -289,7 +290,8 @@ function filterRulesByContentsMatchingInput(
           }
         }
       } else if (rule.type === 'prefix') {
-        const rawRuleCmdName = rule.prefix.split(WHITESPACE_RE)[0] ?? ''
+        const wsIdx = rule.prefix.search(WHITESPACE_RE)
+        const rawRuleCmdName = wsIdx >= 0 ? rule.prefix.slice(0, wsIdx) : rule.prefix ?? ''
         const ruleCanonical = resolveToCanonical(
           stripModulePrefixForRule(rawRuleCmdName),
         )
@@ -314,7 +316,8 @@ function filterRulesByContentsMatchingInput(
       } else if (rule.type === 'wildcard') {
         // Resolve the wildcard pattern's command name to canonical and re-match
         // This ensures 'deny rm *' also blocks 'Remove-Item secret.txt'
-        const rawRuleCmdName = rule.pattern.split(WHITESPACE_RE)[0] ?? ''
+        const wsIdx = rule.pattern.search(WHITESPACE_RE)
+        const rawRuleCmdName = wsIdx >= 0 ? rule.pattern.slice(0, wsIdx) : rule.pattern ?? ''
         const ruleCanonical = resolveToCanonical(
           stripModulePrefixForRule(rawRuleCmdName),
         )

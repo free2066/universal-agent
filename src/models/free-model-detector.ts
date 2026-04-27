@@ -280,7 +280,9 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
   // probe needed (internal endpoints may not be reachable from everywhere).
   const wqKey = process.env.WQ_API_KEY;
   // 防御性解析：UAGENT_MODEL 可能误写成 ep-xxx:名称 格式，只取冒号前的 ID 部分
-  const wqModel = (process.env.UAGENT_MODEL || '').split(':')[0].trim() || undefined;
+  const rawModel = process.env.UAGENT_MODEL || ''
+  const colonIdx = rawModel.indexOf(':')
+  const wqModel = (colonIdx >= 0 ? rawModel.slice(0, colonIdx) : rawModel).trim() || undefined;
   const wqBase = process.env.OPENAI_BASE_URL;
   // WQ_MODELS 支持逗号分隔多个万擎 endpoint
   // 格式：ep-xxx  或  ep-xxx:显示名称  或  ep-xxx:显示名称:contextLength(k)
@@ -299,7 +301,7 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
       if (ctxRaw) {
         const match = ctxRaw.match(/^(\d+(?:\.\d+)?)(k|m)?$/i);
         if (match) {
-          const num = parseFloat(match[1]!);
+          const num = Number(match[1]!);
           const unit = (match[2] ?? '').toLowerCase();
           ctxLen = unit === 'm' ? Math.round(num * 1_000_000)
                  : unit === 'k' ? Math.round(num * 1_000)
@@ -345,7 +347,7 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
       if (envVal) {
         const match = envVal.match(/^(\d+(?:\.\d+)?)(k|m)?$/i);
         if (match) {
-          const num = parseFloat(match[1]!);
+          const num = Number(match[1]!);
           const unit = (match[2] ?? '').toLowerCase();
           return unit === 'm' ? Math.round(num * 1_000_000)
                : unit === 'k' ? Math.round(num * 1_000)

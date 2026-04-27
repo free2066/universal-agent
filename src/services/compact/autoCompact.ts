@@ -79,7 +79,7 @@ export function getAutoCompactThreshold(model: string): number {
   // Override for easier testing of autocompact
   const envPercent = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
   if (envPercent) {
-    const parsed = parseFloat(envPercent)
+    const parsed = Number(envPercent)
     if (!isNaN(parsed) && parsed > 0 && parsed <= 100) {
       const percentageThreshold = Math.floor(
         effectiveContextWindow * (parsed / 100),

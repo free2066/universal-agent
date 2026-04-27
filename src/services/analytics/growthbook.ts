@@ -109,6 +109,12 @@ let reinitializingPromise: Promise<unknown> | null = null
 type GrowthBookRefreshListener = () => void | Promise<void>
 const refreshed = createSignal()
 
+/** Check if an object has any enumerable keys (avoids allocating an array via Object.keys). */
+function hasKeys(obj: Record<string, unknown>): boolean {
+  for (const _ in obj) return true
+  return false
+}
+
 /** Call a listener with sync-throw and async-rejection both routed to logError. */
 function callSafe(listener: GrowthBookRefreshListener): void {
   try {
@@ -259,7 +265,7 @@ export function setGrowthBookConfigOverride(
       if (value === undefined && !(feature in current)) return c
       if (value === undefined) {
         const { [feature]: _, ...rest } = current
-        if (!Object.keys(rest).length) {
+        if (!hasKeys(rest)) {
           const { growthBookOverrides: __, ...configWithout } = c
           return configWithout
         }
@@ -280,10 +286,7 @@ export function clearGrowthBookConfigOverrides(): void {
   if (!IS_ANT_USER) return
   try {
     saveGlobalConfig(c => {
-      if (
-        !c.growthBookOverrides ||
-      Object.keys(c.growthBookOverrides).length === 0
-      ) {
+      if (!c.growthBookOverrides || !hasKeys(c.growthBookOverrides)) {
         return c
       }
       const { growthBookOverrides: _, ...rest } = c
@@ -353,7 +356,7 @@ async function processRemoteEvalPayload(
   for (const [key, feature] of Object.entries(payload.features)) {
     const f = feature as MalformedFeatureDefinition
     if ('value' in f && !('defaultValue' in f)) {
-      const transformed = Object.assign({}, f, { defaultValue: f.value })
+      const transformed = { ...f, defaultValue: f.value }
       transformedFeatures[key] = transformed
     } else {
       transformedFeatures[key] = f

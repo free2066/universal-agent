@@ -226,7 +226,7 @@ export async function trackDatadogEvent(
       allData.http_status = statusCode
 
       // Determine status range (1xx, 2xx, 3xx, 4xx, 5xx)
-      const firstDigit = statusCode.charAt(0)
+      const firstDigit = statusCode[0]
       if (firstDigit >= '1' && firstDigit <= '5') {
         allData.http_status_range = `${firstDigit}xx`
       }

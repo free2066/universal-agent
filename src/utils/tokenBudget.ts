@@ -15,7 +15,7 @@ const MULTIPLIERS: Record<string, number> = {
 }
 
 function parseBudgetMatch(value: string, suffix: string): number {
-  return parseFloat(value) * MULTIPLIERS[suffix.toLowerCase()]!
+  return Number(value) * MULTIPLIERS[suffix.toLowerCase()]!
 }
 
 export function parseTokenBudget(text: string): number | null {

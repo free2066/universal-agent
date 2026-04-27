@@ -9,6 +9,12 @@ import { errorMessage } from '../utils/errors.js'
 import { getBundledSkillsRoot } from '../utils/permissions/filesystem.js'
 import type { HooksSettings } from '../utils/settings/types.js'
 
+/** Check if an object has any enumerable keys (avoids allocating an array via Object.keys). */
+function hasKeys(obj: Record<string, unknown>): boolean {
+  for (const _ in obj) return true
+  return false
+}
+
 /**
  * Definition for a bundled skill that ships with the CLI.
  * These are registered programmatically at startup.
@@ -57,7 +63,7 @@ export function registerBundledSkill(definition: BundledSkillDefinition): void {
   let skillRoot: string | undefined
   let getPromptForCommand = definition.getPromptForCommand
 
-  if (files && Object.keys(files).length > 0) {
+  if (files && hasKeys(files)) {
     skillRoot = getBundledSkillExtractDir(definition.name)
     // Closure-local memoization: extract once per process.
     // Memoize the promise (not the result) so concurrent callers await

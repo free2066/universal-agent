@@ -2,6 +2,8 @@ import axios from 'axios'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
 
+const REGISTRY_REQUEST_TIMEOUT_MS = 5_000 // 5 seconds
+
 type RegistryServer = {
   server: {
     remotes?: Array<{ url: string }>
@@ -45,7 +47,7 @@ export function prefetchOfficialMcpUrls(): Promise<void> {
     try {
       const response = await axios.get<RegistryResponse>(
         'https://api.anthropic.com/mcp-registry/v0/servers?version=latest&visibility=commercial',
-        { timeout: 5000 },
+        { timeout: REGISTRY_REQUEST_TIMEOUT_MS },
       )
 
       const urls = new Set<string>()

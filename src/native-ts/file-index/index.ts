@@ -190,7 +190,7 @@ export class FileIndex {
     const needleChars: string[] = new Array(nLen)
     let needleBitmap = 0
     for (let j = 0; j < nLen; j++) {
-      const ch = needle.charAt(j)
+      const ch = needle[j]
       needleChars[j] = ch
       const cc = ch.charCodeAt(0)
       if (cc >= 97 && cc <= 122) needleBitmap |= 1 << (cc - 97)

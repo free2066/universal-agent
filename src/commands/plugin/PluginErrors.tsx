@@ -23,7 +23,7 @@ export function formatErrorMessage(error: PluginError): string {
       return `Invalid MCP server config for "${error.serverName}": ${error.validationError}`;
     case 'mcp-server-suppressed-duplicate':
       {
-        const dup = error.duplicateOf.startsWith('plugin:') ? `server provided by plugin "${error.duplicateOf.split(':')[1] ?? '?'}"` : `already-configured "${error.duplicateOf}"`;
+        const dup = error.duplicateOf.startsWith('plugin:') ? `server provided by plugin "${error.duplicateOf.slice(error.duplicateOf.indexOf(':') + 1) ?? '?'}"` : `already-configured "${error.duplicateOf}"`;
         return `MCP server "${error.serverName}" skipped — same command/URL as ${dup}`;
       }
     case 'hook-load-failed':
@@ -83,7 +83,8 @@ export function getErrorGuidance(error: PluginError): string | null {
         // users can't remove plugin-provided servers from their MCP config,
         // so point them at the winning plugin instead.
         if (error.duplicateOf.startsWith('plugin:')) {
-          const winningPlugin = error.duplicateOf.split(':')[1] ?? 'the other plugin';
+          const colonIdx = error.duplicateOf.indexOf(':')
+          const winningPlugin = colonIdx >= 0 ? error.duplicateOf.slice(colonIdx + 1) : 'the other plugin';
           return `Disable plugin "${winningPlugin}" if you want this plugin's version instead`;
         }
         return `Remove "${error.duplicateOf}" from your MCP config if you want the plugin's version instead`;

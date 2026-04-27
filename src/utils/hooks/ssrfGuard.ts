@@ -111,7 +111,8 @@ function isBlockedV6(address: string): boolean {
   // fe80::/10 — link-local. The /10 means fe80 through febf, but the first
   // hextet is always fe80 in practice (RFC 4291 requires the next 54 bits
   // to be zero). Check both to be safe.
-  const firstHextet = lower.split(':')[0]
+  const colonIdx = lower.indexOf(':')
+  const firstHextet = colonIdx >= 0 ? lower.slice(0, colonIdx) : lower
   if (
     firstHextet &&
     firstHextet.length === 4 &&

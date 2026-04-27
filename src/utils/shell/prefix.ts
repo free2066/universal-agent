@@ -8,6 +8,8 @@
  */
 
 import chalk from 'chalk'
+
+const COMMAND_PREFIX_QUERY_TIMEOUT_MS = 10_000 // 10 seconds
 import type { QuerySource } from '../../constants/querySource.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import {
@@ -207,7 +209,7 @@ async function getCommandPrefixImpl(
           console.warn(chalk.yellow(`⚠️  ${message}`))
         }
       },
-      10000, // 10 seconds
+      COMMAND_PREFIX_QUERY_TIMEOUT_MS,
       toolName,
       isNonInteractiveSession,
     )

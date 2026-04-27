@@ -61,7 +61,9 @@ function resolveWatchPaths(
   }
 
   // Combine static matcher paths with dynamic paths from hook output
-  return [...new Set([...staticPaths, ...dynamicWatchPaths])]
+  const merged = new Set(staticPaths)
+  for (const p of dynamicWatchPaths) merged.add(p)
+  return [...merged]
 }
 
 function startWatching(paths: string[]): void {

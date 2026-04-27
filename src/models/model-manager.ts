@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { resolve } from 'path';
 import { stringify as yamlStringify } from 'yaml';
 import { HOME_DIR } from '../utils/env.js';
+import { logError } from '../utils/log.js';
 import { createLLMClient } from './llm-client.js';
 import { detectFreeModes, buildPointersFromDetection, formatDetectionSummary } from './free-model-detector.js';
 import { usageTracker } from './usage-tracker.js';
@@ -214,7 +215,7 @@ export class ModelManager {
     } catch (err) {
       // Model config is corrupt or missing — warn so users know their configured
       // profiles (custom model names, API endpoints, pointers) were NOT loaded.
-      console.warn(`[model-manager] Failed to load model config from ${CONFIG_FILE}, using defaults. Error: ${String(err)}`);
+      logError(err instanceof Error ? err : new Error(`[model-manager] Failed to load model config from ${CONFIG_FILE}, using defaults`))
     }
   }
 

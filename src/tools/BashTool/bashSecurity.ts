@@ -2475,7 +2475,8 @@ export async function bashCommandIsSafeAsync_DEPRECATED(
 
   const { processedCommand } = extractHeredocs(command, { quotedOnly: true })
 
-  const baseCommand = command.split(' ')[0] || ''
+  const spaceIdx = command.indexOf(' ')
+  const baseCommand = spaceIdx >= 0 ? command.slice(0, spaceIdx) : command || ''
 
   // Use tree-sitter quote context for more accurate analysis
   const tsQuote = tsAnalysis.quoteContext

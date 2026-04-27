@@ -18,6 +18,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { resolve, join } from 'path';
 import { HOME_DIR } from '../utils/env.js';
+import { logError } from '../utils/log.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -113,7 +114,7 @@ export class UsageTracker {
       } catch (err) {
         // Limits config is corrupt — fall back to defaults but warn so users know
         // their manually configured budget caps (dailyCostLimitUSD etc.) are NOT active.
-        console.warn(`[usage-tracker] Failed to parse limits config at ${LIMITS_FILE}, using defaults. Error: ${String(err)}`);
+        logError(err instanceof Error ? err : new Error(`[usage-tracker] Failed to parse limits config at ${LIMITS_FILE}, using defaults`))
       }
     }
     return defaults;
@@ -152,7 +153,7 @@ export class UsageTracker {
       } catch (err) {
         // Usage file is corrupt — start fresh for today, but warn so users know
         // accumulated token counts were lost (relevant for daily limit enforcement).
-        console.warn(`[usage-tracker] Usage file at ${path} is corrupt, resetting today's usage. Error: ${String(err)}`);
+        logError(err instanceof Error ? err : new Error(`[usage-tracker] Usage file at ${path} is corrupt, resetting today's usage`))
       }
     }
     return {

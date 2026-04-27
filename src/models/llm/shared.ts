@@ -8,6 +8,7 @@ import type { ContentBlock, ImageBlock, ImageUrlBlock } from '../types.js';
 import { getContentText } from '../types.js';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+import { logForDebugging } from '../../utils/debug.js';
 
 // ── Vision content helpers ────────────────────────────────────────────────────
 
@@ -112,7 +113,7 @@ export function safeParseJSON(raw: string, toolName: string): Record<string, unk
   try {
     return JSON.parse(raw || '{}');
   } catch {
-    console.warn(`[llm-client] Failed to parse tool arguments for "${toolName}": ${raw}`);
+    logForDebugging(`[llm-client] Failed to parse tool arguments for "${toolName}": ${raw}`)
     return { _raw: raw };
   }
 }

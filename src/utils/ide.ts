@@ -379,7 +379,7 @@ async function readIdeLockfile(path: string): Promise<IdeLockfileInfo | null> {
 
     return {
       workspaceFolders,
-      port: parseInt(port),
+      port: parseInt(port, 10),
       pid,
       ideName,
       useWebSocket,
@@ -668,7 +668,7 @@ export async function detectIDEs(
   try {
     // Get the CLAUDE_CODE_SSE_PORT if set
     const ssePort = process.env.CLAUDE_CODE_SSE_PORT
-    const envPort = ssePort ? parseInt(ssePort) : null
+    const envPort = ssePort ? parseInt(ssePort, 10) : null
 
     // Get the current working directory, normalized to NFC for consistent
     // comparison. macOS returns NFD paths (decomposed Unicode), while IDEs
@@ -1005,7 +1005,7 @@ function getVSCodeIDECommandByParentProcess(): string | null {
       if (!ppidStr) {
         break
       }
-      pid = parseInt(ppidStr.trim())
+      pid = parseInt(ppidStr.trim(), 10)
     }
 
     return null

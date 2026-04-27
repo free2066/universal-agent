@@ -181,5 +181,7 @@ export const NEVER_SUGGEST: ReadonlySet<string> = (() => {
     // filtered out — NEVER_SUGGEST is a single-name lookup on cmd.name.
     ...CROSS_PLATFORM_CODE_EXEC.filter(p => !p.includes(' ')),
   ])
-  return new Set([...core, ...aliasesOf(core)])
+  const result = new Set(core)
+  for (const alias of aliasesOf(core)) result.add(alias)
+  return result
 })()

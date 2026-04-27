@@ -104,7 +104,7 @@ export function extractDebugCategories(message: string): string[] {
   }
 
   // If no categories found, return empty array (uncategorized)
-  return Array.from(new Set(categories)) // Remove duplicates
+  return [...new Set(categories)] // Remove duplicates
 }
 
 /**
