@@ -57,7 +57,7 @@ export function isBgSession(): boolean {
  * Errors logged to debug, never thrown.
  */
 export async function registerSession(): Promise<boolean> {
-  if (getAgentId() != null) return false
+  if (getAgentId() !== null) return false
 
   const kind: SessionKind = envSessionKind() ?? 'interactive'
   const dir = getSessionsDir()

@@ -103,7 +103,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
           persistedModel = settings.model.trim()
         }
       }
-    } catch {}
+    } catch { /* settings.json may not exist or be invalid — fall through to defaults */ }
 
     // Set the model for CC engine
     // 优先级：ANTHROPIC_MODEL 环境变量 > settings.json 持久化（/model 命令写入）> UAGENT_MODEL > models.json default
@@ -128,9 +128,9 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     // ── Setup UA debug log ────────────────────────────────────────────────────
     const uaLogFile = resolve(require('os').homedir(), '.claude', 'debug', 'ua-debug.log')
     const uaLog = (msg: string) => {
-      try { appendFileSync(uaLogFile, `[${new Date().toISOString()}] ${msg}\n`) } catch {}
+      try { appendFileSync(uaLogFile, `[${new Date().toISOString()}] ${msg}\n`) } catch { /* debug log write failure is non-critical */ }
     }
-    try { mkdirSync(dirname(uaLogFile), { recursive: true }) } catch {}
+    try { mkdirSync(dirname(uaLogFile), { recursive: true }) } catch { /* directory creation failure is non-critical */ }
     process.env.UA_DEBUG_LOG = uaLogFile
 
     uaLog(`━━━ UA bootstrap start (pid=${process.pid}) ━━━`)

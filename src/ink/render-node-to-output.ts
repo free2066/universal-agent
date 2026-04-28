@@ -736,7 +736,7 @@ function renderNodeToOutput(
         // plumbing; shipping instant first. stickyScroll overrides.
         if (node.scrollAnchor) {
           const anchorTop = node.scrollAnchor.el.yogaNode?.getComputedTop()
-          if (anchorTop != null) {
+          if (anchorTop !== null) {
             node.scrollTop = anchorTop + node.scrollAnchor.offset
             node.pendingScrollDelta = undefined
           }

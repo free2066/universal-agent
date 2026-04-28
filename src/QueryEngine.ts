@@ -773,7 +773,7 @@ export class QueryEngine {
           // Capture stop_reason if already set (synthetic messages). For
           // streamed responses, this is null at content_block_stop time;
           // the real value arrives via message_delta (handled below).
-          if (message.message.stop_reason != null) {
+          if (message.message.stop_reason !== null) {
             lastStopReason = message.message.stop_reason
           }
           this.mutableMessages.push(message)
@@ -810,7 +810,7 @@ export class QueryEngine {
             // is yielded at content_block_stop with stop_reason=null; the
             // real value only arrives here (see claude.ts message_delta
             // handler). Without this, result.stop_reason is always null.
-            if (message.event.delta.stop_reason != null) {
+            if (message.event.delta.stop_reason !== null) {
               lastStopReason = message.event.delta.stop_reason
             }
           }

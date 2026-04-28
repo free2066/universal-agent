@@ -114,7 +114,7 @@ export async function findModifiedFiles(
   // Filter to files modified since turn start
   const modifiedFiles: string[] = []
   for (const result of statResults) {
-    if (result && result.mtimeMs >= turnStartTime) {
+    if (result?.mtimeMs >= turnStartTime) {
       modifiedFiles.push(result.filePath)
     }
   }

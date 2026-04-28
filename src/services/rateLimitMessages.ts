@@ -114,7 +114,7 @@ export function getRateLimitErrorMessage(
   const message = getRateLimitMessage(limits, model)
 
   // Only return error messages, not warnings
-  if (message && message.severity === 'error') {
+  if (message?.severity === 'error') {
     return message.message
   }
 
@@ -132,7 +132,7 @@ export function getRateLimitWarning(
   const message = getRateLimitMessage(limits, model)
 
   // Only return warnings for the footer - errors are shown in AssistantTextMessages
-  if (message && message.severity === 'warning') {
+  if (message?.severity === 'warning') {
     return message.message
   }
 
@@ -197,26 +197,16 @@ function getLimitReachedText(limits: ClaudeAILimits, model: string): string {
 }
 
 function getEarlyWarningText(limits: ClaudeAILimits): string | null {
-  let limitName: string | null = null
-  switch (limits.rateLimitType) {
-    case 'seven_day':
-      limitName = 'weekly limit'
-      break
-    case 'five_hour':
-      limitName = 'session limit'
-      break
-    case 'seven_day_opus':
-      limitName = 'Opus limit'
-      break
-    case 'seven_day_sonnet':
-      limitName = 'Sonnet limit'
-      break
-    case 'overage':
-      limitName = 'extra usage'
-      break
-    case undefined:
-      return null
+  const RATE_LIMIT_TYPE_NAMES: Record<string, string> = {
+    seven_day: 'weekly limit',
+    five_hour: 'session limit',
+    seven_day_opus: 'Opus limit',
+    seven_day_sonnet: 'Sonnet limit',
+    overage: 'extra usage',
   }
+
+  if (limits.rateLimitType === undefined) return null
+  let limitName = RATE_LIMIT_TYPE_NAMES[limits.rateLimitType] ?? null
 
   // utilization and resetsAt should be defined since early warning is calculated with them
   const used = limits.utilization

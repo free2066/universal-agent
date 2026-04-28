@@ -15,9 +15,9 @@ import { getWebSocketTLSOptions } from '../utils/mtls.js'
 import { getWebSocketProxyAgent, getWebSocketProxyUrl } from '../utils/proxy.js'
 import { jsonParse, jsonStringify } from '../utils/slowOperations.js'
 
-const RECONNECT_DELAY_MS = 2000
+const RECONNECT_DELAY_MS = 2_000
 const MAX_RECONNECT_ATTEMPTS = 5
-const PING_INTERVAL_MS = 30000
+const PING_INTERVAL_MS = 30_000
 
 /**
  * Maximum retries for 4001 (session not found). During compaction the

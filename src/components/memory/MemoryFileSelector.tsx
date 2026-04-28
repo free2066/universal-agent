@@ -81,7 +81,7 @@ export function MemoryFileSelector(t0) {
         if (depth > 0) {
           label = `${indent}L ${displayPath}${existsLabel}`;
         } else {
-          label = `${displayPath}`;
+          label = displayPath;
         }
       }
     }

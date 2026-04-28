@@ -50,7 +50,7 @@ import {
 } from './types.js'
 
 // Constants
-const SETTINGS_TIMEOUT_MS = 10000 // 10 seconds for settings fetch
+const SETTINGS_TIMEOUT_MS = 10_000 // 10 seconds for settings fetch
 const DEFAULT_MAX_RETRIES = 5
 const POLLING_INTERVAL_MS = 60 * 60 * 1000 // 1 hour
 
@@ -64,7 +64,7 @@ let loadingCompleteResolve: (() => void) | null = null
 
 // Timeout for the loading promise to prevent deadlocks if loadRemoteManagedSettings() is never called
 // (e.g., in Agent SDK tests that don't go through main.tsx)
-const LOADING_PROMISE_TIMEOUT_MS = 30000 // 30 seconds
+const LOADING_PROMISE_TIMEOUT_MS = 30_000 // 30 seconds
 
 function logRemoteSettingsFailOpen(message: string, error?: unknown): void {
   const detail =

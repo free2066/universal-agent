@@ -600,7 +600,7 @@ function validateComponentFile(
 
   // allowed-tools: string or array of strings
   const at = fm['allowed-tools']
-  if (at != null) {
+  if (at !== null) {
     if (typeof at !== 'string' && !Array.isArray(at)) {
       errors.push({
         path: 'allowed-tools',
@@ -616,7 +616,7 @@ function validateComponentFile(
 
   // shell: 'bash' | 'powershell' (controls !`cmd` block routing)
   const sh = fm.shell
-  if (sh != null) {
+  if (sh !== null) {
     if (typeof sh !== 'string') {
       errors.push({
         path: 'shell',

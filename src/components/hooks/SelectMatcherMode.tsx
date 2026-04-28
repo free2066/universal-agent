@@ -42,7 +42,7 @@ export function SelectMatcherMode(t0) {
     if ($[4] !== hooksByEventAndMatcher || $[5] !== selectedEvent) {
       t2 = matcher => {
         const hooks = hooksByEventAndMatcher[selectedEvent]?.[matcher] || [];
-        const sources = Array.from(new Set(hooks.map(_temp)));
+        const sources = [...new Set(hooks.map(_temp))];
         return {
           matcher,
           sources,

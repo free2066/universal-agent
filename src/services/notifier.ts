@@ -104,7 +104,7 @@ async function sendAuto(
 }
 
 function generateKittyId(): number {
-  return Math.floor(Math.random() * 10000)
+  return (Math.random() * 10_000) | 0
 }
 
 async function isAppleTerminalBellDisabled(): Promise<boolean> {

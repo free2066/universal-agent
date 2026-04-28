@@ -79,7 +79,7 @@ export function formatDiagnosticsForAttachment(
       },
       source: diag.source,
       code:
-        diag.code != null
+        diag.code !== null
           ? String(diag.code)
           : undefined,
     }),

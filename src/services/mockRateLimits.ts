@@ -12,7 +12,7 @@ import type { OverageDisabledReason } from './claudeAiLimits.js'
 import { IS_ANT_USER } from '../utils/envUtils.js'
 
 /** Helper: Unix timestamp in seconds (avoids repeated Math.floor(Date.now() / 1000)) */
-function nowUnix(): number { return Math.floor(Date.now() / 1000) }
+function nowUnix(): number { return (Date.now() / 1000) | 0 }
 
 /** Helper: Get end of month timestamp in Unix seconds */
 function getEndOfMonthTimestamp(): number {

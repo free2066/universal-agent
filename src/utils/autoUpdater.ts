@@ -215,7 +215,7 @@ async function acquireLock(): Promise<boolean> {
   // wins the race and creates it first, we get EEXIST and back off.
   // Lazy-mkdir the config dir on ENOENT.
   try {
-    await writeFile(lockPath, `${process.pid}`, {
+    await writeFile(lockPath, String(process.pid), {
       encoding: 'utf8',
       flag: 'wx',
     })
@@ -231,7 +231,7 @@ async function acquireLock(): Promise<boolean> {
         // swallows EEXIST internally, so a dir-creation race cannot reach the
         // catch below — only writeFile's EEXIST (true lock contention) can.
         await fs.mkdir(getClaudeConfigHomeDir())
-        await writeFile(lockPath, `${process.pid}`, {
+        await writeFile(lockPath, String(process.pid), {
           encoding: 'utf8',
           flag: 'wx',
         })
@@ -257,7 +257,7 @@ async function releaseLock(): Promise<void> {
   const lockPath = getLockFilePath()
   try {
     const lockData = await fs.readFile(lockPath, { encoding: 'utf8' })
-    if (lockData === `${process.pid}`) {
+    if (lockData === String(process.pid)) {
       await fs.unlink(lockPath)
     }
   } catch (err) {

@@ -71,7 +71,7 @@ function tryReadPromptFile(dir: string, filename: string): string | null {
   try {
     const content = fs.readFileSync(filepath, 'utf-8').trim()
     return content || null
-  } catch {
+  } catch { /* prompt file missing — fall back to default */
     return null
   }
 }

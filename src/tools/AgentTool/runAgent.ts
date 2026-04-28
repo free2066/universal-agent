@@ -770,7 +770,7 @@ export async function* runAgent({
       if (
         message.type === 'stream_event' &&
         message.event.type === 'message_start' &&
-        message.ttftMs != null
+        message.ttftMs !== null
       ) {
         toolUseContext.pushApiMetricsEntry?.(message.ttftMs)
         continue

@@ -99,7 +99,7 @@ function ModelPickerWrapper(t0) {
       // UA: 持久化到 settings.json
       try {
         updateSettingsForSource('userSettings', { model: model ?? undefined })
-      } catch {}
+      } catch { /* settings persistence failed — model applies for this session only */ }
       let message = `Set model to ${chalk.bold(renderModelLabel(model))}`;
       if (effort !== undefined) {
         message = message + ` with ${chalk.bold(effort)} effort`;

@@ -184,7 +184,7 @@ export async function buildInstallationHealthDiagnostics(): Promise<Diagnostic[]
     errors: validationErrors
   } = getSettingsWithAllErrors();
   if (validationErrors.length > 0) {
-    const invalidFiles = Array.from(new Set(validationErrors.map(error => error.file)));
+    const invalidFiles = [...new Set(validationErrors.map(error => error.file))];
     const fileList = invalidFiles.join(', ');
     items.push(`Found invalid settings files: ${fileList}. They will be ignored.`);
   }

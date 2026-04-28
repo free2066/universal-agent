@@ -8,6 +8,8 @@ import { getCwd } from './utils/cwd.js'
 import { isDirEmpty } from './utils/file.js'
 import { getFsImplementation } from './utils/fsOperations.js'
 
+const ONBOARDING_DISMISS_THRESHOLD = 4
+
 export type Step = {
   key: string
   text: string
@@ -66,7 +68,7 @@ export const shouldShowProjectOnboarding = memoize((): boolean => {
   // hits the filesystem — this runs during first render.
   if (
     projectConfig.hasCompletedProjectOnboarding ||
-    projectConfig.projectOnboardingSeenCount >= 4 ||
+    projectConfig.projectOnboardingSeenCount >= ONBOARDING_DISMISS_THRESHOLD ||
     process.env.IS_DEMO
   ) {
     return false

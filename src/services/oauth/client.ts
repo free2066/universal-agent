@@ -204,8 +204,8 @@ export async function refreshOAuthToken(
       config.oauthAccount?.billingType !== undefined &&
       config.oauthAccount?.accountCreatedAt !== undefined &&
       config.oauthAccount?.subscriptionCreatedAt !== undefined &&
-      existing?.subscriptionType != null &&
-      existing?.rateLimitTier != null
+      existing?.subscriptionType !== null &&
+      existing?.rateLimitTier !== null
 
     const profileInfo = haveProfileAlready
       ? null

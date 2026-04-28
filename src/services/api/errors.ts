@@ -809,7 +809,7 @@ export function getAssistantMessageFromError(
       process.env.ANTHROPIC_API_KEY &&
       !isClaudeAISubscriber()
     ) {
-      const hasStoredOAuth = getClaudeAIOAuthTokens()?.accessToken != null
+      const hasStoredOAuth = getClaudeAIOAuthTokens()?.accessToken !== null
       // Not 'authentication_failed' — that triggers VS Code's showLogin(), but
       // login can't fix this (approved env var keeps overriding OAuth). The fix
       // is configuration-based (unset the var), so invalid_request is correct.

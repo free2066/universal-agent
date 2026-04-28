@@ -398,7 +398,7 @@ export class WebSocketTransport implements Transport {
   private handleConnectionError(closeCode?: number): void {
     logForDebugging(
       `WebSocketTransport: Disconnected from ${this.url.href}` +
-        (closeCode != null ? ` (code ${closeCode})` : ''),
+        (closeCode !== null ? ` (code ${closeCode})` : ''),
     )
     logForDiagnosticsNoPII('info', 'cli_websocket_disconnected')
     if (this.isBridge) {
@@ -439,7 +439,7 @@ export class WebSocketTransport implements Transport {
     }
 
     if (
-      closeCode != null &&
+      closeCode !== null &&
       PERMANENT_CLOSE_CODES.has(closeCode) &&
       !headersRefreshed
     ) {

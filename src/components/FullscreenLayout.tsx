@@ -483,7 +483,7 @@ function _temp2(url) {
   if (url.startsWith("file:")) {
     try {
       openPath(fileURLToPath(url));
-    } catch {}
+    } catch { /* openPath may fail for remote URLs or inaccessible files */ }
   } else {
     openBrowser(url);
   }

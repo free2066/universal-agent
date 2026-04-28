@@ -149,11 +149,7 @@ function shouldLogDebugMessage(message: string): boolean {
     return false
   }
 
-  if (
-    typeof process === 'undefined' ||
-    typeof process.versions === 'undefined' ||
-    typeof process.versions.node === 'undefined'
-  ) {
+  if (process?.versions?.node === undefined) {
     return false
   }
 

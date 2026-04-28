@@ -19,7 +19,11 @@
  */
 
 import type { ModelPointers } from './model-manager.js';
-import { errorMessage } from '../utils/errors.js';
+import { errorMessage } from '../utils/errors.js'
+
+// ── Token unit multiplier constants ──────────────────────────────────────
+const TOKEN_UNIT_MULTIPLIER_M = 1_000_000 // million tokens
+const TOKEN_UNIT_MULTIPLIER_K = 1_000 // thousand tokens;
 
 // ── OpenRouter API types ──────────────────────────────────────────────────────
 
@@ -303,8 +307,8 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
         if (match) {
           const num = Number(match[1]!);
           const unit = (match[2] ?? '').toLowerCase();
-          ctxLen = unit === 'm' ? Math.round(num * 1_000_000)
-                 : unit === 'k' ? Math.round(num * 1_000)
+          ctxLen = unit === 'm' ? Math.round(num * TOKEN_UNIT_MULTIPLIER_M)
+                 : unit === 'k' ? Math.round(num * TOKEN_UNIT_MULTIPLIER_K)
                  : Math.round(num);
         }
       }
@@ -349,8 +353,8 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
         if (match) {
           const num = Number(match[1]!);
           const unit = (match[2] ?? '').toLowerCase();
-          return unit === 'm' ? Math.round(num * 1_000_000)
-               : unit === 'k' ? Math.round(num * 1_000)
+          return unit === 'm' ? Math.round(num * TOKEN_UNIT_MULTIPLIER_M)
+               : unit === 'k' ? Math.round(num * TOKEN_UNIT_MULTIPLIER_K)
                : Math.round(num);
         }
       }

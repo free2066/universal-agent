@@ -57,7 +57,7 @@ export async function markPluginVersionOrphaned(
   versionPath: string,
 ): Promise<void> {
   try {
-    await writeFile(getOrphanedAtPath(versionPath), `${Date.now()}`, 'utf-8')
+    await writeFile(getOrphanedAtPath(versionPath), String(Date.now()), 'utf-8')
   } catch (error) {
     logForDebugging(`Failed to write .orphaned_at: ${versionPath}: ${error}`)
   }

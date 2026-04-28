@@ -2,6 +2,8 @@ import axios from 'axios'
 import { jsonParse, jsonStringify } from '../utils/slowOperations.js'
 import type { WorkSecret } from './types.js'
 
+const MIN_SESSION_ID_BODY_LENGTH = 4
+
 /** Decode a base64url-encoded work secret and validate its version. */
 export function decodeWorkSecret(secret: string): WorkSecret {
   const json = Buffer.from(secret, 'base64url').toString('utf-8')
@@ -69,7 +71,7 @@ export function sameSessionId(a: string, b: string): boolean {
   // slice(0) returns the whole string, and we already checked a === b above.
   // Require a minimum length to avoid accidental matches on short suffixes
   // (e.g. single-char tag remnants from malformed IDs).
-  return aBody.length >= 4 && aBody === bBody
+  return aBody.length >= MIN_SESSION_ID_BODY_LENGTH && aBody === bBody
 }
 
 /**

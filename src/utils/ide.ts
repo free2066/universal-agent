@@ -259,13 +259,13 @@ const supportedIdeConfigs: Record<IdeType, IdeConfig> = {
 export function isVSCodeIde(ide: IdeType | null): boolean {
   if (!ide) return false
   const config = supportedIdeConfigs[ide]
-  return config && config.ideKind === 'vscode'
+  return config?.ideKind === 'vscode'
 }
 
 export function isJetBrainsIde(ide: IdeType | null): boolean {
   if (!ide) return false
   const config = supportedIdeConfigs[ide]
-  return config && config.ideKind === 'jetbrains'
+  return config?.ideKind === 'jetbrains'
 }
 
 export const isSupportedVSCodeTerminal = memoize(() => {

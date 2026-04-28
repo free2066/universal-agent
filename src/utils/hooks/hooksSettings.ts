@@ -249,8 +249,8 @@ export function sortMatchersByPriority(
     const aHooks = hooksByEventAndMatcher[selectedEvent]?.[a] || []
     const bHooks = hooksByEventAndMatcher[selectedEvent]?.[b] || []
 
-    const aSources = Array.from(new Set(aHooks.map(h => h.source)))
-    const bSources = Array.from(new Set(bHooks.map(h => h.source)))
+    const aSources = [...new Set(aHooks.map(h => h.source))]
+    const bSources = [...new Set(bHooks.map(h => h.source))]
 
     // Sort by highest priority source first (lowest priority number)
     // Plugin hooks get lowest priority (highest number)

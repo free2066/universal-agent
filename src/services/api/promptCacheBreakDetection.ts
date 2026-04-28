@@ -21,7 +21,7 @@ function getCacheBreakDiffPath(): string {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
   let suffix = ''
   for (let i = 0; i < 4; i++) {
-    suffix += chars[Math.floor(Math.random() * chars.length)]
+    suffix += chars[(Math.random() * chars.length) | 0]
   }
   return join(getClaudeTempDir(), `cache-break-${suffix}.diff`)
 }
