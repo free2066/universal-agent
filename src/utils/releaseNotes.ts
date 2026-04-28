@@ -235,7 +235,7 @@ export function getRecentReleaseNotes(
         )
         .sort(([versionA], [versionB]) => (gt(versionA, versionB) ? -1 : 1)) // Sort newest first
         .flatMap(([_, notes]) => notes)
-        .filter(Boolean)
+        .filter((s): s is string => !!s)
         .slice(0, MAX_RELEASE_NOTES_SHOWN)
     }
   } catch (error) {
@@ -269,7 +269,7 @@ export function getAllReleaseNotes(
         const versionNotes = releaseNotes[version]
         if (!versionNotes || versionNotes.length === 0) return null
 
-        const notes = versionNotes.filter(Boolean)
+        const notes = versionNotes.filter((s): s is string => !!s)
         if (notes.length === 0) return null
 
         return [version, notes] as [string, string[]]
@@ -298,7 +298,7 @@ export async function checkForReleaseNotes(
   if (process.env.USER_TYPE === 'ant') {
     const changelog = MACRO.VERSION_CHANGELOG
     if (changelog) {
-      const commits = changelog.trim().split('\n').filter(Boolean)
+      const commits = changelog.trim().split('\n').filter((s): s is string => !!s)
       return {
         hasReleaseNotes: commits.length > 0,
         releaseNotes: commits,
@@ -346,7 +346,7 @@ export function checkForReleaseNotesSync(
   if (process.env.USER_TYPE === 'ant') {
     const changelog = MACRO.VERSION_CHANGELOG
     if (changelog) {
-      const commits = changelog.trim().split('\n').filter(Boolean)
+      const commits = changelog.trim().split('\n').filter((s): s is string => !!s)
       return {
         hasReleaseNotes: commits.length > 0,
         releaseNotes: commits,

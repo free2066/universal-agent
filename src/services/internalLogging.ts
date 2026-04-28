@@ -25,7 +25,7 @@ const getKubernetesNamespace = memoize(async (): Promise<string | null> => {
   try {
     const content = await readFile(namespacePath, { encoding: 'utf8' })
     return content.trim()
-  } catch {
+  } catch { // Intentionally ignored: namespace detection is best-effort
     return namespaceNotFound
   }
 })

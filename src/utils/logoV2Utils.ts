@@ -315,7 +315,7 @@ export function getRecentReleaseNotesSync(maxItems: number): string[] {
   if (process.env.USER_TYPE === 'ant') {
     const changelog = MACRO.VERSION_CHANGELOG
     if (changelog) {
-      const commits = changelog.trim().split('\n').filter(Boolean)
+      const commits = changelog.trim().split('\n').filter((s): s is string => !!s)
       return commits.slice(0, maxItems)
     }
     return []

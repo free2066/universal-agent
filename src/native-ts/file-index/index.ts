@@ -146,7 +146,7 @@ export class FileIndex {
   private resetArrays(paths: string[]): void {
     const n = paths.length
     this.paths = paths
-    this.lowerPaths = new Array(n)
+    this.lowerPaths = Array.from({length: n})
     this.charBits = new Int32Array(n)
     this.pathLens = new Uint16Array(n)
     this.readyCount = 0
@@ -187,7 +187,7 @@ export class FileIndex {
     const caseSensitive = query !== queryLower
     const needle = caseSensitive ? query : queryLower
     const nLen = Math.min(needle.length, MAX_QUERY_LEN)
-    const needleChars: string[] = new Array(nLen)
+    const needleChars: string[] = Array.from({length: nLen})
     let needleBitmap = 0
     for (let j = 0; j < nLen; j++) {
       const ch = needle[j]
@@ -279,7 +279,7 @@ export class FileIndex {
 
     const matchCount = topK.length
     const denom = Math.max(matchCount, 1)
-    const results: SearchResult[] = new Array(matchCount)
+    const results: SearchResult[] = Array.from({length: matchCount})
 
     for (let i = 0; i < matchCount; i++) {
       const path = topK[i]!.path

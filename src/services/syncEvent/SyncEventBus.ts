@@ -184,7 +184,7 @@ export class SyncEventBus {
       const raw = fs.readFileSync(file, 'utf-8')
       let events = raw
         .split('\n')
-        .filter(Boolean)
+        .filter((l): l is string => !!l)
         .map(line => {
           try {
             return JSON.parse(line) as SyncEvent

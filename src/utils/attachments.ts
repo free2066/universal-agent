@@ -1972,7 +1972,7 @@ async function processAtMentionedFiles(
       }
     }),
   )
-  return results.filter(Boolean) as Attachment[]
+  return results.filter((r): r is Attachment => !!r)
 }
 
 function processAgentMentions(

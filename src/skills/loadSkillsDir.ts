@@ -109,7 +109,7 @@ export function getSkillsPath(
  */
 export function estimateSkillFrontmatterTokens(skill: Command): number {
   const frontmatterText = [skill.name, skill.description, skill.whenToUse]
-    .filter(Boolean)
+    .filter((s): s is string => !!s)
     .join(' ')
   return roughTokenCountEstimation(frontmatterText)
 }

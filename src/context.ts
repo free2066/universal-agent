@@ -216,7 +216,7 @@ export const getUserContext = memoize(
             return ''
           })
         )
-        const combined = results.filter(Boolean).join('\n\n')
+        const combined = results.filter((s): s is string => !!s).join('\n\n')
         if (combined) remoteInstructions = combined
       }
     }
@@ -228,7 +228,7 @@ export const getUserContext = memoize(
     })
 
     // Merge local claudeMd with remote instructions
-    const mergedClaudeMd = [claudeMd, remoteInstructions].filter(Boolean).join('\n\n') || null
+    const mergedClaudeMd = [claudeMd, remoteInstructions].filter((s): s is string => !!s).join('\n\n') || null
 
     return {
       ...(mergedClaudeMd && { claudeMd: mergedClaudeMd }),

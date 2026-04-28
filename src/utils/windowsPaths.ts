@@ -53,7 +53,7 @@ function findExecutable(executable: string): string | null {
 
     // SECURITY: Filter out any results from the current directory
     // to prevent executing malicious git.bat/cmd/exe files
-    const paths = result.split('\r\n').filter(Boolean)
+    const paths = result.split('\r\n').filter((s): s is string => !!s)
     const cwd = getCwd().toLowerCase()
 
     for (const candidatePath of paths) {

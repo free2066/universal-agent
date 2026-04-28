@@ -765,7 +765,7 @@ export async function getGitDiffSize(filePath: string): Promise<number> {
 
     // Parse the stat output to extract additions and deletions
     // Format: " file | 5 ++---" or " file | 10 +"
-    const lines = result.stdout.split('\n').filter(Boolean)
+    const lines = result.stdout.split('\n').filter((s): s is string => !!s)
     let totalChanges = 0
 
     for (const line of lines) {
@@ -825,7 +825,7 @@ export async function getStagedFiles(): Promise<string[]> {
     )
 
     if (result.code === 0 && result.stdout) {
-      return result.stdout.split('\n').filter(Boolean)
+      return result.stdout.split('\n').filter((s): s is string => !!s)
     }
   } catch (error) {
     logError(error as Error)

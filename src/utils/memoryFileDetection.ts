@@ -228,7 +228,7 @@ export function isShellCommandTargetingMemory(command: string): boolean {
   // posix so only one form to check — and crucially, windowsPathToPosixPath
   // is NOT called, so Linux paths like /m/foo aren't misinterpreted as MinGW.
   const commandCmp = toComparable(command)
-  const dirs = [configDir, memoryBase, autoMemDir].filter(Boolean)
+  const dirs = [configDir, memoryBase, autoMemDir].filter((s): s is string => !!s)
   const matchesAnyDir = dirs.some(d => {
     if (commandCmp.includes(toComparable(d))) return true
     if (IS_WINDOWS) {

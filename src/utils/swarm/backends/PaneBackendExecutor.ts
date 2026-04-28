@@ -123,7 +123,7 @@ export class PaneBackendExecutor implements TeammateExecutor {
         `--parent-session-id ${quote([config.parentSessionId || getSessionId()])}`,
         config.planModeRequired ? '--plan-mode-required' : '',
       ]
-        .filter(Boolean)
+        .filter((s): s is string => !!s)
         .join(' ')
 
       // Build CLI flags to propagate to teammate

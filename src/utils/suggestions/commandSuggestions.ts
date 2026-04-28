@@ -36,13 +36,13 @@ function getCommandFuse(commands: Command[]): Fuse<CommandSearchItem> {
   const commandData: CommandSearchItem[] = commands.flatMap(cmd => {
     if (cmd.isHidden) return []
     const commandName = getCommandName(cmd)
-    const parts = commandName.split(SEPARATORS).filter(Boolean)
+    const parts = commandName.split(SEPARATORS).filter((s): s is string => !!s)
 
     return [{
       descriptionKey: (cmd.description ?? '')
         .split(' ')
         .map(word => cleanWord(word))
-        .filter(Boolean),
+        .filter((s): s is string => !!s),
       partKey: parts.length > 1 ? parts : undefined,
       commandName,
       command: cmd,

@@ -33,7 +33,7 @@ export const getBedrockInferenceProfiles = memoize(async function (): Promise<
     return allProfiles
       .filter(profile => profile.inferenceProfileId?.includes('anthropic'))
       .map(profile => profile.inferenceProfileId)
-      .filter(Boolean) as string[]
+      .filter((s): s is string => !!s)
   } catch (error) {
     logError(error as Error)
     throw error

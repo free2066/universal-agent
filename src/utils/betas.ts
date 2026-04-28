@@ -362,7 +362,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
     betaHeaders.push(
       ...process.env.ANTHROPIC_BETAS.split(',')
         .map(_ => _.trim())
-        .filter(Boolean),
+        .filter((s): s is string => !!s),
     )
   }
   return betaHeaders

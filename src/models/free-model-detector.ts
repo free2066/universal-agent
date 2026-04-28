@@ -409,7 +409,7 @@ export async function detectFreeModes(silent = false): Promise<DetectionResult> 
   // ── Step 2: Fallback chain (Gemini / Groq / Ollama) ───────────────────────
   if (!silent) process.stdout.write('🔍 Checking available free providers (Gemini / Groq / Ollama)...');
   const [gemini, groq, ollama] = await Promise.all([tryGemini(), tryGroq(), tryOllama()]);
-  const fallbacks = [gemini, groq, ollama].filter(Boolean) as RankedFreeModel[];
+  const fallbacks = [gemini, groq, ollama].filter((x): x is RankedFreeModel => !!x);
   fallbacks.sort((a, b) => b.score - a.score);
 
   if (fallbacks.length > 0) {

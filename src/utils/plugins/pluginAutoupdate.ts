@@ -89,10 +89,7 @@ async function getAutoUpdateEnabledMarketplaces(): Promise<Set<string>> {
   for (const [name, entry] of Object.entries(config)) {
     // Settings-declared autoUpdate takes precedence over JSON state
     const declaredAutoUpdate = declared[name]?.autoUpdate
-    const autoUpdate =
-      declaredAutoUpdate !== undefined
-        ? declaredAutoUpdate
-        : isMarketplaceAutoUpdate(name, entry)
+    const autoUpdate = declaredAutoUpdate ?? isMarketplaceAutoUpdate(name, entry)
     if (autoUpdate) {
       enabled.add(name.toLowerCase())
     }

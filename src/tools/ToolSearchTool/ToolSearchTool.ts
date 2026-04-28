@@ -139,7 +139,7 @@ function parseToolName(name: string): {
     const withoutPrefix = name.replace(/^mcp__/, '').toLowerCase()
     const parts = withoutPrefix.split('__').flatMap(p => p.split('_'))
     return {
-      parts: parts.filter(Boolean),
+      parts: parts.filter((s): s is string => !!s),
       full: withoutPrefix.replace(/__/g, ' ').replace(/_/g, ' '),
       isMcp: true,
     }
@@ -151,7 +151,7 @@ function parseToolName(name: string): {
     .replace(/_/g, ' ')
     .toLowerCase()
     .split(/\s+/)
-    .filter(Boolean)
+    .filter((s): s is string => !!s)
 
   return {
     parts,
@@ -365,7 +365,7 @@ export const ToolSearchTool = buildTool({
       const requested = selectMatch[1]!
         .split(',')
         .map(s => s.trim())
-        .filter(Boolean)
+        .filter((s): s is string => !!s)
 
       const found: string[] = []
       const missing: string[] = []

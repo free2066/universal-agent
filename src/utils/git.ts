@@ -629,7 +629,7 @@ async function captureUntrackedFiles(): Promise<
     return []
   }
 
-  const files = trimmed.split('\n').filter(Boolean)
+  const files = trimmed.split('\n').filter((s): s is string => !!s)
   const result: Array<{ path: string; content: string }> = []
   let totalSize = 0
 

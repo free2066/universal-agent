@@ -62,7 +62,7 @@ export class OllamaClient implements LLMClient {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const lines = decoder.decode(value, { stream: true }).split('\n').filter(Boolean);
+          const lines = decoder.decode(value, { stream: true }).split('\n').filter((s): s is string => !!s);
           for (const line of lines) {
             try {
               const data = JSON.parse(line) as { message?: { content?: string } };

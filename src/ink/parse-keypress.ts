@@ -205,9 +205,8 @@ function inputToString(input: Buffer | string): string {
     return String(input)
   } else if (!input) {
     return ''
-  } else {
-    return input
   }
+  return input
 }
 
 export function parseMultipleKeypresses(
@@ -741,7 +740,7 @@ function parseKeypress(s: string = ''): ParsedKey {
     }
 
     const code = [parts[1], parts[2], parts[4], parts[6]]
-      .filter(Boolean)
+      .filter((s): s is string => !!s)
       .join('')
 
     const modifier = ((parts[3] || parts[5] || 1) as number) - 1

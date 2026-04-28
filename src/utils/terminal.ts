@@ -108,7 +108,7 @@ export function renderTruncatedContent(
         )
       : '',
   ]
-    .filter(Boolean)
+    .filter((s): s is string => !!s)
     .join('\n')
 }
 

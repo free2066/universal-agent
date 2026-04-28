@@ -106,7 +106,7 @@ export function shouldBypassProxy(
     const hostWithPort = `${hostname}:${port}`
 
     // Split by comma or space and trim each entry
-    const noProxyList = noProxy.split(NO_PROXY_SPLIT_RE).filter(Boolean)
+    const noProxyList = noProxy.split(NO_PROXY_SPLIT_RE).filter((s): s is string => !!s)
 
     return noProxyList.some(pattern => {
       pattern = pattern.toLowerCase().trim()

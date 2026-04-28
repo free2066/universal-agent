@@ -193,12 +193,7 @@ class ShellCommandImpl implements ShellCommand {
   }
 
   #exitHandler(code: number | null, signal: NodeJS.Signals | null): void {
-    const exitCode =
-      code != null
-        ? code
-        : signal === 'SIGTERM'
-          ? 144
-          : 1
+    const exitCode = code ?? (signal === 'SIGTERM' ? 144 : 1)
     this.#resolveExitCode(exitCode)
   }
 

@@ -126,7 +126,7 @@ export function getGitCommitSha(dirPath: string): Promise<string | null> {
  */
 export function getVersionFromPath(installPath: string): string | null {
   // Versioned paths have format: .../plugins/cache/marketplace/plugin/version/
-  const parts = installPath.split('/').filter(Boolean)
+  const parts = installPath.split('/').filter((s): s is string => !!s)
 
   // Find 'cache' index to determine depth
   const cacheIndex = parts.findIndex(

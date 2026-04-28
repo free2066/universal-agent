@@ -341,7 +341,7 @@ export function setupNetworkListeners(
       }
       try {
         entry.responseJson = JSON.parse(entry.responseBody);
-      } catch {}
+      } catch { /* Intentionally ignored: cleanup is best-effort */ }
     }
   });
 }

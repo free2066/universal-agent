@@ -122,7 +122,7 @@ export function parseExporterTypes(value: string | undefined): string[] {
   return (value || '')
     .trim()
     .split(',')
-    .filter(Boolean)
+    .filter((s): s is string => !!s)
     .map(t => t.trim())
     .filter(t => t !== 'none')
 }

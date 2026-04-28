@@ -1416,8 +1416,8 @@ function layoutNode(
 
   // STEP 2+3: For each line, resolve flexible lengths and lay out children to
   // measure cross sizes. Track per-line consumed main and max cross.
-  const lineConsumedMain: number[] = new Array(lineCount)
-  const lineCrossSizes: number[] = new Array(lineCount)
+  const lineConsumedMain: number[] = Array.from({length: lineCount}, () => 0)
+  const lineCrossSizes: number[] = Array.from({length: lineCount}, () => 0)
   // Baseline layout tracks max ascent (baseline + leading margin) per line so
   // baseline-aligned items can be positioned at maxAscent - childBaseline.
   const lineMaxAscent: number[] = isBaseline ? new Array(lineCount).fill(0) : []
@@ -2219,7 +2219,7 @@ function resolveFlexibleLengths(
   // Iteratively distribute until no violations. Free space is recomputed each
   // pass: initial free space minus the delta frozen children consumed beyond
   // (or below) their basis.
-  const unclamped: number[] = new Array(n)
+  const unclamped: number[] = Array.from({length: n}, () => 0)
   for (let iter = 0; iter <= n; iter++) {
     let frozenDelta = 0
     let totalGrow = 0

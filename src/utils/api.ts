@@ -443,7 +443,7 @@ export function appendSystemContext(
     Object.entries(context)
       .map(([key, value]) => `${key}: ${value}`)
       .join('\n'),
-  ].filter(Boolean)
+  ].filter((s): s is string => !!s)
 }
 
 export function prependUserContext(

@@ -557,7 +557,7 @@ async function handleSpawnSplitPane(
       plan_mode_required ? '--plan-mode-required' : '',
       agent_type ? `--agent-type ${quote([agent_type])}` : '',
     ]
-      .filter(Boolean)
+      .filter((s): s is string => !!s)
       .join(' ')
 
     // Build CLI flags to propagate to teammate
@@ -765,7 +765,7 @@ async function handleSpawnSeparateWindow(
       plan_mode_required ? '--plan-mode-required' : '',
       agent_type ? `--agent-type ${quote([agent_type])}` : '',
     ]
-      .filter(Boolean)
+      .filter((s): s is string => !!s)
       .join(' ')
 
     // Build CLI flags to propagate to teammate

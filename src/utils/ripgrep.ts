@@ -622,7 +622,7 @@ export async function ripGrep(
             .trim()
             .split('\n')
             .map(line => line.replace(/\r$/, ''))
-            .filter(Boolean),
+            .filter((s): s is string => !!s),
         )
         return
       }
@@ -677,7 +677,7 @@ export async function ripGrep(
           .trim()
           .split('\n')
           .map(line => line.replace(/\r$/, ''))
-          .filter(Boolean)
+          .filter((s): s is string => !!s)
         // Drop last line for timeouts and buffer overflow - it may be incomplete
         if (lines.length > 0 && (isTimeout || isBufferOverflow)) {
           lines = lines.slice(0, -1)

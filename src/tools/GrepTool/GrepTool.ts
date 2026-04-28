@@ -520,11 +520,11 @@ export const GrepTool = buildTool({
           globPatterns.push(rawPattern)
         } else {
           // Split on commas for patterns without braces
-          globPatterns.push(...rawPattern.split(COMMA_RE).filter(Boolean))
+          globPatterns.push(...rawPattern.split(COMMA_RE).filter((s): s is string => !!s))
         }
       }
 
-      for (const globPattern of globPatterns.filter(Boolean)) {
+      for (const globPattern of globPatterns.filter((s): s is string => !!s)) {
         args.push('--glob', globPattern)
       }
     }

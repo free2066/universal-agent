@@ -145,7 +145,7 @@ export async function getAncestorCommandsAsync(
     if (result.code !== 0 || !result.stdout?.trim()) {
       return []
     }
-    return result.stdout.split('\0').filter(Boolean)
+    return result.stdout.split('\0').filter((s): s is string => !!s)
   }
 
   // For Unix, use a shell command that walks up the process tree and collects commands
@@ -158,7 +158,7 @@ export async function getAncestorCommandsAsync(
   if (result.code !== 0 || !result.stdout?.trim()) {
     return []
   }
-  return result.stdout.split('\0').filter(Boolean)
+  return result.stdout.split('\0').filter((s): s is string => !!s)
 }
 
 /**

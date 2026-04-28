@@ -766,7 +766,7 @@ export async function compactConversation(
       userDisplayMessage,
       postCompactHookResult.userDisplayMessage,
     ]
-      .filter(Boolean)
+      .filter((m): m is string => !!m)
       .join('\n')
 
     return {

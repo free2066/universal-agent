@@ -11,7 +11,7 @@ export function formatError(error: unknown): string {
   }
   const parts = getErrorParts(error)
   const fullMessage =
-    parts.filter(Boolean).join('\n').trim() || 'Command failed with no output'
+    parts.filter((s): s is string => !!s).join('\n').trim() || 'Command failed with no output'
   if (fullMessage.length <= 10000) {
     return fullMessage
   }

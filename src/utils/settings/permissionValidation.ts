@@ -122,7 +122,7 @@ export function validatePermissionRule(rule: string): {
           mcpInfo.toolName && mcpInfo.toolName !== '*'
             ? `mcp__${mcpInfo.serverName}__${mcpInfo.toolName}`
             : undefined,
-        ].filter(Boolean) as string[],
+        ].filter((s): s is string => !!s),
       }
     }
 

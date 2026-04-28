@@ -316,7 +316,7 @@ async function loadDirectoryIgnoreMatchers(
   )
 
   const matcher = ignore()
-  const combined = patterns.filter(Boolean).join('\n').trim()
+  const combined = patterns.filter((s): s is string => !!s).join('\n').trim()
   if (!combined) {
     return []
   }

@@ -270,7 +270,7 @@ function mapAssistantMessage(
               return _ // Handle other block types unchanged
           }
         })
-        .filter(Boolean) as BetaContentBlock[],
+        .filter((b): b is BetaContentBlock => !!b),
     },
     type: 'assistant',
   }

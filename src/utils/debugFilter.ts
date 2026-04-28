@@ -22,7 +22,7 @@ export const parseDebugFilter = memoize(
     const filters = filterString
       .split(',')
       .map(f => f.trim())
-      .filter(Boolean)
+      .filter((s): s is string => !!s)
 
     // If no valid filters remain, return null
     if (filters.length === 0) {

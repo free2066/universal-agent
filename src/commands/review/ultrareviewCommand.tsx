@@ -4,7 +4,7 @@ import type { LocalJSXCommandCall, LocalJSXCommandOnDone } from '../../types/com
 import { checkOverageGate, confirmOverage, launchRemoteReview } from './reviewRemote.js';
 import { UltrareviewOverageDialog } from './UltrareviewOverageDialog.js';
 function contentBlocksToString(blocks: ContentBlockParam[]): string {
-  return blocks.map(b => b.type === 'text' ? b.text : '').filter(Boolean).join('\n');
+  return blocks.map(b => b.type === 'text' ? b.text : '').filter((s): s is string => !!s).join('\n');
 }
 async function launchAndDone(args: string, context: Parameters<LocalJSXCommandCall>[1], onDone: LocalJSXCommandOnDone, billingNote: string, signal?: AbortSignal): Promise<void> {
   const result = await launchRemoteReview(args, context, billingNote);

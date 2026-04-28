@@ -352,7 +352,7 @@ export class TmuxBackend implements PaneBackend {
       '#{pane_id}',
     ])
 
-    const panes = panesResult.stdout.trim().split('\n').filter(Boolean)
+    const panes = panesResult.stdout.trim().split('\n').filter((s): s is string => !!s)
     if (panes[0]) {
       await runTmux(['resize-pane', '-t', panes[0], '-x', '30%'])
     }
@@ -508,7 +508,7 @@ export class TmuxBackend implements PaneBackend {
       '#{window_name}',
     ])
 
-    const windows = listResult.stdout.trim().split('\n').filter(Boolean)
+    const windows = listResult.stdout.trim().split('\n').filter((s): s is string => !!s)
     const windowTarget = `${SWARM_SESSION_NAME}:${SWARM_VIEW_WINDOW_NAME}`
 
     if (windows.includes(SWARM_VIEW_WINDOW_NAME)) {
@@ -520,7 +520,7 @@ export class TmuxBackend implements PaneBackend {
         '#{pane_id}',
       ])
 
-      const panes = paneResult.stdout.trim().split('\n').filter(Boolean)
+      const panes = paneResult.stdout.trim().split('\n').filter((s): s is string => !!s)
       return { windowTarget, paneId: panes[0] || '' }
     }
 
@@ -589,7 +589,7 @@ export class TmuxBackend implements PaneBackend {
         '#{pane_id}',
       ])
 
-      const panes = listResult.stdout.trim().split('\n').filter(Boolean)
+      const panes = listResult.stdout.trim().split('\n').filter((s): s is string => !!s)
       const teammatePanes = panes.slice(1)
       const teammateCount = teammatePanes.length
 
@@ -664,7 +664,7 @@ export class TmuxBackend implements PaneBackend {
         '#{pane_id}',
       ])
 
-      const panes = listResult.stdout.trim().split('\n').filter(Boolean)
+      const panes = listResult.stdout.trim().split('\n').filter((s): s is string => !!s)
       const teammateCount = panes.length
 
       const splitVertically = teammateCount % 2 === 1
@@ -713,7 +713,7 @@ export class TmuxBackend implements PaneBackend {
       '#{pane_id}',
     ])
 
-    const panes = listResult.stdout.trim().split('\n').filter(Boolean)
+    const panes = listResult.stdout.trim().split('\n').filter((s): s is string => !!s)
     if (panes.length <= 2) {
       return
     }
@@ -745,7 +745,7 @@ export class TmuxBackend implements PaneBackend {
       '#{pane_id}',
     ])
 
-    const panes = listResult.stdout.trim().split('\n').filter(Boolean)
+    const panes = listResult.stdout.trim().split('\n').filter((s): s is string => !!s)
     if (panes.length <= 1) {
       return
     }

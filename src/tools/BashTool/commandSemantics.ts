@@ -100,7 +100,7 @@ function getCommandSemantic(command: string): CommandSemantic {
   // Extract the base command (first word, handling pipes)
   const baseCommand = heuristicallyExtractBaseCommand(command)
   const semantic = COMMAND_SEMANTICS.get(baseCommand)
-  return semantic !== undefined ? semantic : DEFAULT_SEMANTIC
+  return semantic ?? DEFAULT_SEMANTIC
 }
 
 /**

@@ -50,7 +50,7 @@ export function parseArguments(args: string): string[] {
   const result = tryParseShellCommand(args, key => `$${key}`)
   if (!result.success) {
     // Fall back to simple whitespace split if parsing fails
-    return args.split(WHITESPACE_RE).filter(Boolean)
+    return args.split(WHITESPACE_RE).filter((s): s is string => !!s)
   }
 
   // Filter to only string tokens (ignore shell operators, etc.)
