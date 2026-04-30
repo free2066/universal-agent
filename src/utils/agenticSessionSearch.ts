@@ -9,7 +9,7 @@ import { sideQuery } from './sideQuery.js'
 import { jsonParse } from './slowOperations.js'
 
 // Limits for transcript extraction
-const MAX_TRANSCRIPT_CHARS = 2000 // Max chars of transcript per session
+const MAX_TRANSCRIPT_CHARS = 2_000 // Max chars of transcript per session
 const MAX_MESSAGES_TO_SCAN = 100 // Max messages to scan from start/end
 const MAX_SESSIONS_TO_SEARCH = 100 // Max sessions to send to the API
 

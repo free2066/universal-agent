@@ -36,7 +36,7 @@ import {
 // Drift is caught by a test asserting equality with the source-of-truth.
 export const TIME_BASED_MC_CLEARED_MESSAGE = '[Old tool result content cleared]'
 
-const IMAGE_MAX_TOKEN_SIZE = 2000
+const IMAGE_MAX_TOKEN_SIZE = 2_000
 
 // Only compact these tools
 const COMPACTABLE_TOOLS = new Set<string>([

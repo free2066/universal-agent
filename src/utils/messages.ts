@@ -3642,7 +3642,7 @@ Read the team config to discover your teammates' names. Check the task list peri
       ])
     }
     case 'selected_lines_in_ide': {
-      const maxSelectionLength = 2000
+      const maxSelectionLength = 2_000
       const content =
         attachment.content.length > maxSelectionLength
           ? attachment.content.substring(0, maxSelectionLength) +

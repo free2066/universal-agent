@@ -109,7 +109,7 @@ function handleFileEvent(
 
 export function updateWatchPaths(paths: string[]): void {
   if (!initialized) return
-  const sorted = paths.slice().sort()
+  const sorted = [...paths].sort()
   if (
     sorted.length === dynamicWatchPathsSorted.length &&
     sorted.every((p, i) => p === dynamicWatchPathsSorted[i])
@@ -160,7 +160,7 @@ export async function onCwdChangedForHooks(
     }
   })
   dynamicWatchPaths = hookResult.watchPaths
-  dynamicWatchPathsSorted = hookResult.watchPaths.slice().sort()
+  dynamicWatchPathsSorted = [...hookResult.watchPaths].sort()
   for (const msg of hookResult.systemMessages) {
     notifyCallback?.(msg, false)
   }

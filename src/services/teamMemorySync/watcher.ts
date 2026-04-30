@@ -32,7 +32,7 @@ import {
 } from './index.js'
 import type { TeamMemorySyncPushResult } from './types.js'
 
-const DEBOUNCE_MS = 2000 // Wait 2s after last change before pushing
+const DEBOUNCE_MS = 2_000 // Wait 2s after last change before pushing
 
 // ─── Watcher state ──────────────────────────────────────────
 let watcher: FSWatcher | null = null

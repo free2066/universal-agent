@@ -264,7 +264,7 @@ export const getHookEventMetadata = memoize(
       },
     }
   },
-  toolNames => toolNames.slice().sort().join(','),
+  toolNames => [...toolNames].sort().join(','),
 )
 
 // Group hooks by event and matcher

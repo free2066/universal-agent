@@ -39,8 +39,8 @@ export const IMAGE_TARGET_RAW_SIZE = (API_IMAGE_MAX_BASE64_SIZE * 3) / 4 // 3.75
  * The API_IMAGE_MAX_BASE64_SIZE (5MB) is the actual hard limit that causes
  * API errors if exceeded.
  */
-export const IMAGE_MAX_WIDTH = 2000
-export const IMAGE_MAX_HEIGHT = 2000
+export const IMAGE_MAX_WIDTH = 2_000
+export const IMAGE_MAX_HEIGHT = 2_000
 
 // =============================================================================
 // PDF LIMITS

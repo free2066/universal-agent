@@ -20,7 +20,7 @@ const POST_TIMEOUT_MS = 15_000
 // now closes AFTER archive so archive latency is the primary drain window.
 // NOTE: gracefulShutdown's cleanup budget is 2s (not the 5s outer failsafe);
 // 3s here exceeds it, but the process lives ~2s longer for hooks+analytics.
-const CLOSE_GRACE_MS = 3000
+const CLOSE_GRACE_MS = 3_000
 
 /**
  * Hybrid transport: WebSocket for reads, HTTP POST for writes.

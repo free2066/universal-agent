@@ -106,7 +106,7 @@ export function getToolResultsDir(): string {
 }
 
 // Preview size in bytes for the reference message
-export const PREVIEW_SIZE_BYTES = 2000
+export const PREVIEW_SIZE_BYTES = 2_000
 
 /**
  * Get the filepath where a tool result would be persisted.

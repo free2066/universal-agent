@@ -3200,9 +3200,7 @@ export function addCacheBreakpoints(
               msg.content = [...msg.content]
               cloned = true
             }
-            msg.content[j] = Object.assign({}, block, {
-              cache_reference: block.tool_use_id,
-            })
+            msg.content[j] = { ...block, cache_reference: block.tool_use_id }
           }
         }
       }

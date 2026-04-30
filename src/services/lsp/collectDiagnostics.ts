@@ -24,7 +24,7 @@ const MAX_OTHER_FILES = 3
  */
 export async function collectLSPDiagnosticsForFile(
   filePath: string,
-  timeoutMs = 2000,
+  timeoutMs = 2_000,
 ): Promise<string | null> {
   const normalizedUri = `file://${filePath}`
 

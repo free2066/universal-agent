@@ -170,7 +170,7 @@ const RELEASE_TIMEOUT_MS = 200
 // instead — the gap to the next keypress is the OS initial repeat *delay*
 // (up to ~2s on macOS with slider at "Long"), not the repeat *rate*.
 const REPEAT_FALLBACK_MS = 600
-export const FIRST_PRESS_FALLBACK_MS = 2000
+export const FIRST_PRESS_FALLBACK_MS = 2_000
 
 // How long (ms) to keep a focus-mode session alive without any speech
 // before tearing it down to free the WebSocket connection. Re-arms on

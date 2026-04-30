@@ -46,7 +46,7 @@ const RELOAD_DEBOUNCE_MS = 300
  * Skill files change rarely (manual edits, git operations), so a 2s interval
  * trades negligible latency for far fewer stat() calls than the default 100ms.
  */
-const POLLING_INTERVAL_MS = 2000
+const POLLING_INTERVAL_MS = 2_000
 
 /**
  * Bun's native fs.watch() has a PathWatcherManager deadlock (oven-sh/bun#27469,

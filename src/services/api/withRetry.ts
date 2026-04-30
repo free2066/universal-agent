@@ -52,7 +52,7 @@ import { extractConnectionErrorDetails } from './errorUtils.js'
 const abortError = () => new APIUserAbortError()
 
 const DEFAULT_MAX_RETRIES = 10
-const FLOOR_OUTPUT_TOKENS = 3000
+const FLOOR_OUTPUT_TOKENS = 3_000
 const MAX_529_RETRIES = 3
 export const BASE_DELAY_MS = 500
 

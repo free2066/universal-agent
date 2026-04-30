@@ -107,7 +107,7 @@ function getTurndownService(): Promise<InstanceType<TurndownCtor>> {
 // which provides a primary security boundary. In addition, Claude Code has
 // other data exfil channels, and this one does not seem relatively high risk,
 // so I'm removing that length restriction. -ab
-const MAX_URL_LENGTH = 2000
+const MAX_URL_LENGTH = 2_000
 
 // Per PSR:
 // "Implement resource consumption controls because setting limits on CPU,

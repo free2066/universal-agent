@@ -722,6 +722,8 @@ async function* runPowerShellCommand({
   function createProgressSignal(): Promise<null> {
     return new Promise<null>(resolve => {
       resolveProgress = () => resolve(null);
+    }).catch(err => {
+      logForDebugging(`[PowerShellTool] spawnBackgroundTask failed: ${err}`);
     });
   }
   const shouldAutoBackground = !isBackgroundTasksDisabled && isAutobackgroundingAllowed(command);

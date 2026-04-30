@@ -1699,7 +1699,7 @@ function PromptInput({
           timeoutMs: 1000
         });
       }
-    });
+    }).catch(() => { /* clipboard image read failed */ });
   }, [addNotification, onImagePaste]);
 
   // Register chat:submit handler directly in the handler registry (not via

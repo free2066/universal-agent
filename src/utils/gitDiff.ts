@@ -384,7 +384,7 @@ export function parseShortstat(stdout: string): GitDiffStats | null {
   }
 }
 
-const SINGLE_FILE_DIFF_TIMEOUT_MS = 3000
+const SINGLE_FILE_DIFF_TIMEOUT_MS = 3_000
 
 export type ToolUseDiff = {
   filename: string

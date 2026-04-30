@@ -1301,7 +1301,7 @@ export async function getAllMcpConfigs(): Promise<{
   )
 
   // Merge with claude.ai having lowest precedence
-  const servers = Object.assign({}, dedupedClaudeAi, claudeCodeServers)
+  const servers = { ...dedupedClaudeAi, ...claudeCodeServers }
 
   return { servers, errors }
 }

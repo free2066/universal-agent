@@ -20,7 +20,7 @@ import {
   pollRemoteSessionEvents,
 } from '../teleport.js'
 
-const POLL_INTERVAL_MS = 3000
+const POLL_INTERVAL_MS = 3_000
 // pollRemoteSessionEvents doesn't retry. A 30min poll makes ~600 calls;
 // at any nonzero 5xx rate one blip would kill the run.
 const MAX_CONSECUTIVE_FAILURES = 5

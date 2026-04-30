@@ -34,7 +34,7 @@ export class FpsTracker {
     const totalFrames = this.frameDurations.length
     const averageFps = totalFrames / (totalTimeMs / 1000)
 
-    const sorted = this.frameDurations.slice().sort((a, b) => b - a)
+    const sorted = [...this.frameDurations].sort((a, b) => b - a)
     const p99Index = Math.max(0, Math.ceil(sorted.length * 0.01) - 1)
     const p99FrameTimeMs = sorted[p99Index]!
     const low1PctFps = p99FrameTimeMs > 0 ? 1000 / p99FrameTimeMs : 0

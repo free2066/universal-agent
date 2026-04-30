@@ -2541,8 +2541,8 @@ async function run(): Promise<CommanderCommand> {
             num_sessions: count
           });
         }
-      });
-    });
+      }).catch(() => { /* concurrent session count failed */ });
+    }).catch(() => { /* session registration failed */ });
 
     // Initialize versioned plugins system (triggers V1→V2 migration if
     // needed). Then run orphan GC, THEN warm the Grep/Glob exclusion cache.
@@ -2561,7 +2561,7 @@ async function run(): Promise<CommanderCommand> {
       // In headless mode, await to ensure plugin sync completes before CLI exits
       await initializeVersionedPlugins();
       profileCheckpoint('action_after_plugins_init');
-      void cleanupOrphanedPluginVersionsInBackground().then(() => getGlobExclusionsForPluginCache());
+      void cleanupOrphanedPluginVersionsInBackground().then(() => getGlobExclusionsForPluginCache()).catch(() => { /* orphan cleanup failed — non-critical */ });
     } else {
       // In interactive mode, fire-and-forget — this is purely bookkeeping
       // that doesn't affect runtime behavior of the current session
@@ -2569,7 +2569,7 @@ async function run(): Promise<CommanderCommand> {
         profileCheckpoint('action_after_plugins_init');
         await cleanupOrphanedPluginVersionsInBackground();
         void getGlobExclusionsForPluginCache();
-      });
+      }).catch(() => { /* versioned plugin init failed — non-critical */ });
     }
     const setupTrigger = initOnly || init ? 'init' : maintenance ? 'maintenance' : null;
     if (initOnly) {

@@ -18,7 +18,7 @@ import { shouldIncludeGitInstructions } from './utils/gitSettings.js'
 import { logError } from './utils/log.js'
 
 // Git status output limit to avoid context bloat
-const MAX_STATUS_CHARS = 2000
+const MAX_STATUS_CHARS = 2_000
 
 // System prompt injection for cache breaking (ant-only, ephemeral debugging state)
 let systemPromptInjection: string | null = null

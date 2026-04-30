@@ -10,7 +10,7 @@
  * Governs user-visible "connecting…" latency on initial work pickup and
  * recovery speed after the server re-dispatches a work item.
  */
-const POLL_INTERVAL_MS_NOT_AT_CAPACITY = 2000
+const POLL_INTERVAL_MS_NOT_AT_CAPACITY = 2_000
 
 /**
  * Poll interval when the transport is connected. Runs independently of
