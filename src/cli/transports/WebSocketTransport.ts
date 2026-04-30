@@ -25,7 +25,7 @@ const DEFAULT_BASE_RECONNECT_DELAY = 1000
 const DEFAULT_MAX_RECONNECT_DELAY = 30000
 /** Time budget for reconnection attempts before giving up (10 minutes). */
 const DEFAULT_RECONNECT_GIVE_UP_MS = 600_000
-const DEFAULT_PING_INTERVAL = 10000
+const DEFAULT_PING_INTERVAL = 10_000
 const DEFAULT_KEEPALIVE_INTERVAL = 300_000 // 5 minutes
 
 /**

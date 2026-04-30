@@ -12,10 +12,10 @@ export function formatError(error: unknown): string {
   const parts = getErrorParts(error)
   const fullMessage =
     parts.filter((s): s is string => !!s).join('\n').trim() || 'Command failed with no output'
-  if (fullMessage.length <= 10000) {
+  if (fullMessage.length <= 10_000) {
     return fullMessage
   }
-  const halfLength = 5000
+  const halfLength = 5_000
   const start = fullMessage.slice(0, halfLength)
   const end = fullMessage.slice(-halfLength)
   return `${start}\n\n... [${fullMessage.length - 10000} characters truncated] ...\n\n${end}`

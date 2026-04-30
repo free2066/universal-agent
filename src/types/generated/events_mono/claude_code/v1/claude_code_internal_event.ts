@@ -776,7 +776,7 @@ export const ClaudeCodeInternalEvent: MessageFns<ClaudeCodeInternalEvent> = {
     message.user_type = object.user_type ?? ''
     message.betas = object.betas ?? ''
     message.env =
-      object.env !== undefined && object.env !== null
+      object.env != null
         ? EnvironmentMetadata.fromPartial(object.env)
         : undefined
     message.entrypoint = object.entrypoint ?? ''

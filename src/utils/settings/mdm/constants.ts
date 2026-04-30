@@ -35,7 +35,7 @@ export const PLUTIL_PATH = '/usr/bin/plutil'
 export const PLUTIL_ARGS_PREFIX = ['-convert', 'json', '-o', '-', '--'] as const
 
 /** Subprocess timeout in milliseconds. */
-export const MDM_SUBPROCESS_TIMEOUT_MS = 5000
+export const MDM_SUBPROCESS_TIMEOUT_MS = 5_000
 
 /**
  * Build the list of macOS plist paths in priority order (highest first).

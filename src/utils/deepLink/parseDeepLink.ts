@@ -67,7 +67,7 @@ const REPO_SLUG_PATTERN = /^[\w.-]+\/[\w.-]+$/
  * launch error, not a security issue — so we don't penalize real users
  * for an implausible input.
  */
-const MAX_QUERY_LENGTH = 5000
+const MAX_QUERY_LENGTH = 5_000
 
 /**
  * PATH_MAX on Linux is 4096. Windows MAX_PATH is 260 (32767 with long-path

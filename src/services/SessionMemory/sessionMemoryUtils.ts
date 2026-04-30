@@ -10,7 +10,7 @@ import { sleep } from '../../utils/sleep.js'
 import { logEvent } from '../analytics/index.js'
 
 const EXTRACTION_WAIT_TIMEOUT_MS = 15000
-const EXTRACTION_STALE_THRESHOLD_MS = 60000 // 1 minute
+const EXTRACTION_STALE_THRESHOLD_MS = 60_000 // 1 minute
 
 /**
  * Configuration for session memory extraction thresholds

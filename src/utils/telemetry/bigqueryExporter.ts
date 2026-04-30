@@ -229,7 +229,7 @@ export class BigQueryMetricsExporter implements PushMetricExporter {
     const result: Record<string, string> = {}
     if (attributes) {
       for (const [key, value] of Object.entries(attributes)) {
-        if (value !== undefined && value !== null) {
+        if (value != null) {
           result[key] = String(value)
         }
       }

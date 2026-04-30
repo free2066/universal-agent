@@ -17,7 +17,7 @@ import type { ScopedLspServerConfig } from './types.js'
 
 /** Cache for lowercase file extensions to avoid repeated path.extname() calls */
 const extensionCache = new Map<string, string>()
-const MAX_EXTENSION_CACHE_SIZE = 10000
+const MAX_EXTENSION_CACHE_SIZE = 10_000
 
 /** Get lowercase file extension with caching */
 function getFileExtension(filePath: string): string {

@@ -297,7 +297,7 @@ export async function downloadVersionFromArtifactory(
 }
 
 // Stall timeout: abort if no bytes received for this duration
-const DEFAULT_STALL_TIMEOUT_MS = 60000 // 60 seconds
+const DEFAULT_STALL_TIMEOUT_MS = 60_000 // 60 seconds
 const MAX_DOWNLOAD_RETRIES = 3
 
 function getStallTimeoutMs(): number {

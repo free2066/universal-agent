@@ -537,7 +537,7 @@ export function getModelOptions(fastMode = false): ModelOption[] {
   let customModel: ModelSetting = null
   const currentMainLoopModel = getUserSpecifiedModelSetting()
   const initialMainLoopModel = getInitialMainLoopModel()
-  if (currentMainLoopModel !== undefined && currentMainLoopModel !== null) {
+  if (currentMainLoopModel != null) {
     customModel = currentMainLoopModel
   } else if (initialMainLoopModel !== null) {
     customModel = initialMainLoopModel

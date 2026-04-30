@@ -1294,7 +1294,7 @@ export async function initializeIdeIntegration(
   ) => void,
 ): Promise<void> {
   // Don't await so we don't block startup, but return a promise that resolves with the status
-  void findAvailableIDE().then(onIdeDetected)
+  void findAvailableIDE().then(onIdeDetected).catch(logError)
 
   const shouldAutoInstall = getGlobalConfig().autoInstallIdeExtension ?? true
   if (
@@ -1320,7 +1320,7 @@ export async function initializeIdeIntegration(
 
               if (status?.installed) {
                 // If we installed and don't yet have an IDE, search again.
-                void findAvailableIDE().then(onIdeDetected)
+                void findAvailableIDE().then(onIdeDetected).catch(logError)
               }
 
               if (

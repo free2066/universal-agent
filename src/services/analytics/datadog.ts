@@ -15,7 +15,7 @@ const DATADOG_LOGS_ENDPOINT =
 const DATADOG_CLIENT_TOKEN = 'pubbbf48e6d78dae54bceaa4acf463299bf'
 const DEFAULT_FLUSH_INTERVAL_MS = 15000
 const MAX_BATCH_SIZE = 100
-const NETWORK_TIMEOUT_MS = 5000
+const NETWORK_TIMEOUT_MS = 5_000
 
 const DATADOG_ALLOWED_EVENTS = new Set([
   'chrome_bridge_connection_succeeded',

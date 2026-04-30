@@ -21,7 +21,7 @@ import { subprocessEnv } from '../subprocessEnv.js'
 import { quote } from './shellQuote.js'
 
 const LITERAL_BACKSLASH = '\\'
-const SNAPSHOT_CREATION_TIMEOUT = 10000 // 10 seconds
+const SNAPSHOT_CREATION_TIMEOUT = 10_000 // 10 seconds
 
 /**
  * Creates a shell function that invokes `binaryPath` with a specific argv[0].

@@ -36,7 +36,7 @@ export function AutoUpdater({
   const [hasLocalInstall, setHasLocalInstall] = useState(false);
   const updateSemver = useUpdateNotification(autoUpdaterResult?.version);
   useEffect(() => {
-    void localInstallationExists().then(setHasLocalInstall);
+    void localInstallationExists().then(setHasLocalInstall).catch(() => { /* local install check failed */ });
   }, []);
 
   // Track latest isUpdating value in a ref so the memoized checkForUpdates

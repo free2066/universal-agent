@@ -18,7 +18,7 @@ import { getFsImplementation } from './fsOperations.js'
 import { expandPath } from './path.js'
 import { jsonParse } from './slowOperations.js'
 
-const LARGE_OUTPUT_THRESHOLD = 10000
+const LARGE_OUTPUT_THRESHOLD = 10_000
 
 function isLargeOutputs(
   outputs: (NotebookCellSourceOutput | undefined)[],

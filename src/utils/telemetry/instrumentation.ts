@@ -66,9 +66,9 @@ import {
   isEnhancedTelemetryEnabled,
 } from './sessionTracing.js'
 
-const DEFAULT_METRICS_EXPORT_INTERVAL_MS = 60000
-const DEFAULT_LOGS_EXPORT_INTERVAL_MS = 5000
-const DEFAULT_TRACES_EXPORT_INTERVAL_MS = 5000
+const DEFAULT_METRICS_EXPORT_INTERVAL_MS = 60_000
+const DEFAULT_LOGS_EXPORT_INTERVAL_MS = 5_000
+const DEFAULT_TRACES_EXPORT_INTERVAL_MS = 5_000
 
 class TelemetryTimeoutError extends Error {}
 

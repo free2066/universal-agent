@@ -15,7 +15,7 @@ export type ShellHistoryMatch = {
 // History only changes when user submits a command, so a long TTL is fine
 let shellHistoryCache: string[] | null = null
 let shellHistoryCacheTimestamp = 0
-const CACHE_TTL_MS = 60000 // 60 seconds - history won't change while typing
+const CACHE_TTL_MS = 60_000 // 60 seconds - history won't change while typing
 
 /**
  * Get shell commands from history, with caching

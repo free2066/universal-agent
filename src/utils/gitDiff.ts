@@ -33,7 +33,7 @@ export type GitDiffResult = {
   hunks: Map<string, StructuredPatchHunk[]>
 }
 
-const GIT_TIMEOUT_MS = 5000
+const GIT_TIMEOUT_MS = 5_000
 const MAX_FILES = 50
 const MAX_DIFF_SIZE_BYTES = 1_000_000 // 1 MB - skip files larger than this
 const MAX_LINES_PER_FILE = 400 // GitHub's auto-load limit

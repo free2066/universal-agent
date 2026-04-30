@@ -14,9 +14,9 @@ import {
 } from '../utils/tasks.js'
 import { isTeamLead } from '../utils/teammate.js'
 
-const HIDE_DELAY_MS = 5000
+const HIDE_DELAY_MS = 5_000
 const DEBOUNCE_MS = 50
-const FALLBACK_POLL_MS = 5000 // Fallback in case fs.watch misses events
+const FALLBACK_POLL_MS = 5_000 // Fallback in case fs.watch misses events
 
 /**
  * Singleton store for the TodoV2 task list. Owns the file watcher, timers,

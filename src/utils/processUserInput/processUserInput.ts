@@ -270,7 +270,7 @@ export async function processUserInput({
   return result
 }
 
-const MAX_HOOK_OUTPUT_LENGTH = 10000
+const MAX_HOOK_OUTPUT_LENGTH = 10_000
 
 function applyTruncation(content: string): string {
   if (content.length > MAX_HOOK_OUTPUT_LENGTH) {

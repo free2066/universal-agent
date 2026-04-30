@@ -49,7 +49,7 @@ import {
   UserSyncDataSchema,
 } from './types.js'
 
-const SETTINGS_SYNC_TIMEOUT_MS = 10000 // 10 seconds
+const SETTINGS_SYNC_TIMEOUT_MS = 10_000 // 10 seconds
 const DEFAULT_MAX_RETRIES = 3
 const MAX_FILE_SIZE_BYTES = 500 * 1024 // 500 KB per file (matches backend limit)
 

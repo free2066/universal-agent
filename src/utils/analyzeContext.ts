@@ -1187,14 +1187,14 @@ export async function analyzeContextUsage(
   // For normal screens, use 10x10 for 200k models, 20x10 for 1M+ models
   const isNarrowScreen = terminalWidth && terminalWidth < 80
   const GRID_WIDTH =
-    contextWindow >= 1000000
+    contextWindow >= 1_000_000
       ? isNarrowScreen
         ? 5
         : 20
       : isNarrowScreen
         ? 5
         : 10
-  const GRID_HEIGHT = contextWindow >= 1000000 ? 10 : isNarrowScreen ? 5 : 10
+  const GRID_HEIGHT = contextWindow >= 1_000_000 ? 10 : isNarrowScreen ? 5 : 10
   const TOTAL_SQUARES = GRID_WIDTH * GRID_HEIGHT
 
   // Filter out deferred categories - they don't take up actual context space

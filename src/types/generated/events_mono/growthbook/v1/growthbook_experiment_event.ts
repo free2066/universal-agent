@@ -159,7 +159,7 @@ export const GrowthbookExperimentEvent: MessageFns<GrowthbookExperimentEvent> =
       message.experiment_metadata = object.experiment_metadata ?? ''
       message.device_id = object.device_id ?? ''
       message.auth =
-        object.auth !== undefined && object.auth !== null
+        object.auth != null
           ? PublicApiAuth.fromPartial(object.auth)
           : undefined
       message.session_id = object.session_id ?? ''

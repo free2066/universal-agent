@@ -16,7 +16,7 @@ export interface ParsedCommandData {
   originalCommand: string
 }
 
-const MAX_COMMAND_LENGTH = 10000
+const MAX_COMMAND_LENGTH = 10_000
 const DECLARATION_COMMANDS = new Set([
   'export',
   'declare',

@@ -179,6 +179,6 @@ export const refreshExampleCommands = memoize(async (): Promise<void> => {
           exampleFilesGeneratedAt: Date.now(),
         }))
       }
-    })
+    }).catch(() => { /* example files fetch failed — non-critical */ })
   }
 })

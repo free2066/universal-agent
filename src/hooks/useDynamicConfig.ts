@@ -15,7 +15,7 @@ export function useDynamicConfig<T>(configName: string, defaultValue: T): T {
     }
     void getDynamicConfig_BLOCKS_ON_INIT<T>(configName, defaultValue).then(
       setConfigValue,
-    )
+    ).catch(() => { /* dynamic config fetch failed — using default */ })
   }, [configName, defaultValue])
 
   return configValue

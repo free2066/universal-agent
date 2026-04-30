@@ -1591,7 +1591,7 @@ export function clearInvokedSkillsForAgent(agentId: string): void {
 
 // Slow operations tracking for dev bar
 const MAX_SLOW_OPERATIONS = 10
-const SLOW_OPERATION_TTL_MS = 10000
+const SLOW_OPERATION_TTL_MS = 10_000
 
 export function addSlowOperation(operation: string, durationMs: number): void {
   if (process.env.USER_TYPE !== 'ant') return

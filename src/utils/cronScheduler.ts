@@ -42,7 +42,7 @@ const CHECK_INTERVAL_MS = 1000
 const FILE_STABILITY_MS = 300
 // How often a non-owning session re-probes the scheduler lock. Coarse
 // because takeover only matters when the owning session has crashed.
-const LOCK_PROBE_INTERVAL_MS = 5000
+const LOCK_PROBE_INTERVAL_MS = 5_000
 /**
  * True when a recurring task was created more than `maxAgeMs` ago and should
  * be deleted on its next fire. Permanent tasks never age. `maxAgeMs === 0`

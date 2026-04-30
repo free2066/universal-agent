@@ -549,7 +549,7 @@ export type PreservedGitState = {
 // Size limits for untracked file capture
 const MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024 // 500MB per file
 const MAX_TOTAL_SIZE_BYTES = 5 * 1024 * 1024 * 1024 // 5GB total
-const MAX_FILE_COUNT = 20000
+const MAX_FILE_COUNT = 20_000
 
 // Initial read buffer for binary detection + content reuse. 64KB covers
 // most source files in a single read; isBinaryContent() internally scans

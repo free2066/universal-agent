@@ -461,7 +461,7 @@ function getConnectionTimeoutMs(): number {
 /**
  * Default timeout for individual MCP requests (auth, tool calls, etc.)
  */
-const MCP_REQUEST_TIMEOUT_MS = 60000
+const MCP_REQUEST_TIMEOUT_MS = 60_000
 
 /**
  * MCP Streamable HTTP spec requires clients to advertise acceptance of both

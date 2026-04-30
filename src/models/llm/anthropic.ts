@@ -113,9 +113,10 @@ function addSystemCacheControl(
   if (Array.isArray(systemPrompt) && systemPrompt.length > 0) {
     // Add cache_control to last block
     const arr = [...systemPrompt];
-    const last = { ...arr[arr.length - 1] } as Anthropic.TextBlockParam & Record<string, unknown>;
+    const lastIndex = arr.length - 1;
+    const last = { ...arr[lastIndex] } as Anthropic.TextBlockParam & Record<string, unknown>;
     last['cache_control'] = { type: 'ephemeral' };
-    arr[arr.length - 1] = last;
+    arr[lastIndex] = last;
     return arr;
   }
 

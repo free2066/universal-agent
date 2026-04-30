@@ -42,7 +42,7 @@ const FILE_STABILITY_POLL_INTERVAL_MS = 500
  * If a file change occurs within this window after markInternalWrite() is called,
  * it's assumed to be from Claude Code itself and won't trigger a notification.
  */
-const INTERNAL_WRITE_WINDOW_MS = 5000
+const INTERNAL_WRITE_WINDOW_MS = 5_000
 
 /**
  * Poll interval for MDM settings (registry/plist) changes.

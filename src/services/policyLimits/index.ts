@@ -54,7 +54,7 @@ function isNodeError(e: unknown): e is NodeJS.ErrnoException {
 
 // Constants
 const CACHE_FILENAME = 'policy-limits.json'
-const FETCH_TIMEOUT_MS = 10000 // 10 seconds
+const FETCH_TIMEOUT_MS = 10_000 // 10 seconds
 const DEFAULT_MAX_RETRIES = 5
 const POLLING_INTERVAL_MS = 60 * 60 * 1000 // 1 hour
 

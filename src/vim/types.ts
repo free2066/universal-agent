@@ -179,7 +179,7 @@ export const TEXT_OBJ_TYPES = new Set([
   '>', // Angle brackets
 ])
 
-export const MAX_VIM_COUNT = 10000
+export const MAX_VIM_COUNT = 10_000
 
 // ============================================================================
 // State Factories

@@ -18,7 +18,7 @@ export class ActivityManager {
 
   private isCLIActive: boolean = false
 
-  private readonly USER_ACTIVITY_TIMEOUT_MS = 5000 // 5 seconds
+  private readonly USER_ACTIVITY_TIMEOUT_MS = 5_000 // 5 seconds
 
   private readonly getNow: () => number
   private readonly getActiveTimeCounter: typeof getActiveTimeCounterImpl

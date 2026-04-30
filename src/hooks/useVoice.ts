@@ -1008,7 +1008,7 @@ export function useVoice({
       })
     }
 
-    void getVoiceKeyterms().then(attemptConnect)
+    void getVoiceKeyterms().then(attemptConnect).catch(() => { /* voice keyterms fetch failed */ })
   }
 
   // ── Hold-to-talk handler ────────────────────────────────────────────

@@ -28,7 +28,7 @@ type ClaudeAIMcpServersResponse = {
   next_page: string | null
 }
 
-const FETCH_TIMEOUT_MS = 5000
+const FETCH_TIMEOUT_MS = 5_000
 const MCP_SERVERS_BETA_HEADER = 'mcp-servers-2025-12-04'
 
 /**

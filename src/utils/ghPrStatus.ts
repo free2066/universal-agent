@@ -16,7 +16,7 @@ export type PrStatus = {
   reviewState: PrReviewState
 }
 
-const GH_TIMEOUT_MS = 5000
+const GH_TIMEOUT_MS = 5_000
 
 /**
  * Derive review state from GitHub API values.

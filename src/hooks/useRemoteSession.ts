@@ -705,7 +705,7 @@ function extractHighValueToolResultFeedback(sdkMessage: {
 }
 
 // How long to wait for a response before showing a warning
-const RESPONSE_TIMEOUT_MS = 60000 // 60 seconds
+const RESPONSE_TIMEOUT_MS = 60_000 // 60 seconds
 // Extended timeout during compaction — compact API calls take 5-30s and
 // block other SDK messages, so the normal 60s timeout isn't enough when
 // compaction itself runs close to the edge.
