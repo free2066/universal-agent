@@ -229,7 +229,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       if (typeof getTaskRouterSummary === 'function') {
         uaLog(`[summary] ${getTaskRouterSummary()}`)
       }
-    } catch {}
+    } catch { /* session log init failure is non-critical */ }
     // ── Setup session debug log (writes to fixed path, rotates daily) ────────
     // 使用 UA_SESSION_LOG_FILE 环境变量传递路径给 debug.ts 的 tee 写入器。
     // 不使用 --debug-file，避免触发 isDebugMode()=true（会显示 debug banner
@@ -238,7 +238,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
     const sessionLogDir = resolve(require('os').homedir(), '.uagent', 'logs')
     const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
     const sessionLogFile = resolve(sessionLogDir, `session-${today}.log`)
-    try { mkdirSync(sessionLogDir, { recursive: true }) } catch {}
+    try { mkdirSync(sessionLogDir, { recursive: true }) } catch { /* session log directory creation failure is non-critical */ }
 
     // 只有用户没有手动指定 UA_SESSION_LOG_FILE 时才自动设置
     if (!process.env.UA_SESSION_LOG_FILE) {
@@ -261,9 +261,9 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
             unlinkSync(fp)
             uaLog(`[session-log] cleaned up old log: ${f}`)
           }
-        } catch {}
+        } catch { /* stale log file stat/unlink failure is non-critical */ }
       }
-    } catch {}
+    } catch { /* session log cleanup failure is non-critical */ }
 
     // Ensure ripgrep is available. When running as a Node.js-executed JS bundle
     // (not a Bun standalone executable), the embedded rg is unavailable and the
@@ -312,7 +312,7 @@ process.env.COREPACK_ENABLE_AUTO_PIN = '0';
       const f = resolve(require('os').homedir(), '.claude', 'debug', 'ua-debug.log')
       mkdirSync(dirname(f), { recursive: true })
       appendFileSync(f, `[${new Date().toISOString()}] BOOTSTRAP ERROR: ${_e?.message ?? _e}\n`)
-    } catch {}
+    } catch { /* bootstrap error logging failure is non-critical */ }
   }
 })()
 // ── /UA Multi-Model Bootstrap ─────────────────────────────────────────────────
@@ -567,7 +567,7 @@ async function main(): Promise<void> {
         buildCmd = pkg.scripts?.build ? `npm run build` : ''
         testCmd = pkg.scripts?.test ? `npm test` : ''
         startCmd = pkg.scripts?.start ? `npm start` : pkg.scripts?.dev ? `npm run dev` : ''
-      } catch {}
+      } catch { /* package.json parse failure — language detection skipped */ }
     }
     // Java / Maven
     else if (_exists(_resolve(cwd, 'pom.xml'))) {
@@ -580,7 +580,7 @@ async function main(): Promise<void> {
         const pom = _read(_resolve(cwd, 'pom.xml'), 'utf8')
         if (pom.includes('spring-boot')) framework = 'Spring Boot'
         else if (pom.includes('quarkus')) framework = 'Quarkus'
-      } catch {}
+      } catch { /* pom.xml parse failure — framework detection skipped */ }
     }
     // Java / Gradle
     else if (_exists(_resolve(cwd, 'build.gradle')) || _exists(_resolve(cwd, 'build.gradle.kts'))) {

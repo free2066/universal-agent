@@ -472,7 +472,7 @@ export class StreamingToolExecutor {
         !this.hasPendingProgress()
       ) {
         const executingPromises = this.tools
-          .filter(t => t.status === 'executing' && t.promise != null)
+          .filter(t => t.status === 'executing' && t.promise !== null)
           .map(t => t.promise as Promise<void>)
 
         // Also wait for progress to become available

@@ -2085,7 +2085,7 @@ async function* executeHooks({
           command: getHookDisplayText(hook),
           ...(hook.type === 'prompt' && { promptText: hook.prompt }),
           ...('statusMessage' in hook &&
-            hook.statusMessage != null && {
+            hook.statusMessage !== null && {
               statusMessage: hook.statusMessage,
             }),
         },

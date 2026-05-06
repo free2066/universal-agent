@@ -429,7 +429,7 @@ export const BrowserSandboxTool = buildTool({
         try {
           const parsed = JSON.parse(raw)
           dom = parsed.dom ?? dom
-        } catch {}
+        } catch { /* CDP DOM snapshot JSON parsing is best-effort */ }
         return {
           data: {
             action: 'snapshot',
@@ -467,7 +467,7 @@ export const BrowserSandboxTool = buildTool({
         // Also inject JS intercept script as fallback
         try {
           await cdpEvaluate(_cdpClient!, JS_INTERCEPTOR_SCRIPT)
-        } catch {}
+        } catch { /* CDP JS interceptor script injection is best-effort */ }
 
         // Wait for data to stabilize
         const startTime = Date.now()
@@ -505,7 +505,7 @@ export const BrowserSandboxTool = buildTool({
           if (val && val !== 'undefined') {
             jsIntercepted = JSON.parse(val)
           }
-        } catch {}
+        } catch { /* CDP interception data parsing is best-effort */ }
 
         // Build final intercepted array
         const cdpEntries = Array.from((_interceptionCollector?.entries.values() ?? []).filter(e => matchesPattern(e.url, interceptPatterns)))
@@ -556,7 +556,7 @@ export const BrowserSandboxTool = buildTool({
               }
             }
           }
-        } catch {}
+        } catch { /* CDP DOM element extraction is best-effort */ }
 
         return {
           data: {

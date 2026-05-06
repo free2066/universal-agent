@@ -18,7 +18,7 @@ export function formatError(error: unknown): string {
   const halfLength = 5_000
   const start = fullMessage.slice(0, halfLength)
   const end = fullMessage.slice(-halfLength)
-  return `${start}\n\n... [${fullMessage.length - 10000} characters truncated] ...\n\n${end}`
+  return `${start}\n\n... [${fullMessage.length - 10_000} characters truncated] ...\n\n${end}`
 }
 
 export function getErrorParts(error: Error): string[] {

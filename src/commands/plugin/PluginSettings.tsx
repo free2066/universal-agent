@@ -386,7 +386,7 @@ function ErrorsTabContent(t0) {
             failures
           } = await loadMarketplacesWithGracefulDegradation(config);
           setMarketplaceLoadFailures(failures);
-        } catch {}
+        } catch { /* marketplace load failure — graceful degradation */ }
       })();
     };
     t3 = [];

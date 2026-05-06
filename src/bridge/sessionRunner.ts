@@ -212,7 +212,7 @@ function extractUserMessageText(
 ): string | undefined {
   // Skip tool-result user messages (wrapped subagent results) and synthetic
   // caveat messages — neither is human-authored.
-  if (msg.parent_tool_use_id != null || msg.isSynthetic || msg.isReplay)
+  if (msg.parent_tool_use_id !== null || msg.isSynthetic || msg.isReplay)
     return undefined
 
   const message = msg.message as Record<string, unknown> | undefined

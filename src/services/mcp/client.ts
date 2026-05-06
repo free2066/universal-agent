@@ -2881,7 +2881,7 @@ export async function callMCPToolWithUrlElicitationRetry({
 
       const errorData = error.data
       const rawElicitations =
-        errorData != null &&
+        errorData !== null &&
         typeof errorData === 'object' &&
         'elicitations' in errorData &&
         Array.isArray(errorData.elicitations)

@@ -3018,7 +3018,7 @@ export function handleMessageFromStream(
   }
 
   if (message.event.type === 'message_start') {
-    if (message.ttftMs != null) {
+    if (message.ttftMs !== null) {
       onApiMetrics?.({ ttftMs: message.ttftMs })
     }
   }

@@ -72,7 +72,7 @@ export async function importGithubToken(
     const response = await axios.post<ImportTokenResult>(
       url,
       { token: token.reveal() },
-      { headers, timeout: 15000, validateStatus: () => true },
+      { headers, timeout: 15_000, validateStatus: () => true },
     )
     if (response.status === 200) {
       return { ok: true, result: response.data }

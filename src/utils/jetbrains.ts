@@ -176,7 +176,7 @@ async function isJetBrainsPluginInstalledMemoized(
   const promise = isJetBrainsPluginInstalled(ideType).then(result => {
     pluginInstalledCache.set(ideType, result)
     return result
-  })
+  }).catch(() => { pluginInstalledCache.set(ideType, false) })
   pluginInstalledPromiseCache.set(ideType, promise)
   return promise
 }

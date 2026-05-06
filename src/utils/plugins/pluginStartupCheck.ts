@@ -224,7 +224,7 @@ export async function findMissingPlugins(
       notInstalled.map(async pluginId => {
         try {
           const plugin = await getPluginById(pluginId)
-          return { pluginId, found: plugin != null }
+          return { pluginId, found: plugin !== null }
         } catch (error) {
           logForDebugging(
             `Failed to check plugin ${pluginId} in marketplace: ${error}`,

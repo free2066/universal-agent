@@ -301,7 +301,7 @@ export function logGrowthBookExperimentTo1P(
 const DEFAULT_LOGS_EXPORT_INTERVAL_MS = 10_000
 // Maximum events per batch
 const DEFAULT_MAX_EXPORT_BATCH_SIZE = 200
-const DEFAULT_MAX_QUEUE_SIZE = 8192
+const DEFAULT_MAX_QUEUE_SIZE = 8_192
 
 /**
  * Initialize 1P event logging infrastructure.

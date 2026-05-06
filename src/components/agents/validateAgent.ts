@@ -6,6 +6,9 @@ import type {
 } from '../../tools/AgentTool/loadAgentsDir.js'
 import { getAgentSourceDisplayName } from './utils.js'
 
+/** Maximum system prompt length for custom agents (10KB). */
+const MAX_AGENT_SYSTEM_PROMPT_LENGTH = 10_000
+
 export type AgentValidationResult = {
   isValid: boolean
   errors: string[]
@@ -97,7 +100,7 @@ export function validateAgent(
     errors.push('System prompt is required')
   } else if (systemPrompt.length < 20) {
     errors.push('System prompt is too short (minimum 20 characters)')
-  } else if (systemPrompt.length > 10000) {
+  } else if (systemPrompt.length > MAX_AGENT_SYSTEM_PROMPT_LENGTH) {
     warnings.push('System prompt is very long (over 10,000 characters)')
   }
 

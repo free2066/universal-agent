@@ -53,7 +53,7 @@ export async function execPromptHook(
     )
 
     // Query the model with Haiku
-    const hookTimeoutMs = hook.timeout ? hook.timeout * 1000 : 30000
+    const hookTimeoutMs = hook.timeout ? hook.timeout * 1_000 : 30_000
 
     // Combined signal: aborts if either the hook signal or timeout triggers
     const { signal: combinedSignal, cleanup: cleanupSignal } =

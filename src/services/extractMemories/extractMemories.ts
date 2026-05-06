@@ -486,7 +486,7 @@ export function initExtractMemories(): void {
       })
 
       logForDebugging(
-        `[extractMemories] writtenPaths=${writtenPaths.length} memoryPaths=${memoryPaths.length} appendSystemMessage defined=${appendSystemMessage != null}`,
+        `[extractMemories] writtenPaths=${writtenPaths.length} memoryPaths=${memoryPaths.length} appendSystemMessage defined=${appendSystemMessage !== null}`,
       )
       if (memoryPaths.length > 0) {
         const msg = createMemorySavedMessage(memoryPaths)

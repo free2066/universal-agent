@@ -532,7 +532,7 @@ export function useVoice({
     if (enabled && !voiceModule) {
       void import('../services/voice.js').then(mod => {
         voiceModule = mod
-      })
+      }).catch(() => {})
     }
   }, [enabled])
 
@@ -614,7 +614,7 @@ export function useVoice({
         void import('../services/voice.js').then(mod => {
           voiceModule = mod
           beginFocusRecording()
-        })
+        }).catch(() => {})
       }
     } else if (!isFocused) {
       // Clear the silence timeout flag on blur so the next focus

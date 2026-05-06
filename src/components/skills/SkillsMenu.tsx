@@ -38,7 +38,7 @@ function getSourceSubtitle(source: SkillSource, skills: SkillCommand[]): string 
     const servers = [...new Set(skills.map(s => {
       const idx = s.name.indexOf(':');
       return idx > 0 ? s.name.slice(0, idx) : null;
-    }).filter((n): n is string => n != null))];
+    }).filter((n): n is string => n !== null))];
     return servers.length > 0 ? servers.join(', ') : undefined;
   }
   const skillsPath = getDisplayPath(getSkillsPath(source, 'skills'));

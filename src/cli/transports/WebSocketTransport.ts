@@ -20,9 +20,9 @@ import type { Transport } from './Transport.js'
 
 const KEEP_ALIVE_FRAME = '{"type":"keep_alive"}\n'
 
-const DEFAULT_MAX_BUFFER_SIZE = 1000
-const DEFAULT_BASE_RECONNECT_DELAY = 1000
-const DEFAULT_MAX_RECONNECT_DELAY = 30000
+const DEFAULT_MAX_BUFFER_SIZE = 1_000
+const DEFAULT_BASE_RECONNECT_DELAY = 1_000
+const DEFAULT_MAX_RECONNECT_DELAY = 30_000
 /** Time budget for reconnection attempts before giving up (10 minutes). */
 const DEFAULT_RECONNECT_GIVE_UP_MS = 600_000
 const DEFAULT_PING_INTERVAL = 10_000

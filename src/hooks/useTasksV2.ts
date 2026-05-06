@@ -169,7 +169,7 @@ class TasksV2Store {
         this.#hidden = true
       }
       this.#notify()
-    })
+    }).catch(() => {})
   }
 
   #clearHideTimer(): void {

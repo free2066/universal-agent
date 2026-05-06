@@ -177,7 +177,7 @@ export async function initReplBridge(
     // → this stops matching without any explicit clear.
     const cfg = getGlobalConfig()
     if (
-      cfg.bridgeOauthDeadExpiresAt != null &&
+      cfg.bridgeOauthDeadExpiresAt !== null &&
       (cfg.bridgeOauthDeadFailCount ?? 0) >= 3 &&
       getClaudeAIOAuthTokens()?.expiresAt === cfg.bridgeOauthDeadExpiresAt
     ) {

@@ -1745,7 +1745,7 @@ export async function bashToolHasPermission(
       subsDiffer,
       injectionCheckDisabled,
       killswitchOff: !shadowEnabled,
-      cmdOverLength: input.command.length > 10000,
+      cmdOverLength: input.command.length > 10_000,
     })
     // Always force legacy — shadow mode is observational only.
     astResult = { kind: 'parse-unavailable' }

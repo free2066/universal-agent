@@ -8,7 +8,7 @@ import { checkCachedPassesEligibility, formatCreditAmount, getCachedReferrerRewa
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js';
 function resetIfPassesRefreshed(): void {
   const remaining = getCachedRemainingPasses();
-  if (remaining == null || remaining <= 0) return;
+  if (remaining === null || remaining <= 0) return;
   const config = getGlobalConfig();
   const lastSeen = config.passesLastSeenRemaining ?? 0;
   if (remaining > lastSeen) {

@@ -1761,7 +1761,7 @@ export function runHeadlessStreaming(
     clearCommandsCache()
     void getCommands(cwd()).then(newCommands => {
       currentCommands = newCommands
-    })
+    }).catch(() => {})
   })
 
   // Proactive mode: schedule a tick to keep the model looping autonomously.
@@ -3672,7 +3672,7 @@ export function runHeadlessStreaming(
           // getMainLoopModel() returns the stale override and the model
           // change is silently ignored (matching set_model at :2811).
           if ('model' in incoming) {
-            if (incoming.model != null) {
+            if (incoming.model !== null) {
               setMainLoopModelOverride(String(incoming.model))
             } else {
               setMainLoopModelOverride(undefined)

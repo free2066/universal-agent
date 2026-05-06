@@ -120,12 +120,12 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
 
     this.endpoint = `${baseUrl}${options.path || '/api/event_logging/batch'}`
 
-    this.timeout = options.timeout || 10000
+    this.timeout = options.timeout || 10_000
     this.maxBatchSize = options.maxBatchSize || 200
     this.skipAuth = options.skipAuth ?? false
     this.batchDelayMs = options.batchDelayMs || 100
     this.baseBackoffDelayMs = options.baseBackoffDelayMs || 500
-    this.maxBackoffDelayMs = options.maxBackoffDelayMs || 30000
+    this.maxBackoffDelayMs = options.maxBackoffDelayMs || 30_000
     this.maxAttempts = options.maxAttempts ?? 8
     this.isKilled = options.isKilled ?? (() => false)
     this.schedule =

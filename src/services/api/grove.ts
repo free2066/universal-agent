@@ -322,7 +322,7 @@ export function calculateShouldShowGrove(
   } else {
     // Show if never viewed before
     const viewedAt = settings.grove_notice_viewed_at
-    return viewedAt == null
+    return viewedAt === null
   }
 }
 

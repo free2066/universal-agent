@@ -43,7 +43,7 @@ export function getSmallFastModel(): ModelName {
   // get routed to claude-haiku which they may not have access to.
   // Only then fall back to the built-in haiku default for 1P users.
   const userModel = getUserSpecifiedModelSetting()
-  if (userModel != null) {
+  if (userModel !== null) {
     // parseUserSpecifiedModel resolves aliases like 'sonnet' → full model ID
     return parseUserSpecifiedModel(userModel)
   }
@@ -104,7 +104,7 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
  */
 export function getMainLoopModel(): ModelName {
   const model = getUserSpecifiedModelSetting()
-  if (model != null) {
+  if (model !== null) {
     return parseUserSpecifiedModel(model)
   }
   return getDefaultMainLoopModel()

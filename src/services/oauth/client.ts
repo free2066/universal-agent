@@ -130,7 +130,7 @@ export async function exchangeCodeForTokens(
 
   const response = await axios.post(getOauthConfig().TOKEN_URL, requestBody, {
     headers: { 'Content-Type': 'application/json' },
-    timeout: 15000,
+    timeout: 15_000,
   })
 
   if (response.status !== 200) {

@@ -5,9 +5,9 @@ import { hasImageInClipboard } from '../utils/imagePaste.js'
 
 const NOTIFICATION_KEY = 'clipboard-image-hint'
 // Small debounce to batch rapid focus changes
-const FOCUS_CHECK_DEBOUNCE_MS = 1000
+const FOCUS_CHECK_DEBOUNCE_MS = 1_000
 // Don't show the hint more than once per this interval
-const HINT_COOLDOWN_MS = 30000
+const HINT_COOLDOWN_MS = 30_000
 
 /**
  * Hook that shows a notification when the terminal regains focus

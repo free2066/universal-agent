@@ -896,7 +896,7 @@ export function transformCommandAst(
       const isStringLiteral =
         ce.type === 'StringConstantExpressionAst' ||
         ce.type === 'ExpandableStringExpressionAst'
-      args.push(isStringLiteral && ce.value != null ? ce.value : ce.text)
+      args.push(isStringLiteral && ce.value !== null ? ce.value : ce.text)
       elementTypes.push(mapElementType(ce.type, ce.expressionType))
       // Map raw children (CommandParameterAst.Argument) through
       // mapElementType so consumers see 'Variable', 'StringConstant', etc.

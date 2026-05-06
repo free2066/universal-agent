@@ -409,7 +409,7 @@ export function jitteredNextCronRunMs(
  * because humans round to the half-hour.
  *
  * During an incident, ops can push `tengu_kairos_cron_config` with e.g.
- * `{oneShotMinuteMod: 15, oneShotMaxMs: 300000, oneShotFloorMs: 30000}` to
+ * `{oneShotMinuteMod: 15, oneShotMaxMs: 300_000, oneShotFloorMs: 30_000}` to
  * spread :00/:15/:30/:45 fires across a [t-5min, t-30s] window — every task
  * gets at least 30 s of lead, so nobody lands on the exact mark.
  *
