@@ -541,7 +541,7 @@ export async function checkResponseForCacheBreak(
         const removed = changes.removedBetas.length
           ? `-${changes.removedBetas.join(',')}`
           : ''
-        const diff = [added, removed].filter(Boolean).join(' ')
+        const diff = [added, removed].filter((x): x is string => !!x).join(' ')
         parts.push(`betas changed${diff ? ` (${diff})` : ''}`)
       }
       if (changes.autoModeChanged) {

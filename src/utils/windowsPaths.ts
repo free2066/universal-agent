@@ -97,13 +97,14 @@ export function setShellIfWindows(): void {
  * Find the path where `bash.exe` included with git-bash exists, exiting the process if not found.
  */
 export const findGitBashPath = memoize((): string => {
-  if (process.env.CLAUDE_CODE_GIT_BASH_PATH) {
-    if (checkPathExists(process.env.CLAUDE_CODE_GIT_BASH_PATH)) {
-      return process.env.CLAUDE_CODE_GIT_BASH_PATH
+  const gitBashPath = process.env.CLAUDE_CODE_GIT_BASH_PATH
+  if (gitBashPath) {
+    if (checkPathExists(gitBashPath)) {
+      return gitBashPath
     }
     // biome-ignore lint/suspicious/noConsole:: intentional console output
     console.error(
-      `Claude Code was unable to find CLAUDE_CODE_GIT_BASH_PATH path "${process.env.CLAUDE_CODE_GIT_BASH_PATH}"`,
+      `Claude Code was unable to find CLAUDE_CODE_GIT_BASH_PATH path "${gitBashPath}"`,
     )
     // eslint-disable-next-line custom-rules/no-process-exit
     process.exit(1)

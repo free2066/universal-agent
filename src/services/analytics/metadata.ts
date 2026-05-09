@@ -737,6 +737,8 @@ export async function getEventMetadata(
     getRepoRemoteHash(),
   ])
   const processMetrics = buildProcessMetrics()
+  const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT
+  const agentSdkVersion = process.env.CLAUDE_AGENT_SDK_VERSION
 
   const metadata: EventMetadata = {
     model,
@@ -744,11 +746,11 @@ export async function getEventMetadata(
     userType: process.env.USER_TYPE || '',
     ...(betas.length > 0 ? { betas: betas } : {}),
     envContext,
-    ...(process.env.CLAUDE_CODE_ENTRYPOINT && {
-      entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT,
+    ...(entrypoint && {
+      entrypoint,
     }),
-    ...(process.env.CLAUDE_AGENT_SDK_VERSION && {
-      agentSdkVersion: process.env.CLAUDE_AGENT_SDK_VERSION,
+    ...(agentSdkVersion && {
+      agentSdkVersion,
     }),
     isInteractive: String(getIsInteractive()),
     clientType: getClientType(),
@@ -890,7 +892,7 @@ export function to1PEventFormat(
     env.tags = envContext.tags
       .split(',')
       .map(t => t.trim())
-      .filter(Boolean)
+      .filter((t): t is string => !!t)
   }
   if (envContext.githubEventName) {
     env.github_event_name = envContext.githubEventName

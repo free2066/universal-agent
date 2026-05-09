@@ -150,7 +150,7 @@ export async function authLogin({
       process.exit(1)
     }
 
-    const scopes = envScopes.split(/\s+/).filter(Boolean)
+    const scopes = envScopes.split(/\s+/).filter((s): s is string => !!s)
 
     try {
       logEvent('tengu_login_from_refresh_token', {})

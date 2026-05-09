@@ -423,7 +423,7 @@ export async function copyWorktreeIncludeFiles(
     return []
   }
 
-  const entries = gitignored.stdout.trim().split('\n').filter(Boolean)
+  const entries = gitignored.stdout.trim().split('\n').filter((s): s is string => !!s)
   const matcher = ignore().add(includeContent)
 
   // --directory emits collapsed dirs with a trailing slash; everything else is
@@ -474,7 +474,7 @@ export async function copyWorktreeIncludeFiles(
       { cwd: repoRoot },
     )
     if (expanded.code === 0 && expanded.stdout.trim()) {
-      for (const f of expanded.stdout.trim().split('\n').filter(Boolean)) {
+      for (const f of expanded.stdout.trim().split('\n').filter((s): s is string => !!s)) {
         if (matcher.ignores(f)) {
           files.push(f)
         }
@@ -1580,7 +1580,7 @@ export async function runWorktreeStartCommand(
     cwd: worktreePath,
   })
 
-  const output = [result.stdout, result.stderr].filter(Boolean).join('\n')
+  const output = [result.stdout, result.stderr].filter((s): s is string => !!s).join('\n')
 
   logForDebugging(
     `runWorktreeStartCommand: exitCode=${result.code}, cwd=${worktreePath}, cmd=${command}`,

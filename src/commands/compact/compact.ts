@@ -209,7 +209,7 @@ async function compactViaReactive(
     // caller additionally runs it concurrently with getCacheSharingParams.
     const combinedMessage =
       [hookResult.userDisplayMessage, outcome.result.userDisplayMessage]
-        .filter(Boolean)
+        .filter((m): m is string => !!m)
         .join('\n') || undefined
 
     return {

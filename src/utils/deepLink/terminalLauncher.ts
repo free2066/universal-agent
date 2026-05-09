@@ -15,6 +15,11 @@ import { spawn } from 'child_process'
 import { basename } from 'path'
 import { getGlobalConfig } from '../config.js'
 import { logForDebugging } from '../debug.js'
+
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const APP_SUFFIX_RE = /\.app$/i
 import { execFileNoThrow } from '../execFileNoThrow.js'
 import { which } from '../which.js'
 
@@ -77,12 +82,12 @@ async function detectMacosTerminal(): Promise<TerminalInfo> {
   // TERM_PROGRAM may include a .app suffix (e.g., "iTerm.app"), so strip it.
   const termProgram = process.env.TERM_PROGRAM
   if (termProgram) {
-    const normalized = termProgram.replace(/\.app$/i, '').toLowerCase()
-    const match = MACOS_TERMINALS.find(
-      t =>
-        t.app.toLowerCase() === normalized ||
-        t.name.toLowerCase() === normalized,
-    )
+    const normalized = termProgram.replace(APP_SUFFIX_RE, '').toLowerCase()
+    const match = MACOS_TERMINALS.find(t => {
+      const appLower = t.app.toLowerCase()
+      const nameLower = t.name.toLowerCase()
+      return appLower === normalized || nameLower === normalized
+    })
     if (match) {
       return { name: match.name, command: match.app }
     }

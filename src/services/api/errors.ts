@@ -56,6 +56,8 @@ import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
 // Precompiled regex patterns (performance optimization)
 // ============================================================================
 const PDF_PAGE_LIMIT_RE = /maximum of \d+ PDF pages/
+const PROMPT_TOO_LONG_TOKEN_COUNTS_RE = /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i
+const LEADING_429_RE = /^429\s+/
 
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
 
@@ -112,9 +114,7 @@ export function parsePromptTooLongTokenCounts(rawMessage: string): {
   actualTokens: number | undefined
   limitTokens: number | undefined
 } {
-  const match = rawMessage.match(
-    /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i,
-  )
+  const match = rawMessage.match(PROMPT_TOO_LONG_TOKEN_COUNTS_RE)
   return {
     actualTokens: match ? parseInt(match[1]!, 10) : undefined,
     limitTokens: match ? parseInt(match[2]!, 10) : undefined,
@@ -576,7 +576,7 @@ export function getAssistantMessageFromError(
     }
     // SDK's APIError.makeMessage prepends "429 " and JSON-stringifies the body
     // when there's no top-level .message — extract the inner error.message.
-    const stripped = error.message.replace(/^429\s+/, '')
+    const stripped = error.message.replace(LEADING_429_RE, '')
     const innerMessage = stripped.match(/"message"\s*:\s*"([^"]*)"/)?.[1]
     const detail = innerMessage || stripped
     return createAssistantAPIErrorMessage({
@@ -601,7 +601,7 @@ export function getAssistantMessageFromError(
   // Check for PDF page limit errors
   if (
     error instanceof Error &&
-    /maximum of \d+ PDF pages/.test(error.message)
+    PDF_PAGE_LIMIT_RE.test(error.message)
   ) {
     return createAssistantAPIErrorMessage({
       content: getPdfTooLargeErrorMessage(),
@@ -1031,7 +1031,7 @@ export function classifyAPIError(error: unknown): string {
   // PDF errors
   if (
     error instanceof Error &&
-    /maximum of \d+ PDF pages/.test(error.message)
+    PDF_PAGE_LIMIT_RE.test(error.message)
   ) {
     return 'pdf_too_large'
   }
@@ -1079,25 +1079,21 @@ export function classifyAPIError(error: unknown): string {
   // Invalid model errors (400)
   if (
     isAPIErrorWithStatus(error, 400) &&
-    error.message.toLowerCase().includes('invalid model name')
+    lowerMessage.includes('invalid model name')
   ) {
     return 'invalid_model'
   }
 
   // Credit/billing errors
   if (
-    error instanceof Error &&
-    error.message
-      .toLowerCase()
-      .includes(CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE_LOWER)
+    lowerMessage.includes(CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE_LOWER)
   ) {
     return 'credit_balance_low'
   }
 
   // Authentication errors
   if (
-    error instanceof Error &&
-    error.message.toLowerCase().includes('x-api-key')
+    lowerMessage.includes('x-api-key')
   ) {
     return 'invalid_api_key'
   }
@@ -1131,8 +1127,7 @@ export function classifyAPIError(error: unknown): string {
   // Bedrock-specific errors
   if (
     isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) &&
-    error instanceof Error &&
-    error.message.toLowerCase().includes('model id')
+    lowerMessage.includes('model id')
   ) {
     return 'bedrock_model_access'
   }

@@ -41,7 +41,7 @@ export function shouldUseClaudeAIAuth(scopes: string[] | undefined): boolean {
 }
 
 export function parseScopes(scopeString?: string): string[] {
-  return scopeString?.split(' ').filter(Boolean) ?? []
+  return scopeString?.split(' ').filter((s): s is string => !!s) ?? []
 }
 
 export function buildAuthUrl({

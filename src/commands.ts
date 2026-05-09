@@ -254,7 +254,7 @@ export const INTERNAL_ONLY_COMMANDS = [
   debugToolCall,
   agentsPlatform,
   autofixPr,
-].filter(Boolean)
+].filter((x): x is LocalCommand => !!x)
 
 // Declared as a function so that we don't run this until getCommands is called,
 // since underlying functions read from config, which can't be read at module initialization time

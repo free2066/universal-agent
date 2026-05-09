@@ -10,6 +10,28 @@ export const USER_TYPE_ANT = 'ant'
 export const IS_ANT_USER = process.env.USER_TYPE === USER_TYPE_ANT
 
 // ============================================================================
+// Object helpers
+// ============================================================================
+
+/**
+ * Check if an object has at least one enumerable property.
+ * More efficient than Object.keys(obj).length > 0 which creates an intermediate array.
+ */
+export function hasKeys(obj: Record<string, unknown>): boolean {
+  for (const _ in obj) return true
+  return false
+}
+
+/**
+ * Check if an object has no enumerable properties.
+ * More efficient than Object.keys(obj).length === 0 which creates an intermediate array.
+ */
+export function hasNoKeys(obj: Record<string, unknown>): boolean {
+  for (const _ in obj) return false
+  return true
+}
+
+// ============================================================================
 // Precompiled regex patterns (performance optimization)
 // ============================================================================
 const WHITESPACE_RE = /\s+/

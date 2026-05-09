@@ -65,11 +65,8 @@ export const getMTLSConfig = memoize((): MTLSConfig | undefined => {
   }
 
   // Only return config if at least one option is set
-  if (Object.keys(config).length === 0) {
-    return undefined
-  }
-
-  return config
+  for (const _ in config) return config
+  return undefined
 })
 
 /**

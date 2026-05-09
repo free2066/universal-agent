@@ -463,7 +463,7 @@ function getToolUseIdsFromMessage(msg: RenderableMessage): string[] {
         const content = m.message.content[0]
         return content.type === 'tool_use' ? content.id : ''
       })
-      .filter(Boolean)
+      .filter((s): s is string => !!s)
   }
   return []
 }

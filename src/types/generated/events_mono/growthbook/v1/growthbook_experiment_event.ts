@@ -212,7 +212,7 @@ function fromJsonTimestamp(o: any): Date {
 }
 
 function isSet(value: any): boolean {
-  return value !== null && value !== undefined
+  return value != null
 }
 
 interface MessageFns<T> {

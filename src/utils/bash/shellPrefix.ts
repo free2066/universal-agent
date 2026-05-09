@@ -22,7 +22,6 @@ export function formatShellPrefixCommand(
     const execPath = prefix.substring(0, spaceBeforeDash)
     const args = prefix.substring(spaceBeforeDash + 1)
     return `${quote([execPath])} ${args} ${quote([command])}`
-  } else {
-    return `${quote([prefix])} ${quote([command])}`
   }
+  return `${quote([prefix])} ${quote([command])}`
 }

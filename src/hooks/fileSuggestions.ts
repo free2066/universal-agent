@@ -282,7 +282,7 @@ async function getFilesUsingGit(
       return null
     }
 
-    const trackedFiles = trackedResult.stdout.trim().split('\n').filter(Boolean)
+    const trackedFiles = trackedResult.stdout.trim().split('\n').filter((s): s is string => !!s)
 
     // Normalize paths relative to the current working directory
     let normalizedTracked = normalizeGitPaths(trackedFiles, repoRoot, cwd)
@@ -337,7 +337,7 @@ async function getFilesUsingGit(
             const rawUntrackedFiles = untrackedResult.stdout
               .trim()
               .split('\n')
-              .filter(Boolean)
+              .filter((s): s is string => !!s)
 
             // Normalize paths BEFORE applying ignore patterns (consistent with tracked files)
             let normalizedUntracked = normalizeGitPaths(

@@ -8,6 +8,12 @@ import {
 import { errorMessage } from './errors.js'
 import { execFileNoThrow } from './execFileNoThrow.js'
 import { formatFileSize } from './format.js'
+
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const PDF_PASSWORD_RE = /password/i
+const PDF_CORRUPT_RE = /damaged|corrupt|invalid/i
 import { getFsImplementation } from './fsOperations.js'
 import { getToolResultsDir } from './toolResultStorage.js'
 
@@ -234,7 +240,7 @@ export async function extractPDFPages(
     })
 
     if (code !== 0) {
-      if (/password/i.test(stderr)) {
+      if (PDF_PASSWORD_RE.test(stderr)) {
         return {
           success: false,
           error: {
@@ -244,7 +250,7 @@ export async function extractPDFPages(
           },
         }
       }
-      if (/damaged|corrupt|invalid/i.test(stderr)) {
+      if (PDF_CORRUPT_RE.test(stderr)) {
         return {
           success: false,
           error: {

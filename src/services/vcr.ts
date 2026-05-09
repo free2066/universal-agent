@@ -284,9 +284,8 @@ function mapMessage(
 ): AssistantMessage | SystemAPIErrorMessage | StreamEvent {
   if (message.type === 'assistant') {
     return mapAssistantMessage(message, f, index, uuid)
-  } else {
-    return message
   }
+  return message
 }
 
 function dehydrateValue(s: unknown): unknown {

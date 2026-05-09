@@ -118,7 +118,8 @@ export async function validateRepoAtPath(
     }
 
     // Case-insensitive comparison
-    return actualRepo.toLowerCase() === expectedRepo.toLowerCase()
+    const expectedRepoLower = expectedRepo.toLowerCase()
+    return actualRepo.toLowerCase() === expectedRepoLower
   } catch {
     return false
   }

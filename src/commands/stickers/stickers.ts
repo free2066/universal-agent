@@ -7,10 +7,9 @@ export async function call(): Promise<LocalCommandResult> {
 
   if (success) {
     return { type: 'text', value: 'Opening sticker page in browser…' }
-  } else {
-    return {
-      type: 'text',
-      value: `Failed to open browser. Visit: ${url}`,
-    }
+  }
+  return {
+    type: 'text',
+    value: `Failed to open browser. Visit: ${url}`,
   }
 }

@@ -786,7 +786,7 @@ export const ClaudeCodeInternalEvent: MessageFns<ClaudeCodeInternalEvent> = {
     message.process = object.process ?? ''
     message.additional_metadata = object.additional_metadata ?? ''
     message.auth =
-      object.auth !== undefined && object.auth !== null
+      object.auth != null
         ? PublicApiAuth.fromPartial(object.auth)
         : undefined
     message.server_timestamp = object.server_timestamp ?? undefined
@@ -800,7 +800,7 @@ export const ClaudeCodeInternalEvent: MessageFns<ClaudeCodeInternalEvent> = {
     message.parent_session_id = object.parent_session_id ?? ''
     message.agent_type = object.agent_type ?? ''
     message.slack =
-      object.slack !== undefined && object.slack !== null
+      object.slack != null
         ? SlackContext.fromPartial(object.slack)
         : undefined
     message.team_name = object.team_name ?? ''
@@ -854,7 +854,7 @@ function fromJsonTimestamp(o: any): Date {
 }
 
 function isSet(value: any): boolean {
-  return value !== null && value !== undefined
+  return value != null
 }
 
 interface MessageFns<T> {

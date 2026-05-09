@@ -726,7 +726,7 @@ export function parseFileSpecs(fileSpecs: string[]): File[] {
   const files: File[] = []
 
   // Sandbox-gateway may pass multiple specs as a single space-separated string
-  const expandedSpecs = fileSpecs.flatMap(s => s.split(' ').filter(Boolean))
+  const expandedSpecs = fileSpecs.flatMap(s => s.split(' ').filter((x): x is string => !!x))
 
   for (const spec of expandedSpecs) {
     const colonIndex = spec.indexOf(':')

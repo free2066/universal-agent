@@ -74,7 +74,7 @@ function extractMessageText(message: SerializedMessage): string {
         if ('text' in block && typeof block.text === 'string') return block.text
         return ''
       })
-      .filter(Boolean)
+      .filter((s): s is string => !!s)
       .join(' ')
   }
 
@@ -98,7 +98,7 @@ function extractTranscript(messages: SerializedMessage[]): string {
 
   const text = messagesToScan
     .map(extractMessageText)
-    .filter(Boolean)
+    .filter((s): s is string => !!s)
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim()

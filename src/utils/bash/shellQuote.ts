@@ -249,7 +249,7 @@ export function hasShellQuoteSingleQuoteBug(command: string): boolean {
         if (
           backslashCount > 0 &&
           backslashCount % 2 === 0 &&
-          command.indexOf("'", i + 1) !== -1
+          command.includes("'", i + 1)
         ) {
           return true
         }

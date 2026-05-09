@@ -147,7 +147,7 @@ export type NumstatResult = {
  * Only stores first MAX_FILES entries in perFileStats.
  */
 export function parseGitNumstat(stdout: string): NumstatResult {
-  const lines = stdout.trim().split('\n').filter(Boolean)
+  const lines = stdout.trim().split('\n').filter((s): s is string => !!s)
   let added = 0
   let removed = 0
   let validFileCount = 0
@@ -207,7 +207,7 @@ export function parseGitDiff(
   if (!stdout.trim()) return result
 
   // Split by file diffs
-  const fileDiffs = stdout.split(/^diff --git /m).filter(Boolean)
+  const fileDiffs = stdout.split(/^diff --git /m).filter((s): s is string => !!s)
 
   for (const fileDiff of fileDiffs) {
     // Stop after MAX_FILES
@@ -346,7 +346,7 @@ async function fetchUntrackedFiles(
 
   if (code !== 0 || !stdout.trim()) return null
 
-  const untrackedPaths = stdout.trim().split('\n').filter(Boolean)
+  const untrackedPaths = stdout.trim().split('\n').filter((s): s is string => !!s)
   if (untrackedPaths.length === 0) return null
 
   const perFileStats = new Map<string, PerFileStats>()

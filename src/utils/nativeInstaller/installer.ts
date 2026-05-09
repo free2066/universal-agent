@@ -918,6 +918,7 @@ export async function checkInstall(
   }
 
   // Check if bin directory is in PATH
+  const resolvedLocalBinPathLower = resolvedLocalBinPath.toLowerCase()
   const isInCurrentPath = (process.env.PATH || '')
     .split(delimiter)
     .some(entry => {
@@ -926,7 +927,7 @@ export async function checkInstall(
         // On Windows, perform case-insensitive comparison for paths
         if (isWindows) {
           return (
-            resolvedEntry.toLowerCase() === resolvedLocalBinPath.toLowerCase()
+            resolvedEntry.toLowerCase() === resolvedLocalBinPathLower
           )
         }
         return resolvedEntry === resolvedLocalBinPath

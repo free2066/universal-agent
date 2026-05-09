@@ -6,6 +6,11 @@ import {
   tryParseShellCommand,
 } from './shellQuote.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const FD_NUM_RE = /^[012]$/
+
 /**
  * Rearranges a command with pipes to place stdin redirect after the first command.
  * This fixes an issue where eval treats the entire piped command as a single unit,
@@ -143,7 +148,7 @@ function buildCommandParts(
       if (
         op.op === '>&' &&
         typeof target === 'string' &&
-        /^[012]$/.test(target)
+        FD_NUM_RE.test(target)
       ) {
         parts.push(`${entry}>&${target}`)
         i += 2
@@ -164,7 +169,7 @@ function buildCommandParts(
         target.startsWith('&')
       ) {
         const fd = target.slice(1)
-        if (/^[012]$/.test(fd)) {
+        if (FD_NUM_RE.test(fd)) {
           parts.push(`${entry}>&${fd}`)
           i += 2
           continue

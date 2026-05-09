@@ -252,7 +252,7 @@ export class SnapshotService {
         const files = out
           .split('\n')
           .map(l => l.trim())
-          .filter(Boolean)
+          .filter((l): l is string => !!l)
         return { hash, files }
       } catch {
         return { hash, files: [] }

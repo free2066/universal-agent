@@ -175,9 +175,10 @@ export function modelSupportsAutoMode(model: string): boolean {
     }>('tengu_auto_mode_config', {})
     const rawLower = model.toLowerCase()
     if (
-      config?.allowModels?.some(
-        am => am.toLowerCase() === rawLower || am.toLowerCase() === m,
-      )
+      config?.allowModels?.some(am => {
+        const amLower = am.toLowerCase()
+        return amLower === rawLower || amLower === m
+      })
     ) {
       return true
     }

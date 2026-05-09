@@ -2593,7 +2593,7 @@ function smooshIntoToolResult(
       (existing ?? '').trim(),
       ...blocks.map(b => (b as TextBlockParam).text.trim()),
     ]
-      .filter(Boolean)
+      .filter((s): s is string => !!s)
       .join('\n\n')
     return { ...tr, content: joined }
   }

@@ -2134,7 +2134,8 @@ export async function bridgeMain(args: string[]): Promise<void> {
       if (current.remoteDialogSeen) return current
       return { ...current, remoteDialogSeen: true }
     })
-    if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+    const lowerAnswer = answer.toLowerCase()
+    if (lowerAnswer !== 'y' && lowerAnswer !== 'yes') {
       // eslint-disable-next-line custom-rules/no-process-exit
       process.exit(0)
     }

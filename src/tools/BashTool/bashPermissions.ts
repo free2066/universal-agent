@@ -184,7 +184,7 @@ function skipSafeEnvVarPrefix(tokens: string[]): number | null {
  *   'chmod 755 file' → null (number, not a subcommand)
  */
 export function getSimpleCommandPrefix(command: string): string | null {
-  const tokens = command.trim().split(WHITESPACE_RE).filter(Boolean)
+  const tokens = command.trim().split(WHITESPACE_RE).filter((s): s is string => !!s)
   if (tokens.length === 0) return null
 
   // Skip env var assignments (VAR=value) at the start, but only if they are
@@ -258,7 +258,7 @@ const BARE_SHELL_PREFIXES = new Set([
  * because stripSafeWrappers won't strip RUN.
  */
 export function getFirstWordPrefix(command: string): string | null {
-  const tokens = command.trim().split(WHITESPACE_RE).filter(Boolean)
+  const tokens = command.trim().split(WHITESPACE_RE).filter((s): s is string => !!s)
 
   const i = skipSafeEnvVarPrefix(tokens)
   if (i === null) return null
@@ -332,7 +332,7 @@ function extractPrefixBeforeHeredoc(command: string): string | null {
   // not just "python3") and skips safe env var prefixes like "NODE_ENV=test".
   // If a non-safe env var is encountered, return null to avoid generating
   // prefix rules that can never match (same rationale as getSimpleCommandPrefix).
-  const tokens = before.split(/\s+/).filter(Boolean)
+  const tokens = before.split(/\s+/).filter((s): s is string => !!s)
   let i = 0
   while (i < tokens.length && ENV_VAR_ASSIGN_RE.test(tokens[i]!)) {
     // Optimized: use indexOf + slice instead of split

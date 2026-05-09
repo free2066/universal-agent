@@ -23,9 +23,8 @@ export function getQuerySourceForAgent(
     return agentType
       ? (`agent:builtin:${agentType}` as QuerySource)
       : 'agent:default'
-  } else {
-    return 'agent:custom'
   }
+  return 'agent:custom'
 }
 
 /**

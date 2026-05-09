@@ -750,11 +750,9 @@ export async function aggregateClaudeCodeStatsForRange(
 function processedStatsToClaudeCodeStats(
   stats: ProcessedStats,
 ): ClaudeCodeStats {
-  const dailyActivitySorted = stats.dailyActivity
-    .slice()
+  const dailyActivitySorted = [...stats.dailyActivity]
     .sort((a, b) => a.date.localeCompare(b.date))
-  const dailyModelTokensSorted = stats.dailyModelTokens
-    .slice()
+  const dailyModelTokensSorted = [...stats.dailyModelTokens]
     .sort((a, b) => a.date.localeCompare(b.date))
 
   // Calculate streaks from daily activity

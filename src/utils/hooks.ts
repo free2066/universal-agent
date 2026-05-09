@@ -4702,7 +4702,7 @@ export async function executeFileSuggestionCommand(
     return result.stdout
       .split('\n')
       .map(line => line.trim())
-      .filter(Boolean)
+      .filter((l): l is string => !!l)
   } catch (error) {
     logForDebugging(`File suggestion helper failed: ${error}`, {
       level: 'error',

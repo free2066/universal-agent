@@ -21,10 +21,9 @@ export async function call(): Promise<LocalCommandResult> {
       type: 'text',
       value: 'Opening Slack app installation page in browser…',
     }
-  } else {
-    return {
-      type: 'text',
-      value: `Couldn't open browser. Visit: ${SLACK_APP_URL}`,
-    }
+  }
+  return {
+    type: 'text',
+    value: `Couldn't open browser. Visit: ${SLACK_APP_URL}`,
   }
 }

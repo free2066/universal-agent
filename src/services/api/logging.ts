@@ -118,8 +118,7 @@ function detectGateway({
 }): KnownGateway | undefined {
   if (headers) {
     // Header names are already lowercase from the Headers API
-    const headerNames: string[] = []
-    headers.forEach((_, key) => headerNames.push(key))
+    const headerNames = Array.from(headers.keys())
     const gwEntry = GATEWAY_FINGERPRINT_ENTRIES.find(([, { prefixes }]) =>
       prefixes.some(p => headerNames.some(h => h.startsWith(p))),
     )
@@ -142,23 +141,23 @@ function detectGateway({
 }
 
 function getAnthropicEnvMetadata() {
+  const baseUrl = process.env.ANTHROPIC_BASE_URL
+  const envModel = process.env.ANTHROPIC_MODEL
+  const envSmallFastModel = process.env.ANTHROPIC_SMALL_FAST_MODEL
   return {
-    ...(process.env.ANTHROPIC_BASE_URL
+    ...(baseUrl
       ? {
-          baseUrl: process.env
-            .ANTHROPIC_BASE_URL as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          baseUrl: baseUrl as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         }
       : {}),
-    ...(process.env.ANTHROPIC_MODEL
+    ...(envModel
       ? {
-          envModel: process.env
-            .ANTHROPIC_MODEL as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          envModel: envModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         }
       : {}),
-    ...(process.env.ANTHROPIC_SMALL_FAST_MODEL
+    ...(envSmallFastModel
       ? {
-          envSmallFastModel: process.env
-            .ANTHROPIC_SMALL_FAST_MODEL as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+          envSmallFastModel: envSmallFastModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         }
       : {}),
   }
@@ -286,7 +285,7 @@ export function logAPIError({
   const gateway = detectGateway({
     headers:
       error instanceof APIError && error.headers ? error.headers : headers,
-    baseUrl: process.env.ANTHROPIC_BASE_URL,
+    baseUrl: process.env.ANTHROPIC_BASE_URL ?? undefined,
   })
 
   const errStr = getErrorMessage(error)

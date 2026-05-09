@@ -173,7 +173,7 @@ export async function startMCPServer(
 
         const parts =
           error instanceof Error ? getErrorParts(error) : [String(error)]
-        const errorText = parts.filter(Boolean).join('\n').trim() || 'Error'
+        const errorText = parts.filter((p): p is string => !!p).join('\n').trim() || 'Error'
 
         return {
           isError: true,

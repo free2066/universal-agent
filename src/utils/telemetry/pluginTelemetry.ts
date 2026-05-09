@@ -28,6 +28,14 @@ import {
   parsePluginIdentifier,
 } from '../plugins/pluginIdentifier.js'
 
+// ============================================================================
+// Precompiled regex patterns (performance optimization)
+// ============================================================================
+const NETWORK_ERR_RE = /ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ECONNRESET|network|Could not resolve|Connection refused|timed out/i
+const NOT_FOUND_ERR_RE = /\b404\b|not found|does not exist|no such plugin/i
+const PERMISSION_ERR_RE = /\b40[13]\b|EACCES|EPERM|permission denied|unauthorized/i
+const VALIDATION_ERR_RE = /invalid|malformed|schema|validation|parse error/i
+
 // builtinPlugins.ts:BUILTIN_MARKETPLACE_NAME — inlined to avoid the cycle
 // through commands.js. Marketplace schemas.ts enforces 'builtin' is reserved.
 const BUILTIN_MARKETPLACE_NAME = 'builtin'
@@ -239,20 +247,16 @@ export function classifyPluginCommandError(
   error: unknown,
 ): PluginCommandErrorCategory {
   const msg = String((error as { message?: unknown })?.message ?? error)
-  if (
-    /ENOTFOUND|ECONNREFUSED|EAI_AGAIN|ETIMEDOUT|ECONNRESET|network|Could not resolve|Connection refused|timed out/i.test(
-      msg,
-    )
-  ) {
+  if (NETWORK_ERR_RE.test(msg)) {
     return 'network'
   }
-  if (/\b404\b|not found|does not exist|no such plugin/i.test(msg)) {
+  if (NOT_FOUND_ERR_RE.test(msg)) {
     return 'not-found'
   }
-  if (/\b40[13]\b|EACCES|EPERM|permission denied|unauthorized/i.test(msg)) {
+  if (PERMISSION_ERR_RE.test(msg)) {
     return 'permission'
   }
-  if (/invalid|malformed|schema|validation|parse error/i.test(msg)) {
+  if (VALIDATION_ERR_RE.test(msg)) {
     return 'validation'
   }
   return 'unknown'

@@ -2,6 +2,7 @@
 import { HOOK_EVENTS, type HookEvent } from 'src/entrypoints/agentSdkTypes.js'
 import type { AppState } from 'src/state/AppState.js'
 import { logForDebugging } from '../debug.js'
+import { hasNoKeys } from '../envUtils.js'
 import type { HooksSettings } from '../settings/types.js'
 import { addSessionHook } from './sessionHooks.js'
 
@@ -23,7 +24,7 @@ export function registerFrontmatterHooks(
   sourceName: string,
   isAgent: boolean = false,
 ): void {
-  if (!hooks || Object.keys(hooks).length === 0) {
+  if (!hooks || hasNoKeys(hooks as Record<string, unknown>)) {
     return
   }
 
